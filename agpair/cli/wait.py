@@ -5,7 +5,7 @@ state until a terminal phase is observed, used by both ``agpair task wait`` and
 the default auto-wait behaviour on dispatching / semantic commands.
 
 Waiter state is persisted to the ``waiters`` table so that other processes
-(e.g. a fresh Codex/Claude window) can see that a wait is in progress.
+(e.g. a fresh AI agent window) can see that a wait is in progress.
 """
 
 from __future__ import annotations

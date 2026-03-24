@@ -414,7 +414,7 @@ function buildDelegationPrompt(input: {
 }): string {
   const brief = input.body.trim();
   return [
-    "You are the Antigravity executor for a Codex-reviewed implementation task.",
+    "You are the Antigravity executor for a Codex/Claude Code-reviewed implementation task.",
     `Operate only inside this workspace: ${input.repoPath}`,
     "",
     "Execution contract:",
@@ -428,7 +428,7 @@ function buildDelegationPrompt(input: {
     "",
     "IMPORTANT — Terminal receipt (auto-return):",
     "When you finish (whether success or blocked), write a JSON receipt file so the",
-    "extension can automatically return your result to Codex WITHOUT you needing to",
+    "extension can automatically return your result to Codex/Claude Code WITHOUT you needing to",
     "manually invoke agent-bus send. Write this file BEFORE or INSTEAD OF running agent-bus send:",
     "",
     `  Receipt path: ${input.receiptPath}`,
@@ -440,7 +440,7 @@ function buildDelegationPrompt(input: {
     '    "body": "## Evidence\\n- diff stat: ...\\n- key files: ...\\n- validation: ...\\n- residual risks: ..."',
     "  }",
     "",
-    "The extension will detect this file and send the terminal status to Codex automatically.",
+    "The extension will detect this file and send the terminal status to Codex/Claude Code automatically.",
     "You may ALSO run agent-bus send manually as a fallback — duplicate sends are prevented.",
     "",
     "Command examples (fallback only — prefer writing the receipt file above):",
@@ -458,9 +458,9 @@ function buildReviewContinuationPrompt(input: {
 }): string {
   const brief = input.body.trim();
   return [
-    `--- Codex review continuation (${input.status}) for ${input.taskId} ---`,
+    `--- Codex/Claude Code review continuation (${input.status}) for ${input.taskId} ---`,
     "",
-    "The Codex reviewer has sent feedback on your current work.",
+    "The Codex/Claude Code reviewer has sent feedback on your current work.",
     "Address the review comments below and continue working on the task.",
     "Do NOT start from scratch — continue from where you left off.",
     "",
@@ -480,9 +480,9 @@ function buildApprovedCommitPrompt(input: {
 }): string {
   const brief = input.body.trim();
   return [
-    `--- Codex APPROVED: commit phase for ${input.taskId} ---`,
+    `--- Codex/Claude Code APPROVED: commit phase for ${input.taskId} ---`,
     "",
-    "The Codex reviewer has APPROVED your work. You are now in the commit phase.",
+    "The Codex/Claude Code reviewer has APPROVED your work. You are now in the commit phase.",
     "Do NOT start from scratch — continue from where you left off.",
     "",
     "Your task now:",

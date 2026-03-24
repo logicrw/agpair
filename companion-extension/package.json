@@ -51,7 +51,7 @@
         "antigravityCompanion.agentBusWatchEnabled": {
           "type": "boolean",
           "default": true,
-          "description": "Start a local agent-bus watch loop on extension activation so Antigravity begins receiving Codex task briefs automatically."
+          "description": "Start a local agent-bus watch loop on extension activation so Antigravity begins receiving AI agent task briefs automatically."
         },
         "antigravityCompanion.agentBusWatchIntervalMs": {
           "type": "number",

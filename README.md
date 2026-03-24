@@ -12,7 +12,7 @@ Works with [Codex](https://openai.com/codex) (CLI & Desktop), [Claude Code](http
 
 ## Why agpair?
 
-When you use Codex + Antigravity together, there is a mechanical gap between "I told Codex what to do" and "Antigravity finished executing it." That gap includes:
+When you use an AI coding agent + Antigravity together, there is a mechanical gap between "I told my agent what to do" and "Antigravity finished executing it." That gap includes:
 
 - dispatching the task over `agent-bus`
 - tracking which task maps to which executor session
@@ -20,12 +20,12 @@ When you use Codex + Antigravity together, there is a mechanical gap between "I 
 - detecting stuck tasks
 - providing a clean continue / approve / reject / retry flow
 
-**agpair fills that gap.** It is a tool belt for Codex — and a manual fallback for you when you need direct control.
+**agpair fills that gap.** It is a tool belt for your AI agent — and a manual fallback for you when you need direct control.
 
 ### What agpair is *not*
 
-- Not a semantic controller — Codex stays in charge of decisions.
-- Not a fully autonomous reviewer — you (or Codex) choose the next action.
+- Not a semantic controller — your AI agent stays in charge of decisions.
+- Not a fully autonomous reviewer — you (or your AI agent) choose the next action.
 - Not a zero-dependency runtime — it still depends on `agent-bus`, Antigravity itself, and the bundled companion extension.
 
 ## Prerequisites
@@ -40,7 +40,7 @@ When you use Codex + Antigravity together, there is a mechanical gap between "I 
 
 ### `agent-bus`
 
-`agent-bus` is the shared local message bus that agpair uses to dispatch tasks and receive receipts between Codex (desktop) and Antigravity (code executor). It must be available on your `PATH`.
+`agent-bus` is the shared local message bus that agpair uses to dispatch tasks and receive receipts between your AI agent (desktop side) and Antigravity (code executor). It must be available on your `PATH`.
 
 > **Note:** `agent-bus` is a local CLI tool distributed as part of the Antigravity tooling environment. If you are using an Antigravity-managed setup, it should already be available. If not, install the `agent-bus` binary provided by your Antigravity distribution and ensure it is on your `PATH`. There is currently no standalone public package for `agent-bus` — it is expected to be present in environments where Antigravity is installed.
 
@@ -88,7 +88,7 @@ For the full step-by-step walkthrough, see the detailed guides below.
 ```
 ┌───────────────┐     agpair CLI      ┌─────────────┐     agent-bus      ┌──────────────────┐
 │               │  ─────────────────▶  │             │  ───────────────▶  │   Antigravity    │
-│    Codex      │   task start/wait    │   agpair    │   dispatch/recv    │   (executor)     │
+│   AI Agent    │   task start/wait    │   agpair    │   dispatch/recv    │   (executor)     │
 │  (chat UI)    │  ◀─────────────────  │   daemon    │  ◀───────────────  │                  │
 │               │   status/receipts    │             │   receipts/ack     │   companion ext  │
 └───────────────┘                      └──────┬──────┘                    └──────────────────┘
@@ -98,7 +98,7 @@ For the full step-by-step walkthrough, see the detailed guides below.
                                        journals)
 ```
 
-**Data flow:** Codex → `agpair task start` → daemon dispatches via `agent-bus` → Antigravity executes → companion extension writes receipts → daemon ingests receipts → Codex reads status.
+**Data flow:** AI Agent → `agpair task start` → daemon dispatches via `agent-bus` → Antigravity executes → companion extension writes receipts → daemon ingests receipts → AI Agent reads status.
 
 ## How it Works in Practice
 
@@ -106,12 +106,12 @@ In normal use, **you do not need to manually type every `agpair` command**.
 
 The intended workflow is:
 
-1. You tell Codex what you want in natural language
-2. Codex calls `agpair` commands behind the scenes
+1. You tell your AI agent what you want in natural language
+2. Your AI agent calls `agpair` commands behind the scenes
 3. Antigravity executes the task
 4. `agpair` keeps the mechanical path stable
 
-The CLI is still valuable for manual inspection, debugging, retry, and recovery when Codex is not available.
+The CLI is still valuable for manual inspection, debugging, retry, and recovery when your AI agent is not available.
 
 ## Skill Integration
 
@@ -148,7 +148,7 @@ What already works:
 
 What is explicitly *not* in scope:
 
-- Replacing Codex as the semantic controller
+- Replacing your AI agent as the semantic controller
 - Hiding all operational boundaries
 
 ## Documentation
@@ -168,7 +168,7 @@ agpair/
 │   ├── package.json
 │   └── esbuild.js
 ├── skills/
-│   └── agpair/             # Optional Codex skill package
+│   └── agpair/             # Optional agent skill package
 ├── tests/                  # Python integration tests
 ├── docs/                   # Documentation
 └── pyproject.toml
@@ -184,7 +184,7 @@ agpair consumes `code -> desktop` receipts. If another desktop-side watcher is a
 
 ### One controller per task
 
-You can open multiple Codex windows, but avoid having two windows send `continue / approve / reject / retry` for the **same** `TASK_ID`. Rule: one active task → one main Codex window.
+You can open multiple agent windows, but avoid having two windows send `continue / approve / reject / retry` for the **same** `TASK_ID`. Rule: one active task → one main agent window.
 
 ### The daemon is not a second brain
 

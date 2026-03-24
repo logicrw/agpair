@@ -3,7 +3,7 @@
 `agpair` is a small pairing tool, not a full orchestrator.
 
 Use it when:
-- Codex chat is the main reviewer and controller
+- Your AI coding agent is the main reviewer and controller
 - Antigravity is the executor
 - you want light mechanical automation without turning the tool into a second brain
 

@@ -21,7 +21,7 @@ It is not a second orchestrator and it is not the semantic decision-maker.
 
 ## Triggering
 
-This skill is intended to trigger when the user asks Codex to:
+This skill is intended to trigger when the user asks their AI agent to:
 
 - send or delegate work to Antigravity
 - use `agpair`

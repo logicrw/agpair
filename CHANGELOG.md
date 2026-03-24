@@ -14,5 +14,5 @@ Initial public release.
 - Local SQLite-backed state (tasks, receipts, journals)
 - macOS launchd auto-start support
 - Bilingual documentation (English + Chinese)
-- Optional Codex skill for automatic CLI integration
+- Optional agent skill for automatic CLI integration (works with Codex, Claude Code, etc.)
 - CI/CD workflows (test on push, release on tag)
