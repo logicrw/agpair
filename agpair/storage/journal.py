@@ -18,6 +18,15 @@ class JournalRepository:
             )
             conn.commit()
 
+    def delete_older_than(self, cutoff_iso: str) -> int:
+        """Delete journal entries older than cutoff. Returns count deleted."""
+        with connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "DELETE FROM journal WHERE created_at < ?", (cutoff_iso,)
+            )
+            conn.commit()
+            return cursor.rowcount
+
     def tail(self, task_id: str, limit: int = 20) -> list[JournalRecord]:
         with connect(self.db_path) as conn:
             rows = conn.execute(

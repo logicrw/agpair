@@ -18,6 +18,8 @@ from agpair.transport import messages
 
 SESSION_ID_RE = re.compile(r"session_id\s*[:=]\s*(?P<session>[^\s]+)")
 DEFAULT_WATCHDOG_SECONDS = 900
+DEFAULT_CLEANUP_RETENTION_DAYS = 30
+CLEANUP_INTERVAL_SECONDS = 86400  # 24 hours
 
 
 def run_forever(
@@ -28,8 +30,13 @@ def run_forever(
     watchdog_seconds: int = DEFAULT_WATCHDOG_SECONDS,
     bus=None,
 ) -> None:
+    last_cleanup_at: float = 0.0
     while True:
         run_once(paths, timeout_seconds=timeout_seconds, watchdog_seconds=watchdog_seconds, bus=bus)
+        now = time.monotonic()
+        if now - last_cleanup_at >= CLEANUP_INTERVAL_SECONDS:
+            auto_cleanup(paths)
+            last_cleanup_at = now
         time.sleep(interval_ms / 1000.0)
 
 
@@ -233,6 +240,22 @@ def extract_session_id(body: str) -> str | None:
 
 def to_iso(value: datetime) -> str:
     return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def auto_cleanup(paths: AppPaths, *, retention_days: int = DEFAULT_CLEANUP_RETENTION_DAYS) -> None:
+    """Delete old journals, receipts, and terminal tasks. Called by daemon once per day."""
+    cutoff = to_iso(datetime.now(UTC) - timedelta(days=retention_days))
+    journal = JournalRepository(paths.db_path)
+    receipts = ReceiptRepository(paths.db_path)
+    tasks = TaskRepository(paths.db_path)
+    j = journal.delete_older_than(cutoff)
+    r = receipts.delete_older_than(cutoff)
+    t = tasks.delete_terminal_older_than(cutoff)
+    if j or r or t:
+        JournalRepository(paths.db_path).append(
+            "daemon", "daemon", "auto_cleanup",
+            f"deleted journals={j} receipts={r} tasks={t} older_than={retention_days}d",
+        )
 
 
 def is_stale_receipt(last_receipt_id: str | None, incoming_receipt_id: str) -> bool:

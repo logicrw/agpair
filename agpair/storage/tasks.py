@@ -101,6 +101,18 @@ class TaskRepository:
             (reason, now, now, task_id),
         )
 
+    def delete_terminal_older_than(self, cutoff_iso: str) -> int:
+        """Delete tasks in terminal phase older than cutoff. Returns count deleted."""
+        terminal_phases = ("evidence_ready", "committed", "blocked", "stuck", "abandoned")
+        with connect(self.db_path) as conn:
+            placeholders = ",".join("?" for _ in terminal_phases)
+            cursor = conn.execute(
+                f"DELETE FROM tasks WHERE phase IN ({placeholders}) AND created_at < ?",
+                (*terminal_phases, cutoff_iso),
+            )
+            conn.commit()
+            return cursor.rowcount
+
     def record_heartbeat(self, *, task_id: str, heartbeat_at: str | None = None) -> None:
         """Record a RUNNING heartbeat — updates liveness without changing phase.
 

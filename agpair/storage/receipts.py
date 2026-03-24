@@ -11,6 +11,15 @@ class ReceiptRepository:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
 
+    def delete_older_than(self, cutoff_iso: str) -> int:
+        """Delete receipts older than cutoff. Returns count deleted."""
+        with connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "DELETE FROM receipts WHERE created_at < ?", (cutoff_iso,)
+            )
+            conn.commit()
+            return cursor.rowcount
+
     def record(
         self,
         message_id: str,
