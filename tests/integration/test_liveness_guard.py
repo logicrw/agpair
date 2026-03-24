@@ -13,6 +13,7 @@ Covers:
 """
 from __future__ import annotations
 
+import click
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import sqlite3
@@ -626,4 +627,4 @@ def test_force_flag_in_help() -> None:
     for cmd in ("continue", "retry", "abandon"):
         result = runner.invoke(app, ["task", cmd, "--help"])
         assert result.exit_code == 0, f"{cmd} --help failed"
-        assert "--force" in result.stdout, f"{cmd} missing --force"
+        assert "--force" in click.unstyle(result.stdout), f"{cmd} missing --force"

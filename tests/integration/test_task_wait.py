@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import click
 import pytest
 from typer.testing import CliRunner
 
@@ -327,8 +328,9 @@ def test_task_wait_exits_1_on_abandoned(tmp_path: Path, monkeypatch):
 def test_task_wait_help():
     result = CliRunner().invoke(app, ["task", "wait", "--help"])
     assert result.exit_code == 0
-    assert "--interval-seconds" in result.stdout
-    assert "--timeout-seconds" in result.stdout
+    stdout = click.unstyle(result.stdout)
+    assert "--interval-seconds" in stdout
+    assert "--timeout-seconds" in stdout
 
 
 # ---------------------------------------------------------------------------
@@ -418,10 +420,11 @@ def test_task_help_shows_wait_options():
     for cmd in ("start", "continue", "approve", "reject", "retry"):
         result = runner.invoke(app, ["task", cmd, "--help"])
         assert result.exit_code == 0, f"{cmd} --help failed"
-        assert "--wait" in result.stdout, f"{cmd} missing --wait"
-        assert "--no-wait" in result.stdout, f"{cmd} missing --no-wait"
-        assert "--interval-seconds" in result.stdout, f"{cmd} missing --interval-seconds"
-        assert "--timeout-seconds" in result.stdout, f"{cmd} missing --timeout-seconds"
+        stdout = click.unstyle(result.stdout)
+        assert "--wait" in stdout, f"{cmd} missing --wait"
+        assert "--no-wait" in stdout, f"{cmd} missing --no-wait"
+        assert "--interval-seconds" in stdout, f"{cmd} missing --interval-seconds"
+        assert "--timeout-seconds" in stdout, f"{cmd} missing --timeout-seconds"
 
 
 def test_task_help_does_not_show_wait_on_status_and_logs():
@@ -430,7 +433,7 @@ def test_task_help_does_not_show_wait_on_status_and_logs():
     for cmd in ("status", "logs"):
         result = runner.invoke(app, ["task", cmd, "--help"])
         assert result.exit_code == 0
-        assert "--wait" not in result.stdout
+        assert "--wait" not in click.unstyle(result.stdout)
 
 
 # ---------------------------------------------------------------------------
