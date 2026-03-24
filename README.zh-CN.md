@@ -1,5 +1,9 @@
 # agpair
 
+![Python](https://img.shields.io/badge/python-≥3.12-blue)
+![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 [English](README.md) | 中文
 
 **agpair** 是一个轻量 CLI，连接你的 [Codex](https://openai.com/codex) 聊天窗口和 [Antigravity](https://antigravity.google/) 执行器——让你在对话中就能发任务、跟踪进度、审核结果。
@@ -76,6 +80,23 @@ agpair task start --repo-path /你的项目路径 \
 默认情况下，`task start` **会等待**任务进入终态。加 `--no-wait` 可以即发即走。
 
 完整的操作步骤请参考下面的文档链接。
+
+## 架构
+
+```
+┌───────────────┐     agpair CLI      ┌─────────────┐     agent-bus      ┌──────────────────┐
+│               │  ─────────────────▶  │             │  ───────────────▶  │   Antigravity    │
+│    Codex      │   task start/wait    │   agpair    │   dispatch/recv    │   (executor)     │
+│  (chat UI)    │  ◀─────────────────  │   daemon    │  ◀───────────────  │                  │
+│               │   status/receipts    │             │   receipts/ack     │   companion ext  │
+└───────────────┘                      └──────┬──────┘                    └──────────────────┘
+                                              │
+                                         SQLite DB
+                                     (tasks, receipts,
+                                       journals)
+```
+
+**数据流向：** Codex → `agpair task start` → daemon 通过 `agent-bus` 分发 → Antigravity 执行 → companion extension 写回执 → daemon 接收回执 → Codex 读取状态。
 
 ## 实际使用方式
 

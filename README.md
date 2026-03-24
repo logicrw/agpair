@@ -1,5 +1,9 @@
 # agpair
 
+![Python](https://img.shields.io/badge/python-≥3.12-blue)
+![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 **agpair** is a lightweight CLI that connects your [Codex](https://openai.com/codex) chat window to an [Antigravity](https://antigravity.google/) executor — so you can dispatch coding tasks, track their progress, and review results without leaving the conversation.
 
 ## Why agpair?
@@ -74,6 +78,23 @@ agpair task start --repo-path /path/to/your/project \
 By default, `task start` **waits** until the task reaches a terminal phase. Add `--no-wait` for fire-and-forget.
 
 For the full step-by-step walkthrough, see the detailed guides below.
+
+## Architecture
+
+```
+┌───────────────┐     agpair CLI      ┌─────────────┐     agent-bus      ┌──────────────────┐
+│               │  ─────────────────▶  │             │  ───────────────▶  │   Antigravity    │
+│    Codex      │   task start/wait    │   agpair    │   dispatch/recv    │   (executor)     │
+│  (chat UI)    │  ◀─────────────────  │   daemon    │  ◀───────────────  │                  │
+│               │   status/receipts    │             │   receipts/ack     │   companion ext  │
+└───────────────┘                      └──────┬──────┘                    └──────────────────┘
+                                              │
+                                         SQLite DB
+                                     (tasks, receipts,
+                                       journals)
+```
+
+**Data flow:** Codex → `agpair task start` → daemon dispatches via `agent-bus` → Antigravity executes → companion extension writes receipts → daemon ingests receipts → Codex reads status.
 
 ## How it Works in Practice
 

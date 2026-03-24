@@ -295,9 +295,10 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
             message: "receipt written",
           });
         } catch (err: any) {
+          console.error(`[bridge] Failed to write receipt:`, err);
           sendJson(res, 500, {
             ok: false,
-            message: `Failed to write receipt: ${err.message}`,
+            message: "Failed to write receipt",
           });
         }
 
@@ -337,10 +338,11 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
     } catch (err: any) {
       // Surface 413 from readBody as a proper HTTP 413 response
       if (err.statusCode === 413) {
-        sendJson(res, 413, { ok: false, message: err.message });
+        sendJson(res, 413, { ok: false, message: "Request body too large" });
         return;
       }
-      sendJson(res, 500, { ok: false, message: err.message });
+      console.error(`[bridge] Unhandled request error:`, err);
+      sendJson(res, 500, { ok: false, message: "Internal server error" });
     }
   });
 }
