@@ -6,7 +6,9 @@
 
 [English](README.md) | 中文
 
-**agpair** 是一个轻量级工具，连接你的 [Codex](https://openai.com/codex)（CLI 或 Desktop）和 [Antigravity](https://antigravity.google/) 执行器——让你在对话中就能发任务、跟踪进度、审核结果。
+**agpair** 是一个轻量级工具，连接任意 AI 编程工具和 [Antigravity](https://antigravity.google/) 执行器——让你在对话中就能发任务、跟踪进度、审核结果。
+
+支持 [Codex](https://openai.com/codex)（CLI 和 Desktop）、[Claude Code](https://docs.anthropic.com/en/docs/claude-code)，以及任何能跑终端命令的工具。
 
 ## 为什么需要 agpair？
 

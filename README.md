@@ -6,7 +6,9 @@
 
 [中文说明](README.zh-CN.md) | [新手教程](docs/getting-started-zh.md) | [中文命令参考](docs/usage.zh-CN.md)
 
-**agpair** is a lightweight CLI that connects your [Codex](https://openai.com/codex) (CLI or Desktop) to an [Antigravity](https://antigravity.google/) executor — so you can dispatch coding tasks, track their progress, and review results without leaving the conversation.
+**agpair** is a lightweight CLI that connects any AI coding agent to an [Antigravity](https://antigravity.google/) executor — so you can dispatch coding tasks, track their progress, and review results without leaving the conversation.
+
+Works with [Codex](https://openai.com/codex) (CLI & Desktop), [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and any tool that can run shell commands.
 
 ## Why agpair?
 
@@ -111,32 +113,29 @@ The intended workflow is:
 
 The CLI is still valuable for manual inspection, debugging, retry, and recovery when Codex is not available.
 
-## Optional Codex Skill
+## Skill Integration
 
-This repo also ships a reusable Codex skill at [skills/agpair/SKILL.md](skills/agpair/SKILL.md).
+This repo ships a reusable skill at [skills/agpair/SKILL.md](skills/agpair/SKILL.md) that teaches your AI tool how to use `agpair` correctly — preflight checks, blocking wait discipline, and semantic action flow.
 
-The skill is the public, portable way to teach Codex how to use `agpair` correctly:
-
-- run preflight before semantic actions
-- keep polling blocking waits until terminal exit
-- avoid same-task intervention while an active waiter exists
-
-This public distribution path is intentionally **skill-first**. It does not require downstream projects to copy repo-level `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md` files.
-
-Install it into your local Codex skills directory:
+Install for your tool of choice:
 
 ```bash
+# Codex
 mkdir -p ~/.codex/skills
 ln -sfn "$PWD/skills/agpair" ~/.codex/skills/agpair
+
+# Claude Code
+mkdir -p ~/.claude/skills
+ln -sfn "$PWD/skills/agpair" ~/.claude/skills/agpair
 ```
 
-Then restart Codex or open a new Codex window.
+After installing, restart or open a new window. Say `use agpair` in your prompt to trigger it explicitly.
 
-This improves automatic triggering for Antigravity delegation requests. For deterministic activation, explicitly say `use agpair` in your prompt.
+> **Other tools** (Cursor, Aider, OpenCode, etc.): copy the content of `skills/agpair/SKILL.md` into your tool's instruction file (e.g. `.cursorrules`, `AGENTS.md`).
 
 ## Status
 
-agpair v1.0 is a focused tool for Codex → Antigravity task dispatch.
+agpair v1.0 bridges AI coding agents to Antigravity executors.
 
 What already works:
 

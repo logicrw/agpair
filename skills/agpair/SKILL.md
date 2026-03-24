@@ -1,13 +1,13 @@
 ---
 name: agpair
-description: "Use when Codex should delegate coding work to Antigravity through agpair CLI: dispatch a task, wait for EVIDENCE_PACK or COMMITTED, inspect doctor/daemon health, review logs, or send continue/approve/reject/retry. Also use when the user says 'send to Antigravity', 'use agpair', 'review evidence pack', or wants Codex to keep polling until the delegated task reaches a terminal state."
+description: "Delegate coding work to Antigravity through agpair CLI: dispatch a task, wait for EVIDENCE_PACK or COMMITTED, inspect doctor/daemon health, review logs, or send continue/approve/reject/retry. Triggers on: 'send to Antigravity', 'use agpair', 'dispatch task', 'delegate to Antigravity', '交给 Antigravity', '派任务'."
 ---
 
 # agpair
 
 ## Overview
 
-Use this skill when Codex is the reviewer/controller and Antigravity is the executor.
+Use this skill when your AI coding agent is the reviewer/controller and Antigravity is the executor.
 
 `agpair` is the control surface for:
 
