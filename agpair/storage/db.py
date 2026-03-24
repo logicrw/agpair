@@ -61,9 +61,14 @@ def ensure_database(db_path: Path) -> None:
         _migrate_schema(conn)
 
 
+_initialized: set[Path] = set()
+
+
 @contextmanager
 def connect(db_path: Path):
-    ensure_database(db_path)
+    if db_path not in _initialized:
+        ensure_database(db_path)
+        _initialized.add(db_path)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:

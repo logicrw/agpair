@@ -25,15 +25,14 @@ from agpair.storage.waiters import WaiterRepository
 # ---------------------------------------------------------------------------
 
 #: Phases treated as terminal by the wait logic (default set).
-TERMINAL_PHASES: frozenset[str] = frozenset(
-    {"evidence_ready", "blocked", "committed", "stuck", "abandoned"}
-)
+#: Re-exported from models to keep a single source of truth.
+from agpair.models import TERMINAL_PHASES  # noqa: E402
+
+TERMINAL_PHASES: frozenset[str] = frozenset(TERMINAL_PHASES)
 
 #: Terminal phases for the approve command — evidence_ready is NOT terminal
 #: because approve starts from evidence_ready and waits for committed.
-APPROVE_TERMINAL_PHASES: frozenset[str] = frozenset(
-    {"blocked", "committed", "stuck", "abandoned"}
-)
+APPROVE_TERMINAL_PHASES: frozenset[str] = TERMINAL_PHASES - {"evidence_ready"}
 
 #: Terminal phases considered *successful* for dispatch commands
 #: (start / continue / reject / retry).
