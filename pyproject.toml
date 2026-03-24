@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "agpair"
 version = "1.0"
-description = "Codex to Antigravity pairing tool — task dispatch, receipt tracking, and continuation flows"
+description = "Bridge between Codex (CLI & Desktop) and Antigravity — task dispatch, receipt tracking, stuck detection, and continue/approve/reject/retry flows"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12"
