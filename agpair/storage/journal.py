@@ -1,0 +1,42 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from agpair.models import JournalRecord, utcnow_iso
+from agpair.storage.db import connect
+
+
+class JournalRepository:
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = db_path
+
+    def append(self, task_id: str, source: str, event: str, body: str) -> None:
+        with connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO journal (task_id, source, event, body, created_at) VALUES (?, ?, ?, ?, ?)",
+                (task_id, source, event, body, utcnow_iso()),
+            )
+            conn.commit()
+
+    def tail(self, task_id: str, limit: int = 20) -> list[JournalRecord]:
+        with connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT task_id, source, event, body, created_at
+                FROM journal
+                WHERE task_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (task_id, limit),
+            ).fetchall()
+        return [
+            JournalRecord(
+                task_id=row["task_id"],
+                source=row["source"],
+                event=row["event"],
+                body=row["body"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]

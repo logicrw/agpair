@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.supervisor/
+.agpair/
+.omc/
+.venv/
+
+# Companion extension build artifacts
+companion-extension/node_modules/
+companion-extension/dist/
+companion-extension/*.vsix

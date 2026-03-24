@@ -1,0 +1,164 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from typer.testing import CliRunner
+
+from agpair.cli.app import app
+from agpair.storage.db import ensure_database
+from agpair.storage.tasks import TaskRepository
+from tests.fixtures.fake_agent_bus import read_calls, write_fake_agent_bus
+
+
+def seed_acked_task(tmp_path: Path, task_id: str = "TASK-1") -> TaskRepository:
+    db_path = tmp_path / ".agpair" / "agpair.db"
+    ensure_database(db_path)
+    repo = TaskRepository(db_path)
+    repo.create_task(task_id=task_id, repo_path="/tmp/repo")
+    repo.mark_acked(task_id=task_id, session_id="session-123")
+    return repo
+
+
+def test_task_continue_sends_review_for_existing_session(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    seed_acked_task(tmp_path)
+
+    result = CliRunner().invoke(app, ["task", "continue", "TASK-1", "--body", "Please fix edge case", "--no-wait"])
+
+    assert result.exit_code == 0
+    recorded = read_calls(calls_path)
+    assert recorded[-1]["argv"][:8] == [
+        "agent-bus",
+        "send",
+        "--sender",
+        "desktop",
+        "--task-id",
+        "TASK-1",
+        "--status",
+        "REVIEW",
+    ]
+
+
+def test_task_approve_sends_approved(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    seed_acked_task(tmp_path)
+
+    result = CliRunner().invoke(app, ["task", "approve", "TASK-1", "--body", "Looks good", "--no-wait"])
+
+    assert result.exit_code == 0
+    recorded = read_calls(calls_path)
+    assert recorded[-1]["argv"][:8] == [
+        "agent-bus",
+        "send",
+        "--sender",
+        "desktop",
+        "--task-id",
+        "TASK-1",
+        "--status",
+        "APPROVED",
+    ]
+
+
+def test_task_reject_routes_back_as_review_feedback(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    seed_acked_task(tmp_path)
+
+    result = CliRunner().invoke(app, ["task", "reject", "TASK-1", "--body", "Still failing", "--no-wait"])
+
+    assert result.exit_code == 0
+    recorded = read_calls(calls_path)
+    assert recorded[-1]["argv"][:8] == [
+        "agent-bus",
+        "send",
+        "--sender",
+        "desktop",
+        "--task-id",
+        "TASK-1",
+        "--status",
+        "REVIEW",
+    ]
+
+
+def test_task_retry_creates_fresh_attempt_and_new_task_message(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    repo = seed_acked_task(tmp_path)
+
+    result = CliRunner().invoke(app, ["task", "retry", "TASK-1", "--body", "Retry with a fresh session", "--no-wait"])
+
+    assert result.exit_code == 0
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.attempt_no == 2
+    assert task.retry_count == 1
+    assert task.antigravity_session_id is None
+    recorded = read_calls(calls_path)
+    assert recorded[-1]["argv"][:8] == [
+        "agent-bus",
+        "send",
+        "--sender",
+        "desktop",
+        "--task-id",
+        "TASK-1",
+        "--status",
+        "TASK",
+    ]
+
+
+def test_task_continue_requires_known_session_mapping(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    db_path = tmp_path / ".agpair" / "agpair.db"
+    ensure_database(db_path)
+    repo = TaskRepository(db_path)
+    repo.create_task(task_id="TASK-1", repo_path="/tmp/repo")
+
+    result = CliRunner().invoke(app, ["task", "continue", "TASK-1", "--body", "Please fix edge case", "--no-wait"])
+
+    assert result.exit_code == 1
+    assert read_calls(calls_path) == []
+
+
+def test_task_retry_does_not_mutate_state_when_dispatch_fails(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", str(tmp_path / "missing-agent-bus"))
+    repo = seed_acked_task(tmp_path)
+
+    result = CliRunner().invoke(app, ["task", "retry", "TASK-1", "--body", "Retry with a fresh session", "--no-wait"])
+
+    assert result.exit_code == 1
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.phase == "acked"
+    assert task.attempt_no == 1
+    assert task.retry_count == 0
+    assert task.antigravity_session_id == "session-123"
+
+
+def test_task_approve_fails_cleanly_when_dispatch_fails(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", str(tmp_path / "missing-agent-bus"))
+    seed_acked_task(tmp_path)
+
+    result = CliRunner().invoke(app, ["task", "approve", "TASK-1", "--body", "Looks good"])
+
+    assert result.exit_code == 1
+    assert "dispatch failed:" in result.stderr

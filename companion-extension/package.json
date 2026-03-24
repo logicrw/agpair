@@ -1,0 +1,92 @@
+{
+  "name": "agpair-companion-extension",
+  "displayName": "agpair Companion — Antigravity Bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Companion extension that bridges agpair CLI and Antigravity via localhost HTTP. Runs inside the Antigravity IDE extension host.",
+  "publisher": "logicrw",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/logicrw/agpair.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "agpair Companion",
+      "properties": {
+        "antigravityCompanion.bridgePort": {
+          "type": "number",
+          "default": 8765,
+          "description": "Port for the localhost bridge HTTP server."
+        },
+        "antigravityCompanion.bridgeToken": {
+          "type": "string",
+          "default": "",
+          "description": "Bearer token for bridge authentication. When empty (default), a secure random token is auto-generated and stored in VS Code secret storage. Set a value to override with your own token. To disable auth entirely, use bridgeInsecure instead."
+        },
+        "antigravityCompanion.bridgeInsecure": {
+          "type": "boolean",
+          "default": false,
+          "description": "Disable bridge authentication for local debugging. When true, mutating endpoints accept unauthenticated requests. WARNING: any local process can call the bridge. Only enable for trusted local development."
+        },
+        "antigravityCompanion.monitorIntervalMs": {
+          "type": "number",
+          "default": 3000,
+          "description": "Polling interval for the SDK event monitor (milliseconds)."
+        },
+        "antigravityCompanion.trajectoryIntervalMs": {
+          "type": "number",
+          "default": 5000,
+          "description": "Polling interval for trajectory step count changes (milliseconds)."
+        },
+        "antigravityCompanion.agentBusWatchEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start a local agent-bus watch loop on extension activation so Antigravity begins receiving Codex task briefs automatically."
+        },
+        "antigravityCompanion.agentBusWatchIntervalMs": {
+          "type": "number",
+          "default": 1000,
+          "description": "Polling interval for the background agent-bus watch loop (milliseconds)."
+        },
+        "antigravityCompanion.agentBusWatchCommand": {
+          "type": "string",
+          "default": "agent-bus",
+          "description": "Command used to start the shared agent-bus watcher. Defaults to agent-bus and falls back to ~/.local/bin/agent-bus when available."
+        },
+        "antigravityCompanion.delegationTaskTimeoutMs": {
+          "type": "number",
+          "default": 1800000,
+          "description": "Maximum idle time for a delegated task before the extension auto-sends BLOCKED and releases the workspace (milliseconds)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc",
+    "build": "node esbuild.js",
+    "build:prod": "node esbuild.js --production",
+    "dev": "tsc --watch",
+    "package": "npm run build:prod && npx -y @vscode/vsce package",
+    "dev:install": "npm run package && antigravity --install-extension agpair-companion-extension-1.0.0.vsix",
+    "test": "npm run compile && node --test dist/__tests__/*.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.27.4",
+    "typescript": "^5.4"
+  },
+  "dependencies": {
+    "antigravity-sdk": "^1.7.0"
+  }
+}

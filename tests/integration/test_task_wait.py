@@ -1,0 +1,630 @@
+"""Tests for ``agpair task wait`` and default auto-wait behaviour."""
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+from typer.testing import CliRunner
+
+from agpair.cli.app import app
+from agpair.cli.wait import (
+    APPROVE_SUCCESS_PHASES,
+    APPROVE_TERMINAL_PHASES,
+    DISPATCH_SUCCESS_PHASES,
+    FAILURE_PHASES,
+    TERMINAL_PHASES,
+    WaitResult,
+    exit_code_for_approve,
+    exit_code_for_dispatch,
+    wait_for_terminal_phase,
+)
+from agpair.config import AppPaths
+from agpair.storage.db import ensure_database
+from agpair.storage.tasks import TaskRepository
+from tests.fixtures.fake_agent_bus import write_fake_agent_bus
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_paths(tmp_path: Path) -> AppPaths:
+    return AppPaths.from_root(tmp_path / ".agpair")
+
+
+def _make_repo(tmp_path: Path) -> TaskRepository:
+    paths = _make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    return TaskRepository(paths.db_path)
+
+
+class FakeClock:
+    """Injectable clock that advances time on each ``sleep()`` call."""
+
+    def __init__(self, start: float = 0.0):
+        self._now = start
+
+    def time(self) -> float:
+        return self._now
+
+    def sleep(self, seconds: float) -> None:
+        self._now += seconds
+
+
+# ---------------------------------------------------------------------------
+# Unit: TERMINAL_PHASES constants
+# ---------------------------------------------------------------------------
+
+
+def test_terminal_phases_contain_required_values():
+    assert TERMINAL_PHASES == {"evidence_ready", "blocked", "committed", "stuck", "abandoned"}
+
+
+def test_dispatch_success_phases():
+    assert DISPATCH_SUCCESS_PHASES == {"evidence_ready", "committed"}
+
+
+def test_approve_success_phases():
+    assert APPROVE_SUCCESS_PHASES == {"committed"}
+
+
+def test_failure_phases():
+    assert FAILURE_PHASES == {"blocked", "stuck", "abandoned"}
+
+
+def test_approve_terminal_phases_exclude_evidence_ready():
+    assert "evidence_ready" not in APPROVE_TERMINAL_PHASES
+    assert APPROVE_TERMINAL_PHASES == {"blocked", "committed", "stuck", "abandoned"}
+
+
+# ---------------------------------------------------------------------------
+# Unit: exit_code helpers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("phase,expected", [
+    ("evidence_ready", 0),
+    ("committed", 0),
+    ("blocked", 1),
+    ("stuck", 1),
+    ("abandoned", 1),
+])
+def test_exit_code_for_dispatch(phase: str, expected: int):
+    assert exit_code_for_dispatch(WaitResult(phase=phase, timed_out=False)) == expected
+
+
+def test_exit_code_for_dispatch_timeout():
+    assert exit_code_for_dispatch(WaitResult(phase="acked", timed_out=True)) == 1
+
+
+@pytest.mark.parametrize("phase,expected", [
+    ("committed", 0),
+    ("evidence_ready", 1),
+    ("blocked", 1),
+    ("stuck", 1),
+    ("abandoned", 1),
+])
+def test_exit_code_for_approve(phase: str, expected: int):
+    assert exit_code_for_approve(WaitResult(phase=phase, timed_out=False)) == expected
+
+
+# ---------------------------------------------------------------------------
+# Unit: wait_for_terminal_phase with FakeClock
+# ---------------------------------------------------------------------------
+
+
+def test_wait_returns_immediately_on_terminal_phase(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-1", repo_path="/r")
+    repo.mark_evidence_ready(task_id="T-1")
+
+    clock = FakeClock()
+    paths = _make_paths(tmp_path)
+    result = wait_for_terminal_phase(
+        paths.db_path, "T-1", interval_seconds=1, timeout_seconds=30, _clock=clock,
+    )
+    assert result.phase == "evidence_ready"
+    assert result.timed_out is False
+    # Should not have slept at all
+    assert clock.time() == 0.0
+
+
+def test_wait_polls_until_phase_changes(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-2", repo_path="/r")
+    repo.mark_acked(task_id="T-2", session_id="s-1")
+
+    paths = _make_paths(tmp_path)
+    poll_count = 0
+    original_sleep = FakeClock.sleep
+
+    class TrackingClock(FakeClock):
+        def sleep(self, seconds: float) -> None:
+            nonlocal poll_count
+            poll_count += 1
+            super().sleep(seconds)
+            # After 2 polls, simulate the daemon marking the task committed
+            if poll_count == 2:
+                repo.mark_committed(task_id="T-2")
+
+    clock = TrackingClock()
+    result = wait_for_terminal_phase(
+        paths.db_path, "T-2", interval_seconds=5, timeout_seconds=60, _clock=clock,
+    )
+    assert result.phase == "committed"
+    assert result.timed_out is False
+    assert poll_count == 2
+
+
+def test_wait_times_out(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-3", repo_path="/r")
+    repo.mark_acked(task_id="T-3", session_id="s-1")
+
+    paths = _make_paths(tmp_path)
+    clock = FakeClock()
+    result = wait_for_terminal_phase(
+        paths.db_path, "T-3", interval_seconds=5, timeout_seconds=10, _clock=clock,
+    )
+    assert result.timed_out is True
+    assert result.phase == "acked"
+
+
+def test_wait_blocked_is_terminal(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-4", repo_path="/r")
+    repo.mark_blocked(task_id="T-4", reason="transport error")
+
+    paths = _make_paths(tmp_path)
+    clock = FakeClock()
+    result = wait_for_terminal_phase(
+        paths.db_path, "T-4", interval_seconds=1, timeout_seconds=60, _clock=clock,
+    )
+    assert result.phase == "blocked"
+    assert result.timed_out is False
+
+
+def test_wait_stuck_is_terminal(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-5", repo_path="/r")
+    repo.mark_stuck(task_id="T-5", reason="no activity")
+
+    paths = _make_paths(tmp_path)
+    clock = FakeClock()
+    result = wait_for_terminal_phase(
+        paths.db_path, "T-5", interval_seconds=1, timeout_seconds=60, _clock=clock,
+    )
+    assert result.phase == "stuck"
+    assert result.timed_out is False
+
+
+def test_wait_abandoned_is_terminal(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-5B", repo_path="/r")
+    repo.mark_abandoned(task_id="T-5B", reason="manual cleanup")
+
+    paths = _make_paths(tmp_path)
+    clock = FakeClock()
+    result = wait_for_terminal_phase(
+        paths.db_path, "T-5B", interval_seconds=1, timeout_seconds=60, _clock=clock,
+    )
+    assert result.phase == "abandoned"
+    assert result.timed_out is False
+
+
+def test_wait_approve_skips_evidence_ready(tmp_path: Path):
+    """When using APPROVE_TERMINAL_PHASES, evidence_ready is NOT terminal."""
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-6", repo_path="/r")
+    repo.mark_acked(task_id="T-6", session_id="s-1")
+    repo.mark_evidence_ready(task_id="T-6")
+
+    paths = _make_paths(tmp_path)
+    poll_count = 0
+
+    class TrackingClock2(FakeClock):
+        def sleep(self, seconds: float) -> None:
+            nonlocal poll_count
+            poll_count += 1
+            super().sleep(seconds)
+            # After 1 poll, simulate the daemon marking committed
+            if poll_count == 1:
+                repo.mark_committed(task_id="T-6")
+
+    clock = TrackingClock2()
+    result = wait_for_terminal_phase(
+        paths.db_path, "T-6", interval_seconds=1, timeout_seconds=60,
+        terminal_phases=APPROVE_TERMINAL_PHASES, _clock=clock,
+    )
+    assert result.phase == "committed"
+    assert result.timed_out is False
+    assert poll_count == 1  # polled once, then saw committed
+
+
+# ---------------------------------------------------------------------------
+# CLI: task wait
+# ---------------------------------------------------------------------------
+
+
+def test_task_wait_exits_0_on_evidence_ready(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-W1", repo_path="/r")
+    repo.mark_evidence_ready(task_id="T-W1")
+
+    result = CliRunner().invoke(app, [
+        "task", "wait", "T-W1",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "5",
+    ])
+    assert result.exit_code == 0
+    assert "evidence_ready" in result.stdout
+
+
+def test_task_wait_exits_1_on_blocked(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-W2", repo_path="/r")
+    repo.mark_blocked(task_id="T-W2", reason="fail")
+
+    result = CliRunner().invoke(app, [
+        "task", "wait", "T-W2",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "5",
+    ])
+    assert result.exit_code == 1
+
+
+def test_task_wait_exits_0_on_committed(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-W3", repo_path="/r")
+    repo.mark_committed(task_id="T-W3")
+
+    result = CliRunner().invoke(app, [
+        "task", "wait", "T-W3",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "5",
+    ])
+    assert result.exit_code == 0
+    assert "committed" in result.stdout
+
+
+def test_task_wait_exits_1_on_missing_task(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    ensure_database(_make_paths(tmp_path).db_path)
+
+    result = CliRunner().invoke(app, [
+        "task", "wait", "T-MISSING",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "1",
+    ])
+    assert result.exit_code == 1
+
+
+def test_task_wait_exits_1_on_abandoned(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WA", repo_path="/r")
+    repo.mark_abandoned(task_id="T-WA", reason="manual cleanup")
+
+    result = CliRunner().invoke(app, [
+        "task", "wait", "T-WA",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "5",
+    ])
+    assert result.exit_code == 1
+    assert "abandoned" in result.stdout or "abandoned" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# CLI: task wait --help
+# ---------------------------------------------------------------------------
+
+
+def test_task_wait_help():
+    result = CliRunner().invoke(app, ["task", "wait", "--help"])
+    assert result.exit_code == 0
+    assert "--interval-seconds" in result.stdout
+    assert "--timeout-seconds" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# CLI: auto-wait on task start (with --no-wait)
+# ---------------------------------------------------------------------------
+
+
+def test_task_start_no_wait_returns_immediately(tmp_path: Path, monkeypatch):
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task", "start",
+            "--repo-path", "/tmp/repo",
+            "--body", "Goal: test",
+            "--task-id", "T-NW1",
+            "--no-wait",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "T-NW1" in result.stdout
+    # Should NOT contain waiting message
+    assert "Waiting for" not in result.stdout
+
+
+def test_task_start_auto_wait_exits_0_when_terminal(tmp_path: Path, monkeypatch):
+    """task start with auto-wait: simulate daemon marking evidence_ready."""
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+
+    # Pre-mark the task as evidence_ready BEFORE the wait loop checks
+    # We do this by first creating the task in the DB, then running
+    # the command. Since the fake bus succeeds immediately and the task
+    # is created by the command itself, we need the task to reach
+    # evidence_ready before wait polls.
+    #
+    # Simplest approach: mark evidence_ready immediately after task creation
+    # by patching maybe_auto_wait to call mark first.
+    from agpair.storage.tasks import TaskRepository
+    from agpair.storage.db import ensure_database as ed
+    paths = _make_paths(tmp_path)
+    ed(paths.db_path)
+
+    import agpair.cli.task as task_mod
+
+    original_auto_wait = task_mod.maybe_auto_wait
+
+    def patched_auto_wait(db_path, task_id, **kw):
+        # Simulate daemon marking evidence_ready before wait polls
+        TaskRepository(db_path).mark_evidence_ready(task_id=task_id)
+        return original_auto_wait(db_path, task_id, **kw)
+
+    monkeypatch.setattr(task_mod, "maybe_auto_wait", patched_auto_wait)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task", "start",
+            "--repo-path", "/tmp/repo",
+            "--body", "Goal: test",
+            "--task-id", "T-AW1",
+            "--interval-seconds", "0.01",
+            "--timeout-seconds", "5",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Waiting for" in result.stdout
+    assert "evidence_ready" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# CLI: auto-wait wired on all semantic commands
+# ---------------------------------------------------------------------------
+
+
+def test_task_help_shows_wait_options():
+    """All dispatch commands should show --wait/--no-wait."""
+    runner = CliRunner()
+    for cmd in ("start", "continue", "approve", "reject", "retry"):
+        result = runner.invoke(app, ["task", cmd, "--help"])
+        assert result.exit_code == 0, f"{cmd} --help failed"
+        assert "--wait" in result.stdout, f"{cmd} missing --wait"
+        assert "--no-wait" in result.stdout, f"{cmd} missing --no-wait"
+        assert "--interval-seconds" in result.stdout, f"{cmd} missing --interval-seconds"
+        assert "--timeout-seconds" in result.stdout, f"{cmd} missing --timeout-seconds"
+
+
+def test_task_help_does_not_show_wait_on_status_and_logs():
+    """status and logs should NOT have --wait."""
+    runner = CliRunner()
+    for cmd in ("status", "logs"):
+        result = runner.invoke(app, ["task", cmd, "--help"])
+        assert result.exit_code == 0
+        assert "--wait" not in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Watchdog-aware wait: unit tests for wait_for_terminal_phase
+# ---------------------------------------------------------------------------
+
+
+def test_plain_acked_still_waits_normally(tmp_path: Path):
+    """acked without retry_recommended should continue polling until timeout."""
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WD1", repo_path="/r")
+    repo.mark_acked(task_id="T-WD1", session_id="s-1")
+
+    paths = _make_paths(tmp_path)
+    clock = FakeClock()
+    result = wait_for_terminal_phase(
+        paths.db_path, "T-WD1", interval_seconds=5, timeout_seconds=10, _clock=clock,
+    )
+    # Should time out because acked (not retry_recommended) is NOT terminal
+    assert result.timed_out is True
+    assert result.phase == "acked"
+    assert result.watchdog_triggered is False
+
+
+def test_acked_plus_retry_recommended_exits_early(tmp_path: Path):
+    """acked + retry_recommended=true should exit early as watchdog failure."""
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WD2", repo_path="/r")
+    repo.mark_acked(task_id="T-WD2", session_id="s-1")
+    repo.recommend_retry(task_id="T-WD2")
+
+    paths = _make_paths(tmp_path)
+    clock = FakeClock()
+    result = wait_for_terminal_phase(
+        paths.db_path, "T-WD2", interval_seconds=5, timeout_seconds=60, _clock=clock,
+    )
+    # Should NOT time out — should return early with watchdog_triggered
+    assert result.timed_out is False
+    assert result.phase == "acked"
+    assert result.watchdog_triggered is True
+
+
+def test_acked_becomes_retry_recommended_mid_wait(tmp_path: Path):
+    """If retry_recommended is set during polling, wait exits early."""
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WD3", repo_path="/r")
+    repo.mark_acked(task_id="T-WD3", session_id="s-1")
+
+    paths = _make_paths(tmp_path)
+    poll_count = 0
+
+    class WatchdogClock(FakeClock):
+        def sleep(self, seconds: float) -> None:
+            nonlocal poll_count
+            poll_count += 1
+            super().sleep(seconds)
+            # Simulate daemon setting retry_recommended after 2 polls
+            if poll_count == 2:
+                repo.recommend_retry(task_id="T-WD3")
+
+    clock = WatchdogClock()
+    result = wait_for_terminal_phase(
+        paths.db_path, "T-WD3", interval_seconds=5, timeout_seconds=120, _clock=clock,
+    )
+    assert result.phase == "acked"
+    assert result.watchdog_triggered is True
+    assert result.timed_out is False
+    assert poll_count == 2
+
+
+def test_hard_stuck_still_works_after_watchdog_change(tmp_path: Path):
+    """Hard stuck transition still produces a terminal result (not watchdog)."""
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WD4", repo_path="/r")
+    repo.mark_acked(task_id="T-WD4", session_id="s-1")
+    # Mark stuck (hard timeout by daemon)
+    repo.mark_stuck(task_id="T-WD4", reason="no progress before timeout")
+    repo.recommend_retry(task_id="T-WD4")
+
+    paths = _make_paths(tmp_path)
+    clock = FakeClock()
+    result = wait_for_terminal_phase(
+        paths.db_path, "T-WD4", interval_seconds=5, timeout_seconds=60, _clock=clock,
+    )
+    # stuck is a terminal phase — watchdog_triggered should be False
+    assert result.phase == "stuck"
+    assert result.timed_out is False
+    assert result.watchdog_triggered is False
+
+
+def test_approve_ignores_watchdog_on_acked(tmp_path: Path):
+    """approve uses APPROVE_TERMINAL_PHASES — acked+retry_recommended still triggers watchdog."""
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WD5", repo_path="/r")
+    repo.mark_acked(task_id="T-WD5", session_id="s-1")
+    repo.recommend_retry(task_id="T-WD5")
+
+    paths = _make_paths(tmp_path)
+    clock = FakeClock()
+    result = wait_for_terminal_phase(
+        paths.db_path, "T-WD5", interval_seconds=5, timeout_seconds=60,
+        terminal_phases=APPROVE_TERMINAL_PHASES, _clock=clock,
+    )
+    # Even with approve semantics, watchdog fires because acked+retry_recommended
+    assert result.phase == "acked"
+    assert result.watchdog_triggered is True
+    assert result.timed_out is False
+
+
+# ---------------------------------------------------------------------------
+# Watchdog-aware wait: exit_code helpers
+# ---------------------------------------------------------------------------
+
+
+def test_exit_code_for_dispatch_watchdog():
+    result = WaitResult(phase="acked", timed_out=False, watchdog_triggered=True)
+    assert exit_code_for_dispatch(result) == 1
+
+
+def test_exit_code_for_approve_watchdog():
+    result = WaitResult(phase="acked", timed_out=False, watchdog_triggered=True)
+    assert exit_code_for_approve(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# Watchdog-aware wait: WaitResult backwards compat
+# ---------------------------------------------------------------------------
+
+
+def test_wait_result_watchdog_defaults_false():
+    """Existing WaitResult usage without watchdog_triggered should still work."""
+    result = WaitResult(phase="committed", timed_out=False)
+    assert result.watchdog_triggered is False
+
+
+# ---------------------------------------------------------------------------
+# Watchdog-aware wait: CLI integration
+# ---------------------------------------------------------------------------
+
+
+def test_task_wait_exits_1_on_watchdog(tmp_path: Path, monkeypatch):
+    """task wait exits 1 with clear message for acked + retry_recommended."""
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WWD", repo_path="/r")
+    repo.mark_acked(task_id="T-WWD", session_id="s-1")
+    repo.recommend_retry(task_id="T-WWD")
+
+    result = CliRunner().invoke(app, [
+        "task", "wait", "T-WWD",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "5",
+    ])
+    assert result.exit_code == 1
+    # Should contain watchdog-specific messaging
+    assert "watchdog" in result.stdout.lower() or "watchdog" in (result.stderr or "").lower()
+    assert "retry" in result.stdout.lower() or "retry" in (result.stderr or "").lower()
+
+
+def test_auto_wait_exits_1_on_watchdog(tmp_path: Path, monkeypatch):
+    """Default auto-wait on start also exits 1 for watchdog-marked tasks."""
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+
+    from agpair.storage.tasks import TaskRepository
+    from agpair.storage.db import ensure_database as ed
+    paths = _make_paths(tmp_path)
+    ed(paths.db_path)
+
+    import agpair.cli.task as task_mod
+
+    original_auto_wait = task_mod.maybe_auto_wait
+
+    def patched_auto_wait(db_path, task_id, **kw):
+        # Simulate daemon marking retry_recommended before wait polls
+        TaskRepository(db_path).mark_acked(task_id=task_id, session_id="s-auto")
+        TaskRepository(db_path).recommend_retry(task_id=task_id)
+        return original_auto_wait(db_path, task_id, **kw)
+
+    monkeypatch.setattr(task_mod, "maybe_auto_wait", patched_auto_wait)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task", "start",
+            "--repo-path", "/tmp/repo",
+            "--body", "Goal: test",
+            "--task-id", "T-AWD1",
+            "--interval-seconds", "0.01",
+            "--timeout-seconds", "5",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "watchdog" in result.stdout.lower() or "watchdog" in (result.stderr or "").lower()

@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+from contextlib import contextmanager
+from pathlib import Path
+import sqlite3
+
+
+SCHEMA_SQL = (Path(__file__).with_name("schema.sql")).read_text(encoding="utf-8")
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Apply incremental schema migrations for existing databases."""
+    task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    # Migration 1: add last_heartbeat_at
+    if "last_heartbeat_at" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN last_heartbeat_at TEXT")
+        conn.commit()
+    # Migration 2: add last_workspace_activity_at
+    if "last_workspace_activity_at" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN last_workspace_activity_at TEXT")
+        conn.commit()
+    # Migration 3: add delivery_id column + unique partial index on receipts
+    receipt_cols = {row[1] for row in conn.execute("PRAGMA table_info(receipts)").fetchall()}
+    if "delivery_id" not in receipt_cols:
+        conn.execute("ALTER TABLE receipts ADD COLUMN delivery_id TEXT")
+        conn.commit()
+    existing_indexes = {row[1] for row in conn.execute("PRAGMA index_list(receipts)").fetchall()}
+    if "uq_receipts_task_delivery" not in existing_indexes:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_receipts_task_delivery "
+            "ON receipts (task_id, delivery_id) WHERE delivery_id IS NOT NULL"
+        )
+        conn.commit()
+    # Migration 4: add waiters table (persisted wait state)
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    if "waiters" not in tables:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS waiters (
+              waiter_id TEXT PRIMARY KEY,
+              task_id TEXT NOT NULL,
+              command TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT 'waiting',
+              started_at TEXT NOT NULL,
+              last_poll_at TEXT NOT NULL,
+              finished_at TEXT,
+              outcome TEXT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_waiters_active_task
+              ON waiters (task_id) WHERE state = 'waiting';
+        """)
+        conn.commit()
+
+
+def ensure_database(db_path: Path) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(SCHEMA_SQL)
+        conn.commit()
+        _migrate_schema(conn)
+
+
+@contextmanager
+def connect(db_path: Path):
+    ensure_database(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
