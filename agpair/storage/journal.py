@@ -27,6 +27,14 @@ class JournalRepository:
             conn.commit()
             return cursor.rowcount
 
+    def count_older_than(self, cutoff_iso: str) -> int:
+        """Count journal entries that would be deleted by cleanup."""
+        with connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM journal WHERE created_at < ?", (cutoff_iso,)
+            ).fetchone()
+            return row[0]
+
     def tail(self, task_id: str, limit: int = 20) -> list[JournalRecord]:
         with connect(self.db_path) as conn:
             rows = conn.execute(

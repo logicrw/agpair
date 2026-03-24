@@ -20,6 +20,14 @@ class ReceiptRepository:
             conn.commit()
             return cursor.rowcount
 
+    def count_older_than(self, cutoff_iso: str) -> int:
+        """Count receipts that would be deleted by cleanup."""
+        with connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM receipts WHERE created_at < ?", (cutoff_iso,)
+            ).fetchone()
+            return row[0]
+
     def record(
         self,
         message_id: str,

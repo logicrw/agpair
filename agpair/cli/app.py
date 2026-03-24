@@ -43,8 +43,13 @@ def cleanup(
     tasks = TaskRepository(paths.db_path)
 
     if dry_run:
-        typer.echo(f"Dry run: would delete data older than {older_than_days} days (before {cutoff})")
-        typer.echo("Use without --dry-run to actually delete.")
+        j = journals.count_older_than(cutoff)
+        r = receipts.count_older_than(cutoff)
+        t = tasks.count_terminal_older_than(cutoff)
+        typer.echo(f"Dry run — data older than {older_than_days} days (before {cutoff}):")
+        typer.echo(f"  journals: {j} would be deleted")
+        typer.echo(f"  receipts: {r} would be deleted")
+        typer.echo(f"  terminal tasks: {t} would be deleted")
         return
 
     j = journals.delete_older_than(cutoff)

@@ -243,7 +243,7 @@ def to_iso(value: datetime) -> str:
 
 
 def auto_cleanup(paths: AppPaths, *, retention_days: int = DEFAULT_CLEANUP_RETENTION_DAYS) -> None:
-    """Delete old journals, receipts, and terminal tasks. Called by daemon once per day."""
+    """Delete old journals, receipts, and terminal tasks. Called by daemon every 30 days."""
     cutoff = to_iso(datetime.now(UTC) - timedelta(days=retention_days))
     journal = JournalRepository(paths.db_path)
     receipts = ReceiptRepository(paths.db_path)
@@ -252,7 +252,7 @@ def auto_cleanup(paths: AppPaths, *, retention_days: int = DEFAULT_CLEANUP_RETEN
     r = receipts.delete_older_than(cutoff)
     t = tasks.delete_terminal_older_than(cutoff)
     if j or r or t:
-        JournalRepository(paths.db_path).append(
+        journal.append(
             "daemon", "daemon", "auto_cleanup",
             f"deleted journals={j} receipts={r} tasks={t} older_than={retention_days}d",
         )

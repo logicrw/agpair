@@ -43,5 +43,8 @@ class WaiterRecord:
     outcome: str | None = None
 
 
+TERMINAL_PHASES = ("evidence_ready", "committed", "blocked", "stuck", "abandoned")
+
+
 def utcnow_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")

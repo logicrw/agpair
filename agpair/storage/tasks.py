@@ -103,15 +103,34 @@ class TaskRepository:
 
     def delete_terminal_older_than(self, cutoff_iso: str) -> int:
         """Delete tasks in terminal phase older than cutoff. Returns count deleted."""
-        terminal_phases = ("evidence_ready", "committed", "blocked", "stuck", "abandoned")
+        from agpair.models import TERMINAL_PHASES
+
         with connect(self.db_path) as conn:
-            placeholders = ",".join("?" for _ in terminal_phases)
+            placeholders = ",".join("?" for _ in TERMINAL_PHASES)
+            # Clean orphaned waiters first
+            conn.execute(
+                f"DELETE FROM waiters WHERE task_id IN "
+                f"(SELECT task_id FROM tasks WHERE phase IN ({placeholders}) AND created_at < ?)",
+                (*TERMINAL_PHASES, cutoff_iso),
+            )
             cursor = conn.execute(
                 f"DELETE FROM tasks WHERE phase IN ({placeholders}) AND created_at < ?",
-                (*terminal_phases, cutoff_iso),
+                (*TERMINAL_PHASES, cutoff_iso),
             )
             conn.commit()
             return cursor.rowcount
+
+    def count_terminal_older_than(self, cutoff_iso: str) -> int:
+        """Count tasks that would be deleted by cleanup."""
+        from agpair.models import TERMINAL_PHASES
+
+        with connect(self.db_path) as conn:
+            placeholders = ",".join("?" for _ in TERMINAL_PHASES)
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM tasks WHERE phase IN ({placeholders}) AND created_at < ?",
+                (*TERMINAL_PHASES, cutoff_iso),
+            ).fetchone()
+            return row[0]
 
     def record_heartbeat(self, *, task_id: str, heartbeat_at: str | None = None) -> None:
         """Record a RUNNING heartbeat — updates liveness without changing phase.
