@@ -19,7 +19,7 @@ from agpair.transport import messages
 SESSION_ID_RE = re.compile(r"session_id\s*[:=]\s*(?P<session>[^\s]+)")
 DEFAULT_WATCHDOG_SECONDS = 900
 DEFAULT_CLEANUP_RETENTION_DAYS = 30
-CLEANUP_INTERVAL_SECONDS = 86400  # 24 hours
+CLEANUP_INTERVAL_SECONDS = 2592000  # 30 days
 
 
 def run_forever(
