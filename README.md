@@ -4,7 +4,9 @@
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-**agpair** is a lightweight CLI that connects your [Codex](https://openai.com/codex) chat window to an [Antigravity](https://antigravity.google/) executor — so you can dispatch coding tasks, track their progress, and review results without leaving the conversation.
+[中文说明](README.zh-CN.md) | [新手教程](docs/getting-started-zh.md) | [中文命令参考](docs/usage.zh-CN.md)
+
+**agpair** is a lightweight CLI that connects your [Codex](https://openai.com/codex) (CLI or Desktop) to an [Antigravity](https://antigravity.google/) executor — so you can dispatch coding tasks, track their progress, and review results without leaving the conversation.
 
 ## Why agpair?
 
@@ -20,7 +22,7 @@ When you use Codex + Antigravity together, there is a mechanical gap between "I 
 
 ### What agpair is *not*
 
-- Not a second Supervisor — Codex stays in charge of semantic decisions.
+- Not a semantic controller — Codex stays in charge of decisions.
 - Not a fully autonomous reviewer — you (or Codex) choose the next action.
 - Not a zero-dependency runtime — it still depends on `agent-bus`, Antigravity itself, and the bundled companion extension.
 
@@ -152,13 +154,10 @@ What is explicitly *not* in scope:
 
 ## Documentation
 
-| Language | Document | Description |
-|----------|----------|-------------|
-| English | [Getting Started](docs/getting-started.en.md) | Step-by-step beginner guide |
-| English | [Command Reference](docs/usage.md) | Full CLI reference |
-| 中文 | [中文说明](README.zh-CN.md) | 中文入口 |
-| 中文 | [新手教程](docs/getting-started-zh.md) | 详细入门指南 |
-| 中文 | [命令参考](docs/usage.zh-CN.md) | 中文命令参考 |
+| Document | Description |
+|----------|-------------|
+| [Getting Started](docs/getting-started.en.md) | Step-by-step beginner guide |
+| [Command Reference](docs/usage.md) | Full CLI reference |
 
 ## Repository Structure
 
@@ -176,7 +175,7 @@ agpair/
 └── pyproject.toml
 ```
 
-This is a **single self-contained repo**. No external `codex-antigravity-supervisor` checkout is needed.
+This is a **single self-contained repo**. No external checkout is needed.
 
 ## Important Operating Notes
 

@@ -6,7 +6,7 @@
 
 [English](README.md) | 中文
 
-**agpair** 是一个轻量 CLI，连接你的 [Codex](https://openai.com/codex) 聊天窗口和 [Antigravity](https://antigravity.google/) 执行器——让你在对话中就能发任务、跟踪进度、审核结果。
+**agpair** 是一个轻量级工具，连接你的 [Codex](https://openai.com/codex)（CLI 或 Desktop）和 [Antigravity](https://antigravity.google/) 执行器——让你在对话中就能发任务、跟踪进度、审核结果。
 
 ## 为什么需要 agpair？
 
@@ -22,7 +22,7 @@
 
 ### agpair *不是*什么
 
-- 不是第二个 Supervisor——语义决策由 Codex 负责。
+- 不是语义控制器——语义决策由 Codex 负责。
 - 不是完全自动的 reviewer——你（或 Codex）来选择下一步。
 - 不是零依赖 runtime——它仍然依赖 `agent-bus`、Antigravity 本体，以及仓库内自带的 companion 扩展。
 
@@ -177,7 +177,7 @@ agpair/
 └── pyproject.toml
 ```
 
-这是一个**单一自包含仓库**。不需要额外检出 `codex-antigravity-supervisor`。
+这是一个**单一自包含仓库**。不需要额外检出其他项目。
 
 ## 重要使用须知
 

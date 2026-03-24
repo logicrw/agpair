@@ -57,7 +57,7 @@ If `repo_bridge_warning` mentions:
 
 `agpair` v1 assumes it is the only desktop-side consumer for Antigravity receipts.
 
-If you are already running the older `codex-antigravity-supervisor` desktop watcher on the same machine, both tools will compete for the same `code -> desktop` messages. In that situation:
+If another desktop-side receipt watcher is already running on the same machine, both tools will compete for the same `code -> desktop` messages. In that situation:
 
 - `agpair doctor` will report `desktop_reader_conflict=true`
 - `agpair daemon start` and `agpair daemon run` will refuse to start
