@@ -2,7 +2,7 @@
 
 This guide walks you through going from zero to your first successful task dispatch.
 
-> **Key insight**: In normal use, you talk to Codex in natural language and Codex uses `agpair` as its tool belt. You only need the CLI directly when you want to inspect state, debug, or manually take over.
+> **Key insight**: In normal use, you talk to your AI coding agent (Codex, Claude Code, etc.) in natural language and it uses `agpair` as its tool belt. You only need the CLI directly when you want to inspect state, debug, or manually take over.
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ This guide walks you through going from zero to your first successful task dispa
 
 ### What is `agent-bus`?
 
-`agent-bus` is the shared local message bus that agpair uses to dispatch tasks and receive receipts between Codex (desktop) and Antigravity (code executor). It is distributed as part of the Antigravity tooling environment. If you are using an Antigravity-managed setup, it should already be available. Otherwise, install the `agent-bus` binary provided by your Antigravity distribution and ensure it is on your `PATH`. There is currently no standalone public package for `agent-bus`.
+`agent-bus` is the shared local message bus that agpair uses to dispatch tasks and receive receipts between your AI coding agent (desktop side) and Antigravity (code executor). It is distributed as part of the Antigravity tooling environment. If you are using an Antigravity-managed setup, it should already be available. Otherwise, install the `agent-bus` binary provided by your Antigravity distribution and ensure it is on your `PATH`. There is currently no standalone public package for `agent-bus`.
 
 ### What is the Antigravity IDE?
 
@@ -32,7 +32,7 @@ source .venv/bin/activate
 python3 -m pip install -e '.[dev]'
 ```
 
-To make `agpair` available globally (so any Codex window can use it):
+To make `agpair` available globally (so any AI coding agent can use it):
 
 ```bash
 ln -sf "$PWD/.venv/bin/agpair" ~/.local/bin/agpair
@@ -195,14 +195,14 @@ agpair task abandon <TASK_ID> --reason "No longer needed."
 - **`continue`** — the session is still healthy, just needs another round
 - **`retry`** — the session is broken, stuck, or not worth continuing
 
-## Step 8: Using agpair with Codex (the normal workflow)
+## Step 8: Using agpair with your AI coding agent (the normal workflow)
 
 In daily use, the intended flow is:
 
-1. You tell Codex what you want in natural language
-2. Codex calls `agpair doctor`, `task start`, `task status`, etc.
+1. You tell your AI agent (Codex, Claude Code, etc.) what you want in natural language
+2. The agent calls `agpair doctor`, `task start`, `task status`, etc.
 3. Antigravity executes the work
-4. You review the results in Codex and give the next instruction
+4. You review the results and give the next instruction
 
 The CLI exists as a manual fallback for when you need to:
 
@@ -210,7 +210,7 @@ The CLI exists as a manual fallback for when you need to:
 - List all locally tracked tasks
 - Manually retry or abandon a task
 - Confirm the bridge is healthy
-- Take over when Codex is unavailable
+- Take over when the agent is unavailable
 
 ## Common Problems
 

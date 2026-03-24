@@ -2,7 +2,7 @@
 
 这份教程带你从零开始到成功发出第一个任务。
 
-> **核心要点**：正常使用时，你对 Codex 说自然语言，Codex 在后台调用 `agpair`。只有在你想手动检查状态、调试或接管时，才需要直接用 CLI。
+> **核心要点**：正常使用时，你对 AI 编程工具（Codex、Claude Code 等）说自然语言，它在后台调用 `agpair`。只有在你想手动检查状态、调试或接管时，才需要直接用 CLI。
 
 ## 前置条件
 
@@ -16,7 +16,7 @@
 
 ### 什么是 `agent-bus`？
 
-`agent-bus` 是 agpair 在 Codex（desktop）和 Antigravity（executor）之间发送任务和接收回执所使用的本地共享消息总线。它是 Antigravity 工具链的一部分。如果你使用的是 Antigravity 管理的环境，它应该已经可用。否则，请安装 Antigravity 发行版提供的 `agent-bus` 二进制文件并确保它在 `PATH` 中。目前没有独立的公开包发布。
+`agent-bus` 是 agpair 在 AI 编程工具（desktop 端）和 Antigravity（executor 端）之间发送任务和接收回执所使用的本地共享消息总线。它是 Antigravity 工具链的一部分。如果你使用的是 Antigravity 管理的环境，它应该已经可用。否则，请安装 Antigravity 发行版提供的 `agent-bus` 二进制文件并确保它在 `PATH` 中。目前没有独立的公开包发布。
 
 ### 什么是 Antigravity IDE？
 
@@ -32,7 +32,7 @@ source .venv/bin/activate
 python3 -m pip install -e '.[dev]'
 ```
 
-让 `agpair` 全局可用（任何 Codex 窗口都能直接调用）：
+让 `agpair` 全局可用（任何 AI 编程工具都能直接调用）：
 
 ```bash
 ln -sf "$PWD/.venv/bin/agpair" ~/.local/bin/agpair
@@ -195,14 +195,14 @@ agpair task abandon <TASK_ID> --reason "不再需要了"
 - **`continue`** — session 还健康，只是需要再跑一轮
 - **`retry`** — session 明显坏了、卡了，不值得继续
 
-## 第 8 步：配合 Codex 使用（正常流程）
+## 第 8 步：配合 AI 编程工具使用（正常流程）
 
 日常使用中，推荐的流程是：
 
-1. 你对 Codex 说自然语言任务
-2. Codex 调用 `agpair doctor`、`task start`、`task status` 等
+1. 你对 AI 工具（Codex、Claude Code 等）说自然语言任务
+2. 工具调用 `agpair doctor`、`task start`、`task status` 等
 3. Antigravity 执行工作
-4. 你在 Codex 中审核结果，给出下一步指令
+4. 你审核结果，给出下一步指令
 
 CLI 是手动辅助工具，适用于：
 
@@ -210,7 +210,7 @@ CLI 是手动辅助工具，适用于：
 - 列出本地跟踪的所有任务
 - 手动 retry 或 abandon
 - 确认 bridge 是否健康
-- Codex 不可用时自己接管
+- AI 工具不可用时自己接管
 
 ## 常见问题
 
@@ -247,6 +247,6 @@ python3 -m agpair.tools.install_agpair_daemon_launchd uninstall
 - **一个时间段只让 `agpair` 接管一套项目**
 - **先检查 `doctor`，再发任务**
 - **大多数时间只看 `status` 和 `logs`**
-- **复杂判断留在 Codex 聊天窗口里做**
+- **复杂判断留在 AI 工具的聊天窗口里做**
 
-不要把它想成"全自动平台"，而是：**一个让 Codex 更稳定地驱动 Antigravity 的轻量控制台。**
+不要把它想成"全自动平台"，而是：**一个让 AI 编程工具更稳定地驱动 Antigravity 的轻量控制台。**

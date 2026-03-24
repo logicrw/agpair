@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "agpair"
 version = "1.0"
-description = "Bridge between Codex (CLI & Desktop) and Antigravity — task dispatch, receipt tracking, stuck detection, and continue/approve/reject/retry flows"
+description = "Bridge any AI coding agent to Antigravity — task dispatch, receipt tracking, stuck detection, and continue/approve/reject/retry flows"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12"
