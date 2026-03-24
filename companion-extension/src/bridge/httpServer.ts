@@ -336,9 +336,12 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
         sendJson(res, 404, { ok: false, message: "Not found" });
       }
     } catch (err: any) {
-      // Surface 413 from readBody as a proper HTTP 413 response
       if (err.statusCode === 413) {
         sendJson(res, 413, { ok: false, message: "Request body too large" });
+        return;
+      }
+      if (err instanceof SyntaxError && err.message.includes("JSON")) {
+        sendJson(res, 400, { ok: false, message: "Invalid JSON in request body" });
         return;
       }
       console.error(`[bridge] Unhandled request error:`, err);

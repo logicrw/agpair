@@ -262,7 +262,11 @@ def wait_task(
 
 def _require_task_with_session(tasks: TaskRepository, task_id: str):
     task = tasks.get_task(task_id)
-    if task is None or not task.antigravity_session_id:
+    if task is None:
+        typer.echo(f"Error: task {task_id!r} not found", err=True)
+        raise typer.Exit(code=1)
+    if not task.antigravity_session_id:
+        typer.echo(f"Error: task {task_id!r} has no Antigravity session (phase={task.phase!r})", err=True)
         raise typer.Exit(code=1)
     return task
 

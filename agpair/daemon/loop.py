@@ -30,14 +30,34 @@ def run_forever(
     watchdog_seconds: int = DEFAULT_WATCHDOG_SECONDS,
     bus=None,
 ) -> None:
-    last_cleanup_at: float = 0.0
     while True:
         run_once(paths, timeout_seconds=timeout_seconds, watchdog_seconds=watchdog_seconds, bus=bus)
-        now = time.monotonic()
-        if now - last_cleanup_at >= CLEANUP_INTERVAL_SECONDS:
+        if _cleanup_due(paths):
             auto_cleanup(paths)
-            last_cleanup_at = now
+            _write_cleanup_marker(paths)
         time.sleep(interval_ms / 1000.0)
+
+
+def _cleanup_marker_path(paths: AppPaths) -> Path:
+    return paths.root / ".last_cleanup"
+
+
+def _cleanup_due(paths: AppPaths) -> bool:
+    """Check if enough time has passed since last cleanup (persisted to disk)."""
+    marker = _cleanup_marker_path(paths)
+    if not marker.exists():
+        return True
+    try:
+        last = float(marker.read_text().strip())
+        return time.time() - last >= CLEANUP_INTERVAL_SECONDS
+    except (ValueError, OSError):
+        return True
+
+
+def _write_cleanup_marker(paths: AppPaths) -> None:
+    marker = _cleanup_marker_path(paths)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(str(time.time()))
 
 
 def run_once(
