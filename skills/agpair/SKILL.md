@@ -167,14 +167,19 @@ This happens when Antigravity produced evidence but the session died before cons
 
 Only if `agpair doctor` shows `repo_bridge_session_ready=false` AND dispatching a new task fails, ask the user to reload the Antigravity desktop window.
 
-## Multi-task: new task auto-clears old session
+## Multi-task: sequencing and auto-clear
 
-Since companion extension `949111b`, dispatching a new task to a workspace that already has an old/stuck task will **automatically terminate the old session and clear the lock**. You do NOT need to wait for the old task to finish or manually abandon it.
+**Normal flow:** After sending `approve`, poll until `committed` before dispatching the next task. The approve triggers Antigravity to commit, and the session needs time to finish. Do NOT dispatch the next task immediately after approve — the old session is still alive and working.
 
-This means:
-- After `evidence_ready` + local commit, just dispatch the next task immediately
-- If a task is stuck, just dispatch the replacement — the old session gets killed automatically
-- No need to call `agpair task abandon` before dispatching (though it's still safe to do so)
+```
+approve → poll 60s → committed → dispatch next task
+```
+
+**Stuck session auto-clear:** Since companion extension `949111b`, dispatching a new task when the old session is truly dead/stuck will automatically terminate the old session and clear the lock. This only applies when:
+- The old task's session has died (approve not consumed for several minutes)
+- You committed locally and need to move on
+
+Do NOT rely on auto-clear as a shortcut to skip waiting for `committed`.
 
 ## Anti-patterns
 
