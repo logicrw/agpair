@@ -186,7 +186,7 @@ def _is_agent_bus_available(binary: str) -> bool:
 def _safe_read_latest_receipt_id(db_path: Path) -> tuple[str | None, str | None]:
     try:
         with sqlite3.connect(db_path) as conn:
-            row = conn.execute("SELECT message_id FROM receipts ORDER BY CAST(message_id AS INTEGER) DESC LIMIT 1").fetchone()
+            row = conn.execute("SELECT message_id FROM receipts ORDER BY rowid DESC LIMIT 1").fetchone()
     except sqlite3.DatabaseError as exc:
         return None, str(exc)
     if row is None:

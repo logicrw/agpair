@@ -122,7 +122,8 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
     count = 0
     touched_task_ids: set[str] = set()
     # Pull receipts only for tasks this daemon owns (by task_id).
-    # This prevents multiple daemons from stealing each other's messages.
+    # Uses per-task --task-id filter so agent-bus only consumes matching
+    # messages, leaving other daemons' messages untouched.
     active_tasks = tasks.list_tasks(phase="new", limit=100) + tasks.list_tasks(phase="acked", limit=100)
     if not active_tasks:
         return 0, set()

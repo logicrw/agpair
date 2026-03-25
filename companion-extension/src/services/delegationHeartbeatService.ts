@@ -6,7 +6,7 @@
  *   RUNNING is a **liveness signal only**. It means:
  *     "The extension still has a live delegated task pending terminal receipt."
  *   It does NOT mean:
- *     "The model definitly made new code progress."
+ *     "The model definitely made new code progress."
  *
  * The heartbeat loop runs at a configurable cadence (default 30 s).
  * For every pending task in the DelegationTaskTracker it:

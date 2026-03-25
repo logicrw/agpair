@@ -44,7 +44,9 @@ class WaiterRecord:
     outcome: str | None = None
 
 
-TERMINAL_PHASES = ("evidence_ready", "committed", "blocked", "stuck", "abandoned")
+TERMINAL_PHASES: frozenset[str] = frozenset(
+    ("evidence_ready", "committed", "blocked", "stuck", "abandoned")
+)
 
 
 def utcnow_iso() -> str:

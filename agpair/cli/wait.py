@@ -25,10 +25,8 @@ from agpair.storage.waiters import WaiterRepository
 # ---------------------------------------------------------------------------
 
 #: Phases treated as terminal by the wait logic (default set).
-#: Re-exported from models to keep a single source of truth.
+#: Single source of truth in models.py.
 from agpair.models import TERMINAL_PHASES  # noqa: E402
-
-TERMINAL_PHASES: frozenset[str] = frozenset(TERMINAL_PHASES)
 
 #: Terminal phases for the approve command — evidence_ready is NOT terminal
 #: because approve starts from evidence_ready and waits for committed.
