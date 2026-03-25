@@ -377,8 +377,8 @@ def test_migration_creates_unique_index(tmp_path: Path) -> None:
 # ===========================================================================
 
 
-def test_stale_receipt_watermark_still_works(tmp_path: Path) -> None:
-    """Receipts with message_id <= last_receipt_id are still rejected as stale."""
+def test_stale_receipt_watermark_resets_on_reack(tmp_path: Path) -> None:
+    """After re-ACK, last_receipt_id is cleared so new receipts are accepted."""
     from agpair.daemon.loop import run_once
 
     paths = seed_task(tmp_path)
@@ -396,20 +396,23 @@ def test_stale_receipt_watermark_still_works(tmp_path: Path) -> None:
     assert task1 is not None
     assert task1.last_receipt_id == "100"
 
-    # Now a stale receipt with a LOWER id and a DIFFERENT delivery id
-    # This should be rejected by the stale watermark, not the delivery dedup.
-    # But note: re-ack the task first so that a new terminal can be sent.
+    # Re-ack clears the watermark so the continuation round starts fresh
     TaskRepository(paths.db_path).mark_acked(task_id="TASK-1", session_id="session-retry")
 
+    task_after_reack = TaskRepository(paths.db_path).get_task("TASK-1")
+    assert task_after_reack is not None
+    assert task_after_reack.last_receipt_id is None  # watermark cleared
+
+    # New receipt with lower id is now accepted (not stale)
     bus2 = FakePullBus([{
         "id": 50,
         "task_id": "TASK-1",
         "status": "EVIDENCE_PACK",
-        "body": "X-Delivery-Id: dlv-stale\nstale evidence",
+        "body": "X-Delivery-Id: dlv-new\nnew evidence",
     }])
     run_once(paths, now=datetime(2026, 3, 24, 12, 1, tzinfo=UTC), bus=bus2)
 
-    journal = JournalRepository(paths.db_path).tail("TASK-1", limit=20)
-    stale_events = [j for j in journal if j.event == "receipt_stale"]
-    assert len(stale_events) >= 1
-    assert "50" in stale_events[0].body
+    task2 = TaskRepository(paths.db_path).get_task("TASK-1")
+    assert task2 is not None
+    assert task2.phase == "evidence_ready"
+    assert task2.last_receipt_id == "50"
