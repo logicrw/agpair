@@ -179,6 +179,7 @@ export class AgentBusWatchService {
         };
         this.cleanupOwnedLock();
         this.outputChannel.appendLine(`[companion] agent-bus watch failed to start: ${err.message}`);
+        this.scheduleRetry();
       });
       child.on("exit", (code, signal) => {
         const detail = signal ? `signal=${signal}` : `code=${code ?? 0}`;

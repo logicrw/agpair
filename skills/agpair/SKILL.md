@@ -1,6 +1,6 @@
 ---
 name: agpair
-description: "Delegate coding work to Antigravity through agpair CLI: dispatch a task, wait for EVIDENCE_PACK or COMMITTED, inspect doctor/daemon health, review logs, or send continue/approve/reject/retry. Triggers on: 'send to Antigravity', 'use agpair', 'dispatch task', 'delegate to Antigravity', '交给 Antigravity', '派任务'."
+description: "Delegate coding work to Antigravity through agpair CLI: dispatch a task, poll for completion, inspect doctor/daemon health, review logs, or send continue/approve/reject/retry. Triggers on: 'send to Antigravity', 'use agpair', 'dispatch task', 'delegate to Antigravity', '交给 Antigravity', '派任务'."
 ---
 
 # agpair
@@ -13,7 +13,7 @@ Use this skill when your AI coding agent is the reviewer/controller and Antigrav
 
 - preflight health checks
 - task dispatch
-- terminal-phase waiting
+- terminal-phase polling
 - evidence review
 - semantic follow-up (`continue`, `approve`, `reject`, `retry`)
 
@@ -45,26 +45,49 @@ Do not continue if the target repo is unhealthy:
 - `desktop_reader_conflict=true`
 - `repo_bridge_session_ready=false`
 
-### 2. Inspect task truth
+### 2. Dispatch with `--no-wait` and poll
 
-Use:
+**Always dispatch with `--no-wait`:**
+
+```bash
+agpair task start --repo-path <path> --body "<task body>" --no-wait
+```
+
+This prints the TASK_ID and returns immediately.
+
+**Then poll in a loop** until a terminal phase is reached:
+
+```bash
+agpair task status <TASK_ID>
+```
+
+Poll every ~15 seconds. Terminal phases are:
+
+| Phase | Meaning |
+|-------|---------|
+| `evidence_ready` | Antigravity produced an evidence pack — review it |
+| `committed` | Work committed successfully |
+| `blocked` | Antigravity could not proceed |
+| `stuck` | Daemon watchdog flagged the task as stale |
+| `abandoned` | Task was abandoned |
+
+**While polling:**
+
+- `acked` means accepted, NOT completed — keep polling
+- If `liveness_state` stays `silent` (no heartbeat, no workspace activity) for several polls, warn the user that Antigravity may not be executing
+- Report phase transitions to the user as they happen
+- Use `agpair task logs <TASK_ID> --limit 5` to check for progress details
+
+**Why not `--wait`?** The built-in `--wait` blocks for up to 60 minutes, but AI agent Bash tools typically have a 2-minute timeout. The command gets killed and the waiter becomes orphaned. Polling keeps the agent in control.
+
+### 3. Inspect task truth
+
+Before any semantic follow-up, always read:
 
 - `agpair task status <TASK_ID>`
 - `agpair task logs <TASK_ID> --limit 20`
 
 Do not choose `continue`, `approve`, `reject`, or `retry` until status and logs were read.
-
-### 3. Blocking wait discipline
-
-If you enter a blocking wait path (`task start` default `--wait`, `task wait`, or semantic commands with default `--wait`):
-
-- treat the wait as an active operation until it exits
-- keep consuming the same long-running command session, or keep checking:
-  - `agpair task active-waits`
-  - `agpair task status <TASK_ID>`
-- do not tell the user the task is done while an active waiter still exists
-
-`ACK` means accepted, not completed.
 
 ### 4. Guard against premature intervention
 
@@ -83,6 +106,15 @@ Choose exactly one:
 - `reject` when work must continue in the same session
 - `retry` only when the session is stale or not worth continuing
 
+All semantic commands also default to `--wait`. **Use `--no-wait` and poll** for these too:
+
+```bash
+agpair task continue <TASK_ID> --body "<feedback>" --no-wait
+agpair task approve <TASK_ID> --body "<message>" --no-wait
+```
+
+Then resume polling `task status` until the next terminal phase.
+
 ## Required gates
 
 Before claiming completion:
@@ -90,13 +122,14 @@ Before claiming completion:
 - health was checked
 - current task status was checked
 - latest logs were checked
-- if blocking wait was started, polling continued until terminal exit
+- polling continued until a terminal phase was observed
 - no same-task semantic action was sent while an active waiter existed
 
 ## Anti-patterns
 
-- Do not start a blocking wait and then stop polling while the conversation is still alive.
+- Do not use `--wait` (default) — always pass `--no-wait` and poll instead.
 - Do not treat `ACK` as proof of progress.
-- Do not jump straight to `continue` because the user said “继续”.
+- Do not stop polling before a terminal phase is reached.
+- Do not jump straight to `continue` because the user said "继续".
 - Do not hide `desktop_reader_conflict` or `repo_bridge_session_ready=false`.
 - Do not invent commands or transport paths outside the real `agpair` CLI.
