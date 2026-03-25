@@ -126,6 +126,34 @@ Before claiming completion:
 - polling continued until a terminal phase was observed
 - no same-task semantic action was sent while an active waiter existed
 
+## Recovery: stuck session
+
+Antigravity has **built-in auto-recovery**: the `DelegationReceiptWatcher` detects stale tasks (no receipt after timeout), automatically creates a new background session, and retries up to 2 times before falling back to BLOCKED.
+
+### When a task is stuck during execution (no evidence produced)
+
+1. **Wait for auto-recovery.** The companion extension will detect the stale task and attempt session recovery automatically.
+2. If `phase` changes to `blocked` after auto-recovery exhaustion, use `agpair task retry <TASK_ID> --no-wait` to start a fresh attempt.
+
+### When approve/continue is not consumed (evidence_ready but session dead)
+
+This happens when Antigravity produced evidence but the session died before consuming semantic actions. Auto-recovery does NOT help here — the session that should process the approve is gone.
+
+1. **Commit locally** — the code is already in the working tree:
+   ```bash
+   git add <files>
+   git commit -m "..."
+   ```
+2. **Abandon the stuck task:**
+   ```bash
+   agpair task abandon <TASK_ID>
+   ```
+3. **Dispatch the next task fresh** with `agpair task start --no-wait`. The companion extension will automatically terminate the old session and clear the lock for the new task — no manual window reload needed.
+
+### Last resort: manual window reload
+
+Only if `agpair doctor` shows `repo_bridge_session_ready=false` AND dispatching a new task fails, ask the user to reload the Antigravity desktop window.
+
 ## Anti-patterns
 
 - Do not use `--wait` (default) — always pass `--no-wait` and poll instead.
@@ -134,3 +162,4 @@ Before claiming completion:
 - Do not jump straight to `continue` because the user said "继续".
 - Do not hide `desktop_reader_conflict` or `repo_bridge_session_ready=false`.
 - Do not invent commands or transport paths outside the real `agpair` CLI.
+- Do not keep sending `approve`/`continue` to a dead session — abandon and reload instead.
