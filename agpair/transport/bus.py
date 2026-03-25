@@ -41,10 +41,11 @@ class AgentBusClient:
         return list(payload.get("messages", []))
 
     def _send(self, *, task_id: str, status: str, body: str) -> int:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tmp:
-            tmp.write(body)
-            tmp_path = Path(tmp.name)
+        tmp_path: Path | None = None
         try:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tmp:
+                tmp.write(body)
+                tmp_path = Path(tmp.name)
             proc = subprocess.run(
                 [
                     self.executable,
@@ -63,6 +64,7 @@ class AgentBusClient:
                 check=True,
             )
         finally:
-            tmp_path.unlink(missing_ok=True)
+            if tmp_path:
+                tmp_path.unlink(missing_ok=True)
         payload = json.loads(proc.stdout or "{}")
         return int(payload.get("id", 0))

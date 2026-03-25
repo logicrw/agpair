@@ -53,9 +53,11 @@ def run_daemon(
     _fail_on_desktop_reader_conflict(force=force)
     previous_sigint = signal.getsignal(signal.SIGINT)
     previous_sigterm = signal.getsignal(signal.SIGTERM)
+    _shutdown_requested = False
 
     def _handle_stop(_signum, _frame) -> None:
-        raise SystemExit(0)
+        nonlocal _shutdown_requested
+        _shutdown_requested = True
 
     signal.signal(signal.SIGINT, _handle_stop)
     signal.signal(signal.SIGTERM, _handle_stop)
@@ -64,7 +66,8 @@ def run_daemon(
         if once:
             run_once(paths, timeout_seconds=timeout_seconds)
             return
-        run_forever(paths, interval_ms=interval_ms, timeout_seconds=timeout_seconds)
+        run_forever(paths, interval_ms=interval_ms, timeout_seconds=timeout_seconds,
+                    shutdown_check=lambda: _shutdown_requested)
     except DesktopReaderLockError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)

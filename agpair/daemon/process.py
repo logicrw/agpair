@@ -13,10 +13,9 @@ from agpair.daemon.loop import read_daemon_status
 
 def start_background_daemon(paths: AppPaths, *, interval_ms: int = 1000, timeout_seconds: int = 1800) -> int:
     paths.root.mkdir(parents=True, exist_ok=True)
-    if paths.pid_path.exists():
-        existing = _read_pid(paths.pid_path)
-        if existing and _is_process_alive(existing):
-            return existing
+    existing = _read_pid(paths.pid_path)
+    if existing and _is_process_alive(existing):
+        return existing
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -34,7 +33,18 @@ def start_background_daemon(paths: AppPaths, *, interval_ms: int = 1000, timeout
         start_new_session=True,
         cwd=str(Path.cwd()),
     )
-    paths.pid_path.write_text(str(proc.pid), encoding="utf-8")
+    # Atomic write: write to temp file, then rename to avoid partial reads
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", dir=str(paths.root), prefix=".pid_", delete=False
+    )
+    try:
+        tmp.write(str(proc.pid))
+        tmp.close()
+        Path(tmp.name).replace(paths.pid_path)
+    except Exception:
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
     return proc.pid
 
 

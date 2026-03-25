@@ -29,8 +29,11 @@ def run_forever(
     timeout_seconds: int = 1800,
     watchdog_seconds: int = DEFAULT_WATCHDOG_SECONDS,
     bus=None,
+    shutdown_check=None,
 ) -> None:
     while True:
+        if shutdown_check and shutdown_check():
+            return
         run_once(paths, timeout_seconds=timeout_seconds, watchdog_seconds=watchdog_seconds, bus=bus)
         if _cleanup_due(paths):
             auto_cleanup(paths)
