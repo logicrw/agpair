@@ -81,14 +81,19 @@ Poll every **60 seconds** using `run_in_background` so the agent can respond to 
 
 **Why not `--wait`?** The built-in `--wait` blocks for up to 60 minutes, but AI agent Bash tools typically have a 2-minute timeout. The command gets killed and the waiter becomes orphaned. Polling keeps the agent in control.
 
-### 3. Inspect task truth
+### 3. Review evidence when `evidence_ready`
 
-Before any semantic follow-up, always read:
+When phase becomes `evidence_ready`:
 
-- `agpair task status <TASK_ID>`
-- `agpair task logs <TASK_ID> --limit 20`
+1. **Read the evidence pack**: `agpair task logs <TASK_ID> --limit 50`
+2. **Check what was changed**: look for diff stat, key files, test results in the logs
+3. **Spot-check the code**: read 2-3 key files from the working tree to verify quality
+4. **Decide**:
+   - `approve` — evidence is solid, tests pass, code looks good
+   - `reject` — specific issues need fixing in the same session
+   - `continue` — need Antigravity to do more work (e.g. add tests, fix a bug)
 
-Do not choose `continue`, `approve`, `reject`, or `retry` until status and logs were read.
+Do not choose a semantic action until you have read both status and logs.
 
 ### 4. Guard against premature intervention
 
@@ -113,6 +118,14 @@ All semantic commands also default to `--wait`. **Use `--no-wait` and poll** for
 agpair task continue <TASK_ID> --body "<feedback>" --no-wait
 agpair task approve <TASK_ID> --body "<message>" --no-wait
 ```
+
+**What to write in `--body`:**
+
+- `approve`: summarize what you reviewed, suggest commit message
+- `reject`: be specific — which file, which issue, what to fix. Antigravity reads this in the same session and continues working.
+- `continue`: describe the additional work needed (e.g. "add tests for X", "also implement Y")
+
+Do NOT send empty `--body`. Antigravity uses the feedback to guide its next actions.
 
 Then resume polling `task status` until the next terminal phase.
 
@@ -153,6 +166,15 @@ This happens when Antigravity produced evidence but the session died before cons
 ### Last resort: manual window reload
 
 Only if `agpair doctor` shows `repo_bridge_session_ready=false` AND dispatching a new task fails, ask the user to reload the Antigravity desktop window.
+
+## Multi-task: new task auto-clears old session
+
+Since companion extension `949111b`, dispatching a new task to a workspace that already has an old/stuck task will **automatically terminate the old session and clear the lock**. You do NOT need to wait for the old task to finish or manually abandon it.
+
+This means:
+- After `evidence_ready` + local commit, just dispatch the next task immediately
+- If a task is stuck, just dispatch the replacement — the old session gets killed automatically
+- No need to call `agpair task abandon` before dispatching (though it's still safe to do so)
 
 ## Anti-patterns
 
