@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS journal (
   source TEXT NOT NULL,
   event TEXT NOT NULL,
   body TEXT NOT NULL,
+  classification TEXT NOT NULL DEFAULT 'normal',
   created_at TEXT NOT NULL
 );
 

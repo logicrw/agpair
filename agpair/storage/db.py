@@ -31,7 +31,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             "ON receipts (task_id, delivery_id) WHERE delivery_id IS NOT NULL"
         )
         conn.commit()
-    # Migration 4: add waiters table (persisted wait state)
+    # Migration 4: add classification column to journal
+    journal_cols = {row[1] for row in conn.execute("PRAGMA table_info(journal)").fetchall()}
+    if "classification" not in journal_cols:
+        conn.execute("ALTER TABLE journal ADD COLUMN classification TEXT NOT NULL DEFAULT 'normal'")
+        conn.commit()
+    # Migration 5: add waiters table (persisted wait state)
     tables = {row[0] for row in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'"
     ).fetchall()}
@@ -59,6 +64,7 @@ def ensure_database(db_path: Path) -> None:
         conn.executescript(SCHEMA_SQL)
         conn.commit()
         _migrate_schema(conn)
+    _initialized.add(db_path)
 
 
 _initialized: set[Path] = set()

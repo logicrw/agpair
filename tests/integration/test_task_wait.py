@@ -119,6 +119,7 @@ def test_exit_code_for_approve(phase: str, expected: int):
 def test_wait_returns_immediately_on_terminal_phase(tmp_path: Path):
     repo = _make_repo(tmp_path)
     repo.create_task(task_id="T-1", repo_path="/r")
+    repo.mark_acked(task_id="T-1", session_id="test-session")
     repo.mark_evidence_ready(task_id="T-1")
 
     clock = FakeClock()
@@ -176,6 +177,7 @@ def test_wait_times_out(tmp_path: Path):
 def test_wait_blocked_is_terminal(tmp_path: Path):
     repo = _make_repo(tmp_path)
     repo.create_task(task_id="T-4", repo_path="/r")
+    repo.mark_acked(task_id="T-4", session_id="test-session")
     repo.mark_blocked(task_id="T-4", reason="transport error")
 
     paths = _make_paths(tmp_path)
@@ -190,6 +192,7 @@ def test_wait_blocked_is_terminal(tmp_path: Path):
 def test_wait_stuck_is_terminal(tmp_path: Path):
     repo = _make_repo(tmp_path)
     repo.create_task(task_id="T-5", repo_path="/r")
+    repo.mark_acked(task_id="T-5", session_id="test-session")
     repo.mark_stuck(task_id="T-5", reason="no activity")
 
     paths = _make_paths(tmp_path)
@@ -253,6 +256,7 @@ def test_task_wait_exits_0_on_evidence_ready(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = _make_repo(tmp_path)
     repo.create_task(task_id="T-W1", repo_path="/r")
+    repo.mark_acked(task_id="T-W1", session_id="test-session")
     repo.mark_evidence_ready(task_id="T-W1")
 
     result = CliRunner().invoke(app, [
@@ -268,6 +272,7 @@ def test_task_wait_exits_1_on_blocked(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = _make_repo(tmp_path)
     repo.create_task(task_id="T-W2", repo_path="/r")
+    repo.mark_acked(task_id="T-W2", session_id="test-session")
     repo.mark_blocked(task_id="T-W2", reason="fail")
 
     result = CliRunner().invoke(app, [
@@ -282,6 +287,7 @@ def test_task_wait_exits_0_on_committed(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = _make_repo(tmp_path)
     repo.create_task(task_id="T-W3", repo_path="/r")
+    repo.mark_acked(task_id="T-W3", session_id="test-session")
     repo.mark_committed(task_id="T-W3")
 
     result = CliRunner().invoke(app, [
@@ -388,6 +394,7 @@ def test_task_start_auto_wait_exits_0_when_terminal(tmp_path: Path, monkeypatch)
 
     def patched_auto_wait(db_path, task_id, **kw):
         # Simulate daemon marking evidence_ready before wait polls
+        TaskRepository(db_path).mark_acked(task_id=task_id, session_id="test-session")
         TaskRepository(db_path).mark_evidence_ready(task_id=task_id)
         return original_auto_wait(db_path, task_id, **kw)
 

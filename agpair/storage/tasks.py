@@ -10,6 +10,31 @@ class TaskNotFoundError(RuntimeError):
     """Raised when a requested task does not exist."""
 
 
+class IllegalTransitionError(RuntimeError):
+    """Raised when a phase transition is not allowed."""
+
+
+# Valid source phases for each mark_* transition.
+# None means any phase is allowed (e.g. abandon from anywhere).
+_VALID_TRANSITIONS: dict[str, set[str] | None] = {
+    "acked": {"new", "evidence_ready", "blocked", "committed", "stuck", "abandoned"},
+    "evidence_ready": {"acked"},
+    "blocked": {"acked", "new"},
+    "committed": {"acked", "evidence_ready"},
+    "stuck": {"acked"},
+    "abandoned": None,  # can abandon from any phase
+    "new": None,  # apply_retry_dispatch resets to new
+}
+
+
+def _check_transition(task: TaskRecord, target_phase: str) -> None:
+    valid_sources = _VALID_TRANSITIONS.get(target_phase)
+    if valid_sources is not None and task.phase not in valid_sources:
+        raise IllegalTransitionError(
+            f"cannot transition {task.task_id!r} from {task.phase!r} to {target_phase!r}"
+        )
+
+
 class TaskRepository:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
@@ -30,6 +55,10 @@ class TaskRepository:
             conn.commit()
 
     def mark_acked(self, *, task_id: str, session_id: str) -> None:
+        task = self.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(f"task not found: {task_id}")
+        _check_transition(task, "acked")
         now = utcnow_iso()
         self._update(
             task_id,
@@ -42,6 +71,10 @@ class TaskRepository:
         )
 
     def mark_evidence_ready(self, *, task_id: str, last_receipt_id: str | None = None) -> None:
+        task = self.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(f"task not found: {task_id}")
+        _check_transition(task, "evidence_ready")
         now = utcnow_iso()
         self._update(
             task_id,
@@ -54,6 +87,10 @@ class TaskRepository:
         )
 
     def mark_blocked(self, *, task_id: str, reason: str | None = None) -> None:
+        task = self.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(f"task not found: {task_id}")
+        _check_transition(task, "blocked")
         now = utcnow_iso()
         self._update(
             task_id,
@@ -66,6 +103,10 @@ class TaskRepository:
         )
 
     def mark_committed(self, *, task_id: str, last_receipt_id: str | None = None) -> None:
+        task = self.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(f"task not found: {task_id}")
+        _check_transition(task, "committed")
         now = utcnow_iso()
         self._update(
             task_id,
@@ -78,6 +119,10 @@ class TaskRepository:
         )
 
     def mark_stuck(self, *, task_id: str, reason: str) -> None:
+        task = self.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(f"task not found: {task_id}")
+        _check_transition(task, "stuck")
         now = utcnow_iso()
         self._update(
             task_id,
@@ -90,6 +135,10 @@ class TaskRepository:
         )
 
     def mark_abandoned(self, *, task_id: str, reason: str) -> None:
+        task = self.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(f"task not found: {task_id}")
+        _check_transition(task, "abandoned")
         now = utcnow_iso()
         self._update(
             task_id,

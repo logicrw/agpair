@@ -29,6 +29,7 @@ class JournalRecord:
     event: str
     body: str
     created_at: str
+    classification: str = "normal"
 
 
 @dataclass(frozen=True)

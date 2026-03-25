@@ -141,13 +141,13 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
             continue
         current_task = tasks.get_task(task_id)
         if current_task is not None and is_stale_receipt(current_task.last_receipt_id, message_id):
-            journal.append(task_id, "daemon", "receipt_stale", f"{status} id={message_id}")
+            journal.append(task_id, "daemon", "receipt_stale", f"{status} id={message_id}", "stale")
             continue
         try:
             if status == messages.ACK:
                 session_id = extract_session_id(body)
                 if not session_id:
-                    journal.append(task_id, "daemon", "ack_invalid", body)
+                    journal.append(task_id, "daemon", "ack_invalid", body, "invalid")
                     continue
                 tasks.mark_acked(task_id=task_id, session_id=session_id)
                 journal.append(task_id, "daemon", "acked", f"session_id={session_id}")
@@ -166,7 +166,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 tasks.mark_committed(task_id=task_id, last_receipt_id=message_id)
                 journal.append(task_id, "daemon", "committed", clean_body)
             else:
-                journal.append(task_id, "daemon", "receipt_ignored", f"{status}: {body}")
+                journal.append(task_id, "daemon", "receipt_ignored", f"{status}: {body}", "invalid")
         except TaskNotFoundError:
             continue
         count += 1

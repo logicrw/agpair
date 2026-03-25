@@ -10,11 +10,11 @@ class JournalRepository:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
 
-    def append(self, task_id: str, source: str, event: str, body: str) -> None:
+    def append(self, task_id: str, source: str, event: str, body: str, classification: str = "normal") -> None:
         with connect(self.db_path) as conn:
             conn.execute(
-                "INSERT INTO journal (task_id, source, event, body, created_at) VALUES (?, ?, ?, ?, ?)",
-                (task_id, source, event, body, utcnow_iso()),
+                "INSERT INTO journal (task_id, source, event, body, classification, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (task_id, source, event, body, classification, utcnow_iso()),
             )
             conn.commit()
 
@@ -39,7 +39,7 @@ class JournalRepository:
         with connect(self.db_path) as conn:
             rows = conn.execute(
                 """
-                SELECT task_id, source, event, body, created_at
+                SELECT task_id, source, event, body, classification, created_at
                 FROM journal
                 WHERE task_id = ?
                 ORDER BY id DESC
@@ -54,6 +54,7 @@ class JournalRepository:
                 event=row["event"],
                 body=row["body"],
                 created_at=row["created_at"],
+                classification=row["classification"] if "classification" in row.keys() else "normal",
             )
             for row in rows
         ]
