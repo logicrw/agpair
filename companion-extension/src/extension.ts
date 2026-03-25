@@ -21,6 +21,7 @@
  */
 
 import * as vscode from "vscode";
+import * as crypto from "crypto";
 import * as http from "http";
 import * as fs from "fs";
 import * as path from "path";
@@ -79,8 +80,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   outputChannel.appendLine("[companion] Activating Antigravity Companion Extension...");
   outputChannel.appendLine(`[companion] Bridge auth mode: ${authResolution.mode}`);
 
+  const earlyWorkspacePaths = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
+  const wsSlug = crypto.createHash("sha256").update(earlyWorkspacePaths.sort().join("\n")).digest("hex").slice(0, 8);
+  const agpairDir = path.join(os.homedir(), ".agpair");
   delegationTracker = new DelegationTaskTracker(
-    path.join(os.homedir(), ".agpair", "delegation_tasks_code.json"),
+    path.join(agpairDir, `delegation_tasks_code_${wsSlug}.json`),
   );
 
   // ── Step 1: Initialize SDK ──────────────────────────────────
@@ -156,6 +160,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showInformationMessage(message);
     },
     onMessages: (messages) => agentBusDelegationService?.handleMessages(messages) ?? Promise.resolve(),
+    lockPath: path.join(agpairDir, `agent_bus_watch_code_${wsSlug}.lock.json`),
+    inboxPath: path.join(agpairDir, `agent_bus_inbox_code_${wsSlug}.jsonl`),
   });
   const healthService = new HealthService(
     sdk,
