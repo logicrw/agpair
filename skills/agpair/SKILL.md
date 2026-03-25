@@ -74,9 +74,10 @@ Poll every **60 seconds** using `run_in_background` so the agent can respond to 
 **While polling:**
 
 - `acked` means accepted, NOT completed — keep polling patiently
-- Only escalate after **10 minutes** of `liveness_state: silent` (no heartbeat, no workspace activity). Before that, Antigravity may still be loading context, planning, or executing early steps
+- **Never stop polling before a terminal phase.** Even if the task looks stuck, keep polling every 60 seconds.
+- After **10 minutes** of `liveness_state: silent` (no heartbeat, no workspace activity): check logs with `agpair task logs <TASK_ID> --limit 5`, briefly inform the user of the situation, then **continue polling**. Do NOT stop and wait for user input. Antigravity may still be loading context, planning, or executing early steps.
+- If `retry_recommended=true` appears in task status (set by daemon after ~15 min), run `agpair task retry <TASK_ID> --no-wait` and resume polling the new attempt.
 - Report phase transitions to the user as they happen
-- Use `agpair task logs <TASK_ID> --limit 5` to check for progress details when escalating
 
 **Why not `--wait`?** The built-in `--wait` blocks for up to 60 minutes, but AI agent Bash tools typically have a 2-minute timeout. The command gets killed and the waiter becomes orphaned. Polling keeps the agent in control.
 
