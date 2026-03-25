@@ -61,7 +61,7 @@ This prints the TASK_ID and returns immediately.
 agpair task status <TASK_ID>
 ```
 
-Poll every ~15 seconds. Terminal phases are:
+Poll every **60 seconds**. Do not poll more frequently — Antigravity tasks typically take minutes to hours. Terminal phases are:
 
 | Phase | Meaning |
 |-------|---------|
@@ -73,10 +73,10 @@ Poll every ~15 seconds. Terminal phases are:
 
 **While polling:**
 
-- `acked` means accepted, NOT completed — keep polling
-- If `liveness_state` stays `silent` (no heartbeat, no workspace activity) for several polls, warn the user that Antigravity may not be executing
+- `acked` means accepted, NOT completed — keep polling patiently
+- Only escalate after **5 minutes** of `liveness_state: silent` (no heartbeat, no workspace activity). Before that, Antigravity may still be loading context or planning
 - Report phase transitions to the user as they happen
-- Use `agpair task logs <TASK_ID> --limit 5` to check for progress details
+- Use `agpair task logs <TASK_ID> --limit 5` to check for progress details when escalating
 
 **Why not `--wait`?** The built-in `--wait` blocks for up to 60 minutes, but AI agent Bash tools typically have a 2-minute timeout. The command gets killed and the waiter becomes orphaned. Polling keeps the agent in control.
 
