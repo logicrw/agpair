@@ -121,7 +121,15 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
     journal = JournalRepository(paths.db_path)
     count = 0
     touched_task_ids: set[str] = set()
-    for message in client.pull_receipts():
+    # Pull receipts only for tasks this daemon owns (by task_id).
+    # This prevents multiple daemons from stealing each other's messages.
+    active_tasks = tasks.list_tasks(phase="new", limit=100) + tasks.list_tasks(phase="acked", limit=100)
+    if not active_tasks:
+        return 0, set()
+    all_messages: list[dict] = []
+    for task in active_tasks:
+        all_messages.extend(client.pull_receipts(task_id=task.task_id))
+    for message in all_messages:
         message_id = str(message.get("id", ""))
         task_id = str(message.get("task_id", ""))
         status = str(message.get("status", ""))

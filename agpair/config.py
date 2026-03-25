@@ -23,7 +23,7 @@ class AppPaths:
             status_path=base / "daemon.status.json",
             pid_path=base / "daemon.pid",
             agent_bus_bin=os.environ.get("AGPAIR_AGENT_BUS_BIN", "agent-bus"),
-            shared_desktop_lock_path=Path.home() / ".supervisor" / "agent_bus_watch_desktop.lock",
+            shared_desktop_lock_path=base / "agent_bus_watch_desktop.lock",
         )
 
     @classmethod
