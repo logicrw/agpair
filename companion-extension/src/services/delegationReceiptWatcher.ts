@@ -256,12 +256,12 @@ export class DelegationReceiptWatcher {
 
       // Reopen the task with the new session — resets stale timer and clears terminal fields
       this.tracker.reopen(task.taskId, "RUNNING");
-      // Update session ID in tracker (reopen doesn't change it, so patch via register-like update)
-      const existing = this.tracker.get(task.taskId);
-      if (existing) {
-        existing.sessionId = result.session_id;
-        existing.receiptPath = DelegationReceiptWatcher.receiptPath(this.receiptDir, task.taskId);
-      }
+      // Update session ID in tracker (persists the new session ID to disk)
+      this.tracker.updateSession(
+        task.taskId,
+        result.session_id,
+        DelegationReceiptWatcher.receiptPath(this.receiptDir, task.taskId),
+      );
 
       this.outputChannel.appendLine(
         `[companion] session-recovery: ${task.taskId} recovered → new session ${result.session_id}`,

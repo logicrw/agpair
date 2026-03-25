@@ -146,6 +146,19 @@ export class DelegationTaskTracker {
   }
 
   /**
+   * Update the session ID and receipt path for a task.
+   * Used for session recovery when a task gets stuck.
+   */
+  updateSession(taskId: string, sessionId: string, receiptPath: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    task.sessionId = sessionId;
+    task.receiptPath = receiptPath;
+    this.persist();
+    return true;
+  }
+
+  /**
    * Record that a RUNNING heartbeat was sent for this task.
    */
   touchHeartbeat(taskId: string, at?: string): boolean {
