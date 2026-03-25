@@ -246,6 +246,11 @@ export class DelegationReceiptWatcher {
     );
 
     try {
+      this.outputChannel.appendLine(
+        `[companion] session-recovery: terminating old session ${task.sessionId}...`,
+      );
+      await this.sessionCtrl.terminateSession(task.sessionId);
+
       const result = await this.sessionCtrl.createBackgroundSession(task.taskBody);
       if (!result.ok || !result.session_id) {
         this.outputChannel.appendLine(

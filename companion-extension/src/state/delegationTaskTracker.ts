@@ -199,6 +199,22 @@ export class DelegationTaskTracker {
   }
 
   /**
+   * Forcibly abandon a task (e.g. preempted by a new task).
+   * Sets terminalSentAt to prevent it from blocking the workspace.
+   */
+  abandon(taskId: string, body = "Task abandoned locally"): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    if (task.terminalSentAt) return false;
+    task.terminalSentAt = new Date().toISOString();
+    task.terminalStatus = "FAILED";
+    task.terminalBody = body;
+    task.status = "FAILED";
+    this.persist();
+    return true;
+  }
+
+  /**
    * Check if terminal has already been sent for a task (dedup query).
    */
   isTerminalSent(taskId: string): boolean {

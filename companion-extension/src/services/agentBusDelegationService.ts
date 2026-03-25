@@ -141,17 +141,12 @@ export class AgentBusDelegationService {
     const existingTask = this.tracker.getPendingForRepo(repoPath, taskId);
     if (existingTask) {
       this.outputChannel.appendLine(
-        `[companion] rejecting TASK ${taskId}: workspace ${repoPath} already busy with ${existingTask.taskId} (${existingTask.sessionId})`,
+        `[companion] preempting old TASK ${existingTask.taskId}: workspace ${repoPath} received new TASK ${taskId}. Terminating old session ${existingTask.sessionId}...`,
       );
-      await this.sendReplyFn({
-        taskId,
-        status: "BLOCKED",
-        body:
-          `Workspace ${repoPath} already has an active delegated task ` +
-          `${existingTask.taskId} in session ${existingTask.sessionId}. ` +
-          "Wait for it to reach terminal state before sending a different task.",
-      });
-      return;
+      // Terminate the old session explicitly
+      await this.sessionCtrl.terminateSession(existingTask.sessionId);
+      // Remove the old task from the tracker queue
+      this.tracker.abandon(existingTask.taskId, `Preempted by new task ${taskId}`);
     }
 
     const receiptPath = DelegationReceiptWatcher.receiptPath(

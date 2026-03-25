@@ -166,6 +166,36 @@ export class SessionController {
     }
   }
 
+  /**
+   * Terminate/delete an existing session.
+   */
+  async terminateSession(sessionId: string): Promise<boolean> {
+    const errors: string[] = [];
+
+    // Path 1: LS Bridge (headless task cancel)
+    if (this.sdk.ls.isReady) {
+      try {
+        console.log(`[session] Path 1: LS cancel cascade ${sessionId}...`);
+        await this.sdk.ls.cancelCascade(sessionId);
+      } catch (err: any) {
+        errors.push(`LS cancel: ${err.message}`);
+        console.warn(`[session] LS cancel failed: ${err.message}`);
+      }
+    }
+
+    // Path 2: Broadcast deletion
+    try {
+      console.log(`[session] Path 2: execute broadcastConversationDeletion ${sessionId}...`);
+      await vscode.commands.executeCommand("antigravity.broadcastConversationDeletion", sessionId);
+      return true;
+    } catch (err: any) {
+      errors.push(`Broadcast: ${err.message}`);
+      console.warn(`[session] Broadcast failed: ${err.message}`);
+    }
+
+    return false;
+  }
+
   private async resolveFreshSessionId(
     beforeIds: Set<string>,
     returnedId: string | null | undefined,
