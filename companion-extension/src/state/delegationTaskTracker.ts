@@ -32,6 +32,8 @@ export interface DelegationTask {
   sessionId: string;
   repoPath: string;
   receiptPath: string;
+  /** Original task body (prompt). Stored for session recovery on stuck tasks. */
+  taskBody?: string | null;
   status: DelegationTaskStatus;
   ackedAt: string;
   lastActivityAt?: string | null;
@@ -88,6 +90,7 @@ export class DelegationTaskTracker {
     }
     this.tasks.set(task.taskId, {
       ...task,
+      taskBody: task.taskBody ?? null,
       lastActivityAt: task.lastActivityAt ?? task.ackedAt,
       lastHeartbeatAt: task.lastHeartbeatAt ?? null,
       pendingTerminalStatus: task.pendingTerminalStatus ?? null,
@@ -434,6 +437,8 @@ function normalizeTask(value: unknown): DelegationTask | null {
     sessionId: entry.sessionId,
     repoPath: entry.repoPath,
     receiptPath: entry.receiptPath,
+    taskBody:
+      typeof entry.taskBody === "string" ? entry.taskBody : null,
     status: entry.status as DelegationTaskStatus,
     ackedAt: entry.ackedAt,
     lastActivityAt:

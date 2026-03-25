@@ -22,6 +22,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 import type { DelegationTaskTracker } from "../state/delegationTaskTracker";
+import type { SessionController } from "../sdk/sessionController";
 
 export interface DelegationReceipt {
   task_id: string;
@@ -36,6 +37,10 @@ export interface DelegationReceiptWatcherOptions {
   staleAfterMs?: number;
   outputChannel: { appendLine(message: string): void };
   sendTerminal: (taskId: string, status: string, body: string) => Promise<void>;
+  /** SessionController for stuck-session recovery. If omitted, recovery is disabled. */
+  sessionCtrl?: SessionController;
+  /** Maximum session recovery attempts per task before falling back to BLOCKED. Default: 2. */
+  recoveryMaxRetries?: number;
 }
 
 export class DelegationReceiptWatcher {
@@ -53,6 +58,9 @@ export class DelegationReceiptWatcher {
   private timer: ReturnType<typeof setInterval> | null = null;
   private _running = false;
   private readonly inFlightTerminalTaskIds = new Set<string>();
+  private readonly sessionCtrl: SessionController | null;
+  private readonly recoveryMaxRetries: number;
+  private readonly recoveryAttempts = new Map<string, number>();
 
   constructor(options: DelegationReceiptWatcherOptions) {
     this.tracker = options.tracker;
@@ -61,6 +69,8 @@ export class DelegationReceiptWatcher {
     this.staleAfterMs = Math.max(options.staleAfterMs ?? 0, 0);
     this.outputChannel = options.outputChannel;
     this.sendTerminal = options.sendTerminal;
+    this.sessionCtrl = options.sessionCtrl ?? null;
+    this.recoveryMaxRetries = Math.max(options.recoveryMaxRetries ?? 2, 0);
   }
 
   /** Start polling for receipt files. */
@@ -126,12 +136,15 @@ export class DelegationReceiptWatcher {
       try {
         if (!fs.existsSync(receiptPath)) {
           if (this.isTaskStale(task, nowMsProvider())) {
-            await this.prepareAndSendTerminal(
-              task.taskId,
-              "BLOCKED",
-              buildTimeoutBody(task.taskId, task.sessionId, task.lastActivityAt ?? task.ackedAt, this.staleAfterMs),
-              null, // no receipt file to clean up
-            );
+            const recovered = await this.trySessionRecovery(task);
+            if (!recovered) {
+              await this.prepareAndSendTerminal(
+                task.taskId,
+                "BLOCKED",
+                buildTimeoutBody(task.taskId, task.sessionId, task.lastActivityAt ?? task.ackedAt, this.staleAfterMs),
+                null, // no receipt file to clean up
+              );
+            }
           }
           continue;
         }
@@ -207,6 +220,59 @@ export class DelegationReceiptWatcher {
    */
   static defaultReceiptDir(): string {
     return path.join(require("os").tmpdir(), ".delegation_receipts");
+  }
+
+  /**
+   * Attempt to recover a stuck task by creating a new session and re-sending
+   * the original prompt. Returns true if recovery was initiated (task reopened
+   * with a fresh session), false if recovery is not possible or exhausted.
+   */
+  private async trySessionRecovery(
+    task: { taskId: string; sessionId: string; taskBody?: string | null; receiptPath: string },
+  ): Promise<boolean> {
+    if (!this.sessionCtrl || !task.taskBody) {
+      return false;
+    }
+    const attempts = this.recoveryAttempts.get(task.taskId) ?? 0;
+    if (attempts >= this.recoveryMaxRetries) {
+      this.outputChannel.appendLine(
+        `[companion] session-recovery: exhausted ${this.recoveryMaxRetries} retries for ${task.taskId}, falling back to BLOCKED.`,
+      );
+      return false;
+    }
+    this.recoveryAttempts.set(task.taskId, attempts + 1);
+    this.outputChannel.appendLine(
+      `[companion] session-recovery: attempt ${attempts + 1}/${this.recoveryMaxRetries} for ${task.taskId} (old session=${task.sessionId})`,
+    );
+
+    try {
+      const result = await this.sessionCtrl.createBackgroundSession(task.taskBody);
+      if (!result.ok || !result.session_id) {
+        this.outputChannel.appendLine(
+          `[companion] session-recovery: failed to create new session for ${task.taskId}: ${result.error ?? "unknown"}`,
+        );
+        return false;
+      }
+
+      // Reopen the task with the new session — resets stale timer and clears terminal fields
+      this.tracker.reopen(task.taskId, "RUNNING");
+      // Update session ID in tracker (reopen doesn't change it, so patch via register-like update)
+      const existing = this.tracker.get(task.taskId);
+      if (existing) {
+        existing.sessionId = result.session_id;
+        existing.receiptPath = DelegationReceiptWatcher.receiptPath(this.receiptDir, task.taskId);
+      }
+
+      this.outputChannel.appendLine(
+        `[companion] session-recovery: ${task.taskId} recovered → new session ${result.session_id}`,
+      );
+      return true;
+    } catch (err: any) {
+      this.outputChannel.appendLine(
+        `[companion] session-recovery: error for ${task.taskId}: ${err?.message ?? String(err)}`,
+      );
+      return false;
+    }
   }
 
   private isTaskStale(

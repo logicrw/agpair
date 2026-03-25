@@ -68,6 +68,7 @@ export class AgentBusDelegationService {
       outputChannel: this.outputChannel,
       sendTerminal: (taskId, status, body) =>
         this.sendReplyFn({ taskId, status: status as "EVIDENCE_PACK" | "BLOCKED" | "COMMITTED", body }),
+      sessionCtrl: this.sessionCtrl,
     });
 
     this.heartbeatService = new DelegationHeartbeatService({
@@ -189,6 +190,7 @@ export class AgentBusDelegationService {
       sessionId: result.session_id,
       repoPath,
       receiptPath,
+      taskBody: prompt,
       status: "ACKED",
       ackedAt: new Date().toISOString(),
       lastActivityAt: new Date().toISOString(),
