@@ -181,6 +181,14 @@ approve → poll 60s → committed → dispatch next task
 
 Do NOT rely on auto-clear as a shortcut to skip waiting for `committed`.
 
+## Reducing Antigravity errors
+
+Antigravity occasionally fails with "error unknown" when its AI backend is overloaded or the context is too large. These practices reduce failure rate:
+
+- **Keep tasks small.** Each task should touch 2–5 files. If a plan has 10+ files, split it into multiple sequential tasks. Smaller context = fewer API errors.
+- **Leave a gap between tasks.** After `committed`, wait a few seconds before dispatching the next task. Don't rapid-fire tasks back-to-back.
+- **Prefer retry over long continue chains.** If a task has gone through 3+ rounds of `continue`/`reject`, the conversation context is bloated. Use `agpair task retry` to start fresh with a clean session instead of another `continue`.
+
 ## Anti-patterns
 
 - Do not use `--wait` (default) — always pass `--no-wait` and poll instead.
