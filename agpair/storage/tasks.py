@@ -64,7 +64,11 @@ class TaskRepository:
             task_id,
             """
             UPDATE tasks
-            SET phase='acked', antigravity_session_id=?, last_activity_at=?, updated_at=?
+            SET phase='acked', antigravity_session_id=?,
+                stuck_reason=NULL, retry_recommended=0,
+                last_heartbeat_at=NULL,
+                last_workspace_activity_at=NULL,
+                last_activity_at=?, updated_at=?
             WHERE task_id=?
             """,
             (session_id, now, now, task_id),

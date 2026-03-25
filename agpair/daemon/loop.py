@@ -12,7 +12,7 @@ from agpair.models import utcnow_iso
 from agpair.storage.db import connect, ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.receipts import ReceiptRepository
-from agpair.storage.tasks import TaskNotFoundError, TaskRepository
+from agpair.storage.tasks import IllegalTransitionError, TaskNotFoundError, TaskRepository
 from agpair.transport.bus import AgentBusClient
 from agpair.transport import messages
 
@@ -175,7 +175,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 journal.append(task_id, "daemon", "committed", clean_body)
             else:
                 journal.append(task_id, "daemon", "receipt_ignored", f"{status}: {body}", "invalid")
-        except TaskNotFoundError:
+        except (TaskNotFoundError, IllegalTransitionError):
             continue
         count += 1
         touched_task_ids.add(task_id)
