@@ -66,8 +66,12 @@ export class AgentBusWatchService {
   private readonly requestedCommand: string;
   private readonly lockPath: string;
   private readonly inboxPath: string;
+  private static readonly RETRY_INTERVAL_MS = 5_000;
+  private static readonly MAX_RETRIES = 30; // give up after ~2.5 min
   private child: childProcess.ChildProcessByStdio<null, Readable, Readable> | null = null;
   private ownPid: number | null = null;
+  private retryTimer: ReturnType<typeof setInterval> | null = null;
+  private retryCount = 0;
   private stdoutBuffer = "";
   private stderrBuffer = "";
   private status: AgentBusWatchStatus;
@@ -118,6 +122,7 @@ export class AgentBusWatchService {
       this.outputChannel.appendLine(
         `[companion] agent-bus watch already owned by pid=${existing.pid}; skipping duplicate watcher.`,
       );
+      this.scheduleRetry();
       return false;
     }
 
@@ -187,6 +192,7 @@ export class AgentBusWatchService {
         this.child = null;
         this.ownPid = null;
         this.outputChannel.appendLine(`[companion] agent-bus watch exited (${detail}).`);
+        this.scheduleRetry();
       });
 
       this.status = {
@@ -215,7 +221,41 @@ export class AgentBusWatchService {
     }
   }
 
+  private scheduleRetry(): void {
+    if (this.retryTimer || !this.enabled) return;
+    this.retryTimer = setInterval(() => {
+      if (this.status.running) {
+        this.retryCount = 0;
+        this.clearRetryTimer();
+        return;
+      }
+      this.retryCount++;
+      if (this.retryCount > AgentBusWatchService.MAX_RETRIES) {
+        this.outputChannel.appendLine(
+          `[companion] agent-bus watch retry: giving up after ${AgentBusWatchService.MAX_RETRIES} attempts.`,
+        );
+        this.clearRetryTimer();
+        return;
+      }
+      this.outputChannel.appendLine(
+        `[companion] agent-bus watch retry ${this.retryCount}/${AgentBusWatchService.MAX_RETRIES}: attempting start...`,
+      );
+      if (this.start()) {
+        this.retryCount = 0;
+        this.clearRetryTimer();
+      }
+    }, AgentBusWatchService.RETRY_INTERVAL_MS);
+  }
+
+  private clearRetryTimer(): void {
+    if (this.retryTimer) {
+      clearInterval(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
   dispose(): void {
+    this.clearRetryTimer();
     if (this.child) {
       this.child.kill();
     } else {
