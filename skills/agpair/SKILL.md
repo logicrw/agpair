@@ -61,7 +61,7 @@ This prints the TASK_ID and returns immediately.
 agpair task status <TASK_ID>
 ```
 
-Poll every **60 seconds**. Do not poll more frequently — Antigravity tasks typically take minutes to hours. Terminal phases are:
+Poll every **60 seconds** using `run_in_background` so the agent can respond to the user or do other work while waiting. Do not poll more frequently — Antigravity tasks typically take 5–15 minutes for medium tasks, longer for large ones. Terminal phases are:
 
 | Phase | Meaning |
 |-------|---------|
