@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS receipts (
   created_at TEXT NOT NULL
 );
 
+-- NOTE: uq_receipts_task_delivery index on (task_id, delivery_id) is created
+-- by _migrate_schema() in db.py to support both fresh and migrated databases.
+
 CREATE TABLE IF NOT EXISTS journal (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id TEXT NOT NULL,
