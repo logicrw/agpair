@@ -225,7 +225,7 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
           });
           return;
         }
-        const validStatuses = ["EVIDENCE_PACK", "BLOCKED", "FAILED"];
+        const validStatuses = ["EVIDENCE_PACK", "BLOCKED", "COMMITTED", "FAILED"];
         if (!validStatuses.includes(body.status)) {
           sendJson(res, 400, {
             ok: false,
