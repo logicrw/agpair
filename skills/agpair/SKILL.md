@@ -74,7 +74,7 @@ Poll every **60 seconds**. Do not poll more frequently — Antigravity tasks typ
 **While polling:**
 
 - `acked` means accepted, NOT completed — keep polling patiently
-- Only escalate after **5 minutes** of `liveness_state: silent` (no heartbeat, no workspace activity). Before that, Antigravity may still be loading context or planning
+- Only escalate after **10 minutes** of `liveness_state: silent` (no heartbeat, no workspace activity). Before that, Antigravity may still be loading context, planning, or executing early steps
 - Report phase transitions to the user as they happen
 - Use `agpair task logs <TASK_ID> --limit 5` to check for progress details when escalating
 
