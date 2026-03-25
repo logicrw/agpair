@@ -195,6 +195,9 @@ export class AgentBusDelegationService {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     this.outputChannel.appendLine(

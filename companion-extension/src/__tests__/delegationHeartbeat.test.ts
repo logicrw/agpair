@@ -34,6 +34,9 @@ function registerPendingTask(
     terminalSentAt: null,
     terminalStatus: null,
     terminalBody: null,
+    pendingTerminalStatus: null,
+    pendingTerminalBody: null,
+    pendingTerminalPreparedAt: null,
   });
 }
 

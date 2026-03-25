@@ -5,12 +5,19 @@
  * Provides deduplication guard so the extension never sends duplicate terminal
  * status messages for the same delegated task.
  *
+ * Includes crash-safe two-phase terminal delivery:
+ *   - preparePendingTerminal(): durably record terminal result before send
+ *   - markPendingTerminalInflight(): mark that a send is about to start
+ *   - markPendingTerminalDelivered(): promote pending → delivered after success
+ *   - On restart with inflight marker set: assume delivered (crash-after-send)
+ *
  * This is separate from the bridge-first TaskSessionStore because delegation
  * tasks use agent-bus transport, not bridge /run_task.
  */
 
 import * as fs from "fs";
 import * as path from "path";
+import { randomBytes } from "crypto";
 
 export type DelegationTaskStatus =
   | "ACKED"
@@ -33,6 +40,31 @@ export interface DelegationTask {
   terminalSentAt: string | null;
   terminalStatus: string | null;
   terminalBody: string | null;
+  /**
+   * Pending terminal delivery fields.
+   * These are set when a terminal result is locally known but not yet
+   * successfully delivered via transport. Persisted to survive restarts.
+   */
+  pendingTerminalStatus: string | null;
+  pendingTerminalBody: string | null;
+  pendingTerminalPreparedAt: string | null;
+  /**
+   * Set immediately BEFORE calling sendTerminal() and cleared on send failure.
+   * If set on restart, the send was attempted (and likely succeeded) but
+   * markPendingTerminalDelivered never persisted. The retry path treats
+   * this as "already delivered" to prevent desktop-side duplicates.
+   */
+  pendingTerminalInflightAt?: string | null;
+  /**
+   * Stable delivery identity for this terminal cycle.
+   * Generated once in preparePendingTerminal(), reused for every retry and
+   * restart recovery of the SAME logical terminal result. Cleared on reopen()
+   * so the next terminal cycle gets a fresh id.
+   *
+   * Format: del_<24-hex-chars>  (e.g. del_a1b2c3d4e5f6a7b8c9d0e1f2)
+   * Uniqueness: (taskId, deliveryId) identifies a single logical terminal.
+   */
+  pendingTerminalDeliveryId?: string | null;
 }
 
 export class DelegationTaskTracker {
@@ -58,6 +90,11 @@ export class DelegationTaskTracker {
       ...task,
       lastActivityAt: task.lastActivityAt ?? task.ackedAt,
       lastHeartbeatAt: task.lastHeartbeatAt ?? null,
+      pendingTerminalStatus: task.pendingTerminalStatus ?? null,
+      pendingTerminalBody: task.pendingTerminalBody ?? null,
+      pendingTerminalPreparedAt: task.pendingTerminalPreparedAt ?? null,
+      pendingTerminalInflightAt: task.pendingTerminalInflightAt ?? null,
+      pendingTerminalDeliveryId: task.pendingTerminalDeliveryId ?? null,
     });
     this.persist();
     return true;
@@ -96,6 +133,11 @@ export class DelegationTaskTracker {
     task.terminalSentAt = null;
     task.terminalStatus = null;
     task.terminalBody = null;
+    task.pendingTerminalStatus = null;
+    task.pendingTerminalBody = null;
+    task.pendingTerminalPreparedAt = null;
+    task.pendingTerminalInflightAt = null;
+    task.pendingTerminalDeliveryId = null;
     this.persist();
     return true;
   }
@@ -149,6 +191,97 @@ export class DelegationTaskTracker {
   }
 
   /**
+   * Persist a terminal result as pending delivery before attempting transport send.
+   * This makes the terminal result durable — it survives restarts and receipt file deletion.
+   * Also generates a stable pendingTerminalDeliveryId for dedup on the desktop side.
+   * Returns false if a pending terminal or delivered terminal already exists (dedup).
+   */
+  preparePendingTerminal(
+    taskId: string,
+    status: string,
+    body: string,
+    at?: string,
+  ): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    if (task.terminalSentAt) return false; // already delivered
+    if (task.pendingTerminalStatus) return false; // already pending
+    task.pendingTerminalStatus = status;
+    task.pendingTerminalBody = body;
+    task.pendingTerminalPreparedAt = at ?? new Date().toISOString();
+    task.pendingTerminalDeliveryId = `del_${randomBytes(12).toString("hex")}`;
+    this.persist();
+    return true;
+  }
+
+  /**
+   * Mark a pending terminal delivery as successfully delivered.
+   * Moves the pending fields into the terminal-sent fields and clears pending.
+   * Returns false if there is no pending delivery or if already delivered.
+   */
+  markPendingTerminalDelivered(taskId: string, at?: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    if (task.terminalSentAt) return false; // already delivered
+    if (!task.pendingTerminalStatus) return false; // nothing pending
+    task.terminalSentAt = at ?? new Date().toISOString();
+    task.terminalStatus = task.pendingTerminalStatus;
+    task.terminalBody = task.pendingTerminalBody;
+    task.status = task.pendingTerminalStatus as DelegationTaskStatus;
+    task.pendingTerminalStatus = null;
+    task.pendingTerminalBody = null;
+    task.pendingTerminalPreparedAt = null;
+    task.pendingTerminalInflightAt = null;
+    task.pendingTerminalDeliveryId = null;
+    this.persist();
+    return true;
+  }
+
+  /**
+   * Mark that a send attempt is about to start for this pending terminal.
+   * Must be called BEFORE sendTerminal() and persisted synchronously.
+   * On restart, if this is set, we assume the send succeeded (crash-after-send
+   * recovery) and mark delivered without resending.
+   */
+  markPendingTerminalInflight(taskId: string, at?: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    if (task.terminalSentAt) return false;
+    if (!task.pendingTerminalStatus) return false;
+    task.pendingTerminalInflightAt = at ?? new Date().toISOString();
+    this.persist();
+    return true;
+  }
+
+  /**
+   * Clear the inflight marker after a send failure so the next poll can retry.
+   */
+  clearPendingTerminalInflight(taskId: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    task.pendingTerminalInflightAt = null;
+    this.persist();
+    return true;
+  }
+
+  /**
+   * Check if a task has a pending terminal delivery awaiting transport send.
+   */
+  hasPendingTerminalDelivery(taskId: string): boolean {
+    const task = this.tasks.get(taskId);
+    return (task?.pendingTerminalStatus != null) && (task?.terminalSentAt == null);
+  }
+
+  /**
+   * Get all tasks that have pending terminal deliveries (not yet transported).
+   */
+  getPendingTerminalDeliveries(): DelegationTask[] {
+    return this.getAll().filter(
+      (t) => t.pendingTerminalStatus != null && t.terminalSentAt == null,
+    );
+  }
+
+  /**
    * Get all tracked tasks.
    */
   getAll(): DelegationTask[] {
@@ -192,6 +325,7 @@ export class DelegationTaskTracker {
     total: number;
     pending: number;
     completed: number;
+    pendingTerminalDeliveries: number;
     tasks: Array<{
       taskId: string;
       status: DelegationTaskStatus;
@@ -200,14 +334,20 @@ export class DelegationTaskTracker {
       lastActivityAt: string;
       lastHeartbeatAt: string | null;
       terminalSentAt: string | null;
+      pendingTerminalStatus: string | null;
+      pendingTerminalPreparedAt: string | null;
+      pendingTerminalInflightAt: string | null;
+      pendingTerminalDeliveryId: string | null;
     }>;
   } {
     const all = this.getAll();
     const pending = all.filter((t) => t.terminalSentAt === null);
+    const pendingTerminalDeliveries = this.getPendingTerminalDeliveries();
     return {
       total: all.length,
       pending: pending.length,
       completed: all.length - pending.length,
+      pendingTerminalDeliveries: pendingTerminalDeliveries.length,
       tasks: all.map((t) => ({
         taskId: t.taskId,
         status: t.status,
@@ -216,6 +356,10 @@ export class DelegationTaskTracker {
         lastActivityAt: t.lastActivityAt ?? t.ackedAt,
         lastHeartbeatAt: t.lastHeartbeatAt ?? null,
         terminalSentAt: t.terminalSentAt,
+        pendingTerminalStatus: t.pendingTerminalStatus ?? null,
+        pendingTerminalPreparedAt: t.pendingTerminalPreparedAt ?? null,
+        pendingTerminalInflightAt: t.pendingTerminalInflightAt ?? null,
+        pendingTerminalDeliveryId: t.pendingTerminalDeliveryId ?? null,
       })),
     };
   }
@@ -302,5 +446,15 @@ function normalizeTask(value: unknown): DelegationTask | null {
       typeof entry.terminalStatus === "string" ? entry.terminalStatus : null,
     terminalBody:
       typeof entry.terminalBody === "string" ? entry.terminalBody : null,
+    pendingTerminalStatus:
+      typeof entry.pendingTerminalStatus === "string" ? entry.pendingTerminalStatus : null,
+    pendingTerminalBody:
+      typeof entry.pendingTerminalBody === "string" ? entry.pendingTerminalBody : null,
+    pendingTerminalPreparedAt:
+      typeof entry.pendingTerminalPreparedAt === "string" ? entry.pendingTerminalPreparedAt : null,
+    pendingTerminalInflightAt:
+      typeof entry.pendingTerminalInflightAt === "string" ? entry.pendingTerminalInflightAt : null,
+    pendingTerminalDeliveryId:
+      typeof entry.pendingTerminalDeliveryId === "string" ? entry.pendingTerminalDeliveryId : null,
   };
 }

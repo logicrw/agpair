@@ -51,6 +51,9 @@ describe("DelegationReceiptWatcher", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     // Write a valid receipt
@@ -110,6 +113,9 @@ describe("DelegationReceiptWatcher", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     fs.writeFileSync(
@@ -165,6 +171,9 @@ describe("DelegationReceiptWatcher", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     fs.writeFileSync(
@@ -213,6 +222,9 @@ describe("DelegationReceiptWatcher", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     // Wrong task_id in receipt
@@ -254,6 +266,9 @@ describe("DelegationReceiptWatcher", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     // Invalid status
@@ -295,6 +310,9 @@ describe("DelegationReceiptWatcher", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     fs.writeFileSync(
@@ -338,6 +356,9 @@ describe("DelegationReceiptWatcher", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     await watcher.poll(() => Date.parse("2026-01-01T00:00:05Z"));
@@ -368,6 +389,9 @@ describe("DelegationReceiptWatcher", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     fs.writeFileSync(
@@ -466,6 +490,9 @@ describe("DelegationReceiptWatcher", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     fs.writeFileSync(
@@ -520,6 +547,9 @@ describe("DelegationReceiptWatcher", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     fs.writeFileSync(
@@ -558,6 +588,9 @@ describe("DelegationTaskTracker", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
     assert.ok(ok);
     assert.equal(tracker.count(), 1);
@@ -580,6 +613,9 @@ describe("DelegationTaskTracker", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     const first = tracker.markTerminal("T2", "EVIDENCE_PACK", "done");
@@ -602,6 +638,9 @@ describe("DelegationTaskTracker", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
     tracker.register({
       taskId: "T4",
@@ -613,6 +652,9 @@ describe("DelegationTaskTracker", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
     tracker.markTerminal("T3", "EVIDENCE_PACK", "done");
 
@@ -635,6 +677,9 @@ describe("DelegationTaskTracker", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
     tracker.register({
       taskId: "T7",
@@ -646,6 +691,9 @@ describe("DelegationTaskTracker", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     const match = tracker.getPendingForRepo("/tmp/repo-a");
@@ -665,6 +713,9 @@ describe("DelegationTaskTracker", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     const dup = tracker.register({
@@ -677,6 +728,9 @@ describe("DelegationTaskTracker", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
     assert.equal(dup, false, "should reject duplicate in-flight task");
 
@@ -692,6 +746,9 @@ describe("DelegationTaskTracker", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
     assert.ok(ok, "should allow re-registration after terminal");
   });
@@ -712,6 +769,9 @@ describe("DelegationTaskTracker", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     const restored = new DelegationTaskTracker(statePath).get("T-PERSIST-1");
@@ -732,6 +792,9 @@ describe("DelegationTaskTracker", () => {
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
     });
 
     tracker.markTerminal("T-REOPEN-1", "EVIDENCE_PACK", "round one");
