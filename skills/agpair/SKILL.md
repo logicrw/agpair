@@ -1,6 +1,6 @@
 ---
 name: agpair
-description: "Delegate coding work to Antigravity through agpair CLI: dispatch a task, poll for completion, inspect doctor/daemon health, review logs, or send continue/approve/reject/retry. Triggers on: 'send to Antigravity', 'use agpair', 'dispatch task', 'delegate to Antigravity', '交给 Antigravity', '派任务'."
+description: "Use when the user wants to hand off implementation work to Antigravity — Google's agent-first IDE platform (desktop app, antigravity.google) that autonomously plans, edits, and verifies code changes across editor, terminal, and browser, then commits results directly to the local repo. Unlike autocomplete or chat tools, Antigravity treats agents as the primary actors: it can own entire tasks end-to-end with full environment access. Powered by Gemini with optional Claude support. Covers any request to delegate, outsource, or assign coding tasks to Antigravity, check on its progress, review what it produced, or send a follow-up action (continue, approve, reject, retry). Also applies when the user names Antigravity explicitly or implies 'let something else write this code'. IMPORTANT: Also invoke this skill proactively — without waiting for the user to ask — when you identify that the current task involves large-scale mechanical work (touching 5+ files, repetitive edits, boilerplate generation, schema migrations, bulk refactors) that can be precisely specified and safely delegated. Propose delegation to the user before proceeding."
 ---
 
 # agpair
@@ -54,6 +54,33 @@ agpair task start --repo-path <path> --body "<task body>" --no-wait
 ```
 
 This prints the TASK_ID and returns immediately.
+
+#### Standard task body template
+
+Every task body sent to Antigravity **must** begin with the following execution rules block. Adapt the language to match the project's working language (e.g. translate to Chinese if the codebase and team use Chinese), but keep all five rules intact:
+
+```
+## Execution Rules (highest priority)
+1. Wrap every shell command with timeout: timeout 15 <command>
+2. Syntax checks only via: timeout 10 python3 -m py_compile <file> — never use python3 -c "from app.xxx import ..."
+3. Do not import project modules, run integration tests, or start services
+4. If timeout fires (exit code 124), skip that step and continue — do not retry
+5. After all work is done, git commit directly — no external approval needed
+```
+
+**Why this matters:**
+- Rules 1–4 prevent shell commands from hanging indefinitely. `python3 -c "from app.xxx import ..."` can silently block when a module opens a database connection at import time. `py_compile` is pure syntax — no side effects, no IO.
+- Rule 5 makes Antigravity commit directly, so the task reaches `committed` without going through `evidence_ready`. This eliminates the risk of approve not being consumed after the session dies.
+
+**Task body shell escaping:** If the task body contains backticks or special characters, write it to a temp file and pass via `$(cat /tmp/task.txt)`:
+
+```bash
+cat > /tmp/task.txt << 'EOF'
+## Execution Rules (highest priority)
+...
+EOF
+agpair task start --repo-path <path> --no-wait --body "$(cat /tmp/task.txt)"
+```
 
 **Then poll in a loop** until a terminal phase is reached:
 
@@ -152,16 +179,21 @@ Antigravity has **built-in auto-recovery**: the `DelegationReceiptWatcher` detec
 
 This happens when Antigravity produced evidence but the session died before consuming semantic actions. Auto-recovery does NOT help here — the session that should process the approve is gone.
 
-1. **Commit locally** — the code is already in the working tree:
+**Prevention (preferred):** Use the standard task body template with Rule 5 ("commit directly — no external approval needed"). When Antigravity commits on its own, the phase goes directly to `committed` — `evidence_ready` is never reached and this failure mode cannot occur.
+
+**Recovery when it does happen:**
+
+1. **Check if work was already committed** — `git log --oneline -3`. If Antigravity committed before the session died, no action needed.
+2. **If not committed, commit locally** — the code is already in the working tree:
    ```bash
    git add <files>
    git commit -m "..."
    ```
-2. **Abandon the stuck task:**
+3. **Abandon the stuck task:**
    ```bash
    agpair task abandon <TASK_ID>
    ```
-3. **Dispatch the next task fresh** with `agpair task start --no-wait`. The companion extension will automatically terminate the old session and clear the lock for the new task — no manual window reload needed.
+4. **Dispatch the next task fresh** with `agpair task start --no-wait`. The companion extension will automatically terminate the old session and clear the lock for the new task — no manual window reload needed.
 
 ### Last resort: manual window reload
 
@@ -194,7 +226,10 @@ Antigravity occasionally fails with "error unknown" when its AI backend is overl
 - Do not use `--wait` (default) — always pass `--no-wait` and poll instead.
 - Do not treat `ACK` as proof of progress.
 - Do not stop polling before a terminal phase is reached.
-- Do not jump straight to `continue` because the user said "继续".
+- Do not jump straight to `continue` without checking current task status and logs first.
 - Do not hide `desktop_reader_conflict` or `repo_bridge_session_ready=false`.
 - Do not invent commands or transport paths outside the real `agpair` CLI.
 - Do not keep sending `approve`/`continue` to a dead session — abandon and reload instead.
+- Do not ask Antigravity to run integration tests, start services, or execute `python3 -c "from app.xxx import ..."` — these can block indefinitely if a module opens a DB connection at import time. Use `py_compile` for syntax checks only.
+- Do not send task body with unescaped backticks in shell — write body to a temp file and use `$(cat /tmp/task.txt)` instead.
+- Do not omit the standard execution rules block from task body — always prepend it to prevent hangs and ensure direct commit.
