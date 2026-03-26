@@ -1,6 +1,6 @@
 ---
 name: agpair
-description: "Use when the user wants to hand off implementation work to Antigravity — Google's agent-first IDE platform (desktop app, antigravity.google) that autonomously plans, edits, and verifies code changes across editor, terminal, and browser, then commits results directly to the local repo. Unlike autocomplete or chat tools, Antigravity treats agents as the primary actors: it can own entire tasks end-to-end with full environment access. Powered by Gemini with optional Claude support. Covers any request to delegate, outsource, or assign coding tasks to Antigravity, check on its progress, review what it produced, or send a follow-up action (continue, approve, reject, retry). Also applies when the user names Antigravity explicitly or implies 'let something else write this code'. IMPORTANT: Also invoke this skill proactively — without waiting for the user to ask — when you identify that the current task involves large-scale mechanical work (touching 5+ files, repetitive edits, boilerplate generation, schema migrations, bulk refactors) that can be precisely specified and safely delegated. Propose delegation to the user before proceeding."
+description: "Use when the user wants to hand off implementation work to Antigravity — Google's agent-first IDE platform (desktop app, antigravity.google) that autonomously plans, edits, and verifies code changes across editor, terminal, and browser, then commits results directly to the local repo. Unlike autocomplete or chat tools, Antigravity treats agents as the primary actors: it can own entire tasks end-to-end with full environment access. Powered by Gemini with optional Claude support. Covers any request to delegate, outsource, or assign coding tasks to Antigravity, check on its progress, review what it produced, or send a follow-up action (continue, approve, reject, retry). Also applies when the user names Antigravity explicitly or implies 'let something else write this code'. IMPORTANT: Also invoke this skill proactively — without waiting for the user to ask — when you identify that the current task involves mechanical work that requires consistent edits across multiple files, or involves boilerplate generation, schema migrations, or bulk refactors that can be precisely specified. Dispatch to Antigravity immediately; announce the task body to the user at dispatch time — no approval needed, just transparency."
 ---
 
 # agpair
@@ -14,7 +14,7 @@ Use this skill when your AI coding agent is the reviewer/controller and Antigrav
 - preflight health checks
 - task dispatch
 - terminal-phase polling
-- evidence review
+- evidence review (exceptional path — rare when using Rule 5)
 - semantic follow-up (`continue`, `approve`, `reject`, `retry`)
 
 It is not a second orchestrator and it is not the semantic decision-maker.
@@ -26,10 +26,17 @@ This skill is intended to trigger when the user asks their AI agent to:
 - send or delegate work to Antigravity
 - use `agpair`
 - inspect `doctor`, `daemon`, `task status`, or `task logs`
-- review an `EVIDENCE_PACK`
 - approve, reject, continue, or retry a delegated task
 
 For the strongest activation, the user can explicitly say `use agpair` or `send this to Antigravity via agpair`.
+
+**Proactive trigger (agent-initiated, no user prompt needed):** When the agent assesses that the current task is mechanical, well-specified, and requires consistent edits across multiple files — dispatch directly without asking. Announce the task body to the user immediately before running the dispatch command.
+
+**Do NOT dispatch proactively when:**
+- The task requires interactive decisions or user input mid-way
+- The change is trivial (1 file, 1–2 lines)
+- The task description is ambiguous and needs exploration before it can be specified
+- The agent hasn't read enough of the codebase to write a precise task body
 
 ## Workflow
 
@@ -62,14 +69,18 @@ Every task body sent to Antigravity **must** begin with the following execution 
 ```
 ## Execution Rules (highest priority)
 1. Wrap every shell command with timeout: timeout 15 <command>
-2. Syntax checks only via: timeout 10 python3 -m py_compile <file> — never use python3 -c "from app.xxx import ..."
-3. Do not import project modules, run integration tests, or start services
+2. Syntax checks only — never import project modules or start services:
+   Python:  timeout 10 python3 -m py_compile <file>
+   Node.js: timeout 10 node --check <file>
+   Go:      timeout 10 go vet ./...
+   Other:   skip syntax checks entirely — do not improvise
+3. Do not run integration tests or start services
 4. If timeout fires (exit code 124), skip that step and continue — do not retry
 5. After all work is done, git commit directly — no external approval needed
 ```
 
 **Why this matters:**
-- Rules 1–4 prevent shell commands from hanging indefinitely. `python3 -c "from app.xxx import ..."` can silently block when a module opens a database connection at import time. `py_compile` is pure syntax — no side effects, no IO.
+- Rules 1–4 prevent shell commands from hanging indefinitely. `python3 -c "from app.xxx import ..."` can silently block when a module opens a database connection at import time. Language-specific syntax checkers are pure static analysis — no side effects, no IO.
 - Rule 5 makes Antigravity commit directly, so the task reaches `committed` without going through `evidence_ready`. This eliminates the risk of approve not being consumed after the session dies.
 
 **Task body shell escaping:** If the task body contains backticks or special characters, write it to a temp file and pass via `$(cat /tmp/task.txt)`:
@@ -88,37 +99,47 @@ agpair task start --repo-path <path> --no-wait --body "$(cat /tmp/task.txt)"
 agpair task status <TASK_ID>
 ```
 
-Poll every **exactly 60 seconds** using `run_in_background` so the agent can respond to the user or do other work while waiting. Use a fixed 60-second interval — do NOT increase the interval over time (no exponential backoff, no adaptive delays). Antigravity tasks typically take 5–15 minutes for medium tasks, longer for large ones. Terminal phases are:
+Poll every **exactly 60 seconds**. Use a fixed interval — do NOT increase it over time (no exponential backoff). Antigravity tasks typically take 5–15 minutes for medium tasks, longer for large ones.
 
-| Phase | Meaning |
-|-------|---------|
-| `evidence_ready` | Antigravity produced an evidence pack — review it |
-| `committed` | Work committed successfully |
-| `blocked` | Antigravity could not proceed |
-| `stuck` | Daemon watchdog flagged the task as stale |
-| `abandoned` | Task was abandoned |
+**How to poll without blocking:** Each poll is a single Bash call. After getting a non-terminal result, wait 60 seconds and issue another poll call. Repeat until a terminal phase appears — do not stop early.
+
+Two patterns work:
+- `sleep 60 && agpair task status <TASK_ID>` — blocks for 60 s then prints status; issue another call after reading the output
+- `agpair task status <TASK_ID>` with `run_in_background: true` — returns immediately; you are notified when it completes; issue the next poll after being notified
+
+Never use `--wait` (see below). Terminal phases are:
+
+| Phase | Meaning | Action |
+|-------|---------|--------|
+| `evidence_ready` | Antigravity produced an evidence pack | Review it (see §3) |
+| `committed` | Work committed successfully | Verify with `git log --oneline -3`, announce completion to user |
+| `blocked` | Antigravity could not proceed | Run `agpair task retry <TASK_ID> --no-wait` and resume polling |
+| `stuck` | Daemon watchdog flagged the task as stale | Wait for auto-recovery; if it transitions to `blocked`, retry |
+| `abandoned` | Task was abandoned | Start a fresh task with `agpair task start --no-wait` if work still needed |
 
 **While polling:**
 
 - `acked` means accepted, NOT completed — keep polling patiently
 - **Never stop polling before a terminal phase.** Even if the task looks stuck, keep polling every 60 seconds.
-- After **10 minutes** of `liveness_state: silent` (no heartbeat, no workspace activity): check logs with `agpair task logs <TASK_ID> --limit 5`, briefly inform the user of the situation, then **continue polling**. Do NOT stop and wait for user input. Antigravity may still be loading context, planning, or executing early steps.
+- After **10 minutes** of `liveness_state: silent` (no heartbeat, no workspace activity): check logs with `agpair task logs <TASK_ID> --limit 5` (quick sanity check — not a full evidence review), briefly inform the user of the situation, then **continue polling**. Do NOT stop and wait for user input. Antigravity may still be loading context, planning, or executing early steps.
 - If `retry_recommended=true` appears in task status (set by daemon after ~15 min), run `agpair task retry <TASK_ID> --no-wait` and resume polling the new attempt.
 - Report phase transitions to the user as they happen
 
 **Why not `--wait`?** The built-in `--wait` blocks for up to 60 minutes, but AI agent Bash tools typically have a 2-minute timeout. The command gets killed and the waiter becomes orphaned. Polling keeps the agent in control.
 
-### 3. Review evidence when `evidence_ready`
+### 3. Review evidence when `evidence_ready` (fallback path)
+
+**This phase should rarely occur** when using the standard task body template with Rule 5 (direct commit). If you see `evidence_ready`, it means the task was dispatched without Rule 5, or Rule 5 was ignored.
 
 When phase becomes `evidence_ready`:
 
-1. **Read the evidence pack**: `agpair task logs <TASK_ID> --limit 50`
+1. **Read the evidence pack**: `agpair task logs <TASK_ID> --limit 50` (use `--limit 50` here — this is a full evidence review, not a quick sanity check)
 2. **Check what was changed**: look for diff stat, key files, test results in the logs
 3. **Spot-check the code**: read 2-3 key files from the working tree to verify quality
 4. **Decide**:
    - `approve` — evidence is solid, tests pass, code looks good
-   - `reject` — specific issues need fixing in the same session
-   - `continue` — need Antigravity to do more work (e.g. add tests, fix a bug)
+   - `reject` — output is not acceptable and needs to be redone in the same session (use when the current output should be discarded or substantially revised)
+   - `continue` — output is acceptable as far as it goes, but additional work is needed in the same session (e.g. add tests, implement a missing piece)
 
 Do not choose a semantic action until you have read both status and logs.
 
@@ -128,22 +149,24 @@ If `agpair task active-waits` shows the task, or `task status` shows `waiter_sta
 
 - do not send another semantic action on the same task
 - do not abandon/retry the task
-- only use `--force` if the waiter is clearly orphaned
+- only use `agpair task abandon --force <TASK_ID>` if the waiter is clearly orphaned (e.g. approve was sent several minutes ago and the session is confirmed dead)
 
 ### 5. Pick one semantic action
 
 Choose exactly one:
 
-- `continue` for same-session follow-up
-- `approve` when evidence is good enough for finalization
-- `reject` when work must continue in the same session
-- `retry` only when the session is stale or not worth continuing
+- `continue` — current output is **acceptable** but **incomplete**: Antigravity should keep going in the same session (e.g. add tests, implement a missing piece)
+- `approve` — output is solid and ready to finalize; triggers commit
+- `reject` — current output is **not acceptable** and needs to be substantially redone or discarded in the same session
+- `retry` — session is stale or has too much accumulated context; start fresh with a clean session
 
 All semantic commands also default to `--wait`. **Use `--no-wait` and poll** for these too:
 
 ```bash
 agpair task continue <TASK_ID> --body "<feedback>" --no-wait
-agpair task approve <TASK_ID> --body "<message>" --no-wait
+agpair task approve  <TASK_ID> --body "<message>"  --no-wait
+agpair task reject   <TASK_ID> --body "<feedback>" --no-wait
+agpair task retry    <TASK_ID> --no-wait
 ```
 
 **What to write in `--body`:**
@@ -162,7 +185,7 @@ Before claiming completion:
 
 - health was checked
 - current task status was checked
-- latest logs were checked
+- latest logs were checked (or `git log --oneline -3` if phase reached `committed`)
 - polling continued until a terminal phase was observed
 - no same-task semantic action was sent while an active waiter existed
 
@@ -193,7 +216,7 @@ This happens when Antigravity produced evidence but the session died before cons
    ```bash
    agpair task abandon <TASK_ID>
    ```
-4. **Dispatch the next task fresh** with `agpair task start --no-wait`. The companion extension will automatically terminate the old session and clear the lock for the new task — no manual window reload needed.
+4. **Proceed to the next planned task** — dispatch it with `agpair task start --no-wait`. (This is the next task in your work sequence, not a retry of the current one.) The companion extension will automatically terminate the old session and clear the lock — no manual window reload needed.
 
 ### Last resort: manual window reload
 
@@ -218,7 +241,7 @@ Do NOT rely on auto-clear as a shortcut to skip waiting for `committed`.
 Antigravity occasionally fails with "error unknown" when its AI backend is overloaded or the context is too large. These practices reduce failure rate:
 
 - **Keep tasks small.** Each task should touch 2–5 files. If a plan has 10+ files, split it into multiple sequential tasks. Smaller context = fewer API errors.
-- **Leave a gap between tasks.** After `committed`, wait a few seconds before dispatching the next task. Don't rapid-fire tasks back-to-back.
+- **Leave a gap between tasks.** After `committed`, wait 5–10 seconds before dispatching the next task. Don't rapid-fire tasks back-to-back.
 - **Prefer retry over long continue chains.** If a task has gone through 3+ rounds of `continue`/`reject`, the conversation context is bloated. Use `agpair task retry` to start fresh with a clean session instead of another `continue`.
 
 ## Anti-patterns
@@ -230,6 +253,7 @@ Antigravity occasionally fails with "error unknown" when its AI backend is overl
 - Do not hide `desktop_reader_conflict` or `repo_bridge_session_ready=false`.
 - Do not invent commands or transport paths outside the real `agpair` CLI.
 - Do not keep sending `approve`/`continue` to a dead session — abandon and reload instead.
-- Do not ask Antigravity to run integration tests, start services, or execute `python3 -c "from app.xxx import ..."` — these can block indefinitely if a module opens a DB connection at import time. Use `py_compile` for syntax checks only.
+- Do not ask Antigravity to run integration tests, start services, or import project modules (e.g. `python3 -c "from app.xxx import ..."`) — these can block indefinitely. For syntax checks use only the language-specific static checkers in Rule 2 (`py_compile`, `node --check`, `go vet`); for other languages skip syntax checks entirely.
 - Do not send task body with unescaped backticks in shell — write body to a temp file and use `$(cat /tmp/task.txt)` instead.
 - Do not omit the standard execution rules block from task body — always prepend it to prevent hangs and ensure direct commit.
+- Do not dispatch proactively when the task requires interactive decisions, is trivial (1 file, 1–2 lines), or cannot yet be fully specified without further exploration.
