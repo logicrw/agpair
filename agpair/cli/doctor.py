@@ -228,6 +228,12 @@ def _build_repo_bridge_report(repo_path: Path) -> dict:
         "repo_bridge_agent_bus_watch_running": None,
         "repo_bridge_agent_bus_delegation_enabled": None,
         "repo_bridge_receipt_watcher_running": None,
+        "repo_bridge_pending_task_count": None,
+        "repo_bridge_pending_task_ids": None,
+        "repo_bridge_concurrency_policy": {
+            "same_worktree_parallel_safe": False,
+            "safe_isolation_boundary": "different repo or different git worktree",
+        },
         "repo_bridge_session_ready": False,
         "repo_bridge_warning": None,
         "repo_bridge_version": None,
@@ -268,9 +274,26 @@ def _build_repo_bridge_report(repo_path: Path) -> dict:
     workspace_paths = [str(value) for value in workspace_paths if isinstance(value, str)]
     delegation_status = payload.get("delegation_auto_return")
     receipt_watcher_running = None
+    pending_task_count = None
+    pending_task_ids = None
+
     if isinstance(delegation_status, dict):
         raw = delegation_status.get("receipt_watcher_running")
         receipt_watcher_running = bool(raw) if isinstance(raw, bool) else None
+        
+        summary = delegation_status.get("tracker_summary")
+        if isinstance(summary, dict):
+            raw_pending = summary.get("pending")
+            if isinstance(raw_pending, int):
+                pending_task_count = raw_pending
+            
+            tasks = summary.get("tasks")
+            if isinstance(tasks, list):
+                pending_task_ids = [
+                    str(t.get("taskId"))
+                    for t in tasks
+                    if isinstance(t, dict) and t.get("terminalSentAt") is None and "taskId" in t
+                ]
 
     sdk_initialized = bool(payload.get("sdk_initialized"))
     ls_ready = bool(payload.get("ls_bridge_ready"))
@@ -350,6 +373,8 @@ def _build_repo_bridge_report(repo_path: Path) -> dict:
             "repo_bridge_agent_bus_watch_running": agent_bus_watch_running,
             "repo_bridge_agent_bus_delegation_enabled": agent_bus_delegation_enabled,
             "repo_bridge_receipt_watcher_running": receipt_watcher_running,
+            "repo_bridge_pending_task_count": pending_task_count,
+            "repo_bridge_pending_task_ids": pending_task_ids,
             "repo_bridge_session_ready": not warning_reasons,
             "repo_bridge_warning": "; ".join(warning_reasons) or None,
             "repo_bridge_version": running_extension_version,

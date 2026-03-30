@@ -801,3 +801,47 @@ def test_doctor_does_not_leak_token_in_report(
     # Auth posture is still reported
     assert payload["repo_bridge_auth_mode"] == "generated"
     assert payload["repo_bridge_mutating_auth_required"] is True
+
+
+def test_doctor_reports_pending_tasks_and_concurrency_policy(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    _clear_disk_cache(tmp_path)
+    repo_path = tmp_path / "repo"
+    marker_dir = repo_path / ".supervisor"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+
+    with run_health_server(
+        {
+            "ok": True,
+            "sdk_initialized": True,
+            "ls_bridge_ready": True,
+            "monitor_running": True,
+            "workspace_paths": [str(repo_path)],
+            "version": "0.1.12",
+            "delegation_auto_return": {
+                "tracker_summary": {
+                    "pending": 2,
+                    "tasks": [
+                        {"taskId": "T-1", "terminalSentAt": None},
+                        {"taskId": "T-2", "terminalSentAt": "2026-03-21T10:00:00Z"},
+                        {"taskId": "T-3", "terminalSentAt": None},
+                    ]
+                }
+            }
+        }
+    ) as port:
+        (marker_dir / "bridge_port").write_text(str(port), encoding="utf-8")
+        result = CliRunner().invoke(app, ["doctor", "--repo-path", str(repo_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    
+    assert payload["repo_bridge_pending_task_count"] == 2
+    assert payload["repo_bridge_pending_task_ids"] == ["T-1", "T-3"]
+    
+    policy = payload["repo_bridge_concurrency_policy"]
+    assert policy["same_worktree_parallel_safe"] is False
+    assert policy["safe_isolation_boundary"] == "different repo or different git worktree"

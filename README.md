@@ -178,6 +178,10 @@ This is a **single self-contained repo**. No external checkout is needed.
 
 ## Important Operating Notes
 
+### Concurrency rule (one task per worktree)
+
+Same-repo, same-worktree concurrent editing is not supported. You must limit execution to **one active delegated task per repo worktree**. For parallel work, use a separate `git worktree` or clone a separate repo. `agpair doctor` now explicitly exposes this policy and shows the current pending task count and IDs so tooling can isolate tasks correctly.
+
 ### Desktop receipt exclusivity
 
 agpair consumes `code -> desktop` receipts. If another desktop-side watcher is already claiming the same receipts, `agpair doctor` will report `desktop_reader_conflict=true` and the daemon will refuse to start. Stop the other watcher first.
