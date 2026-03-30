@@ -288,7 +288,14 @@ def test_task_wait_json_returns_structured_terminal_payload(tmp_path: Path, monk
                 "review_round": 0,
                 "status": "COMMITTED",
                 "summary": "Committed cleanly",
-                "payload": {"commit_sha": "abc1234"},
+                "payload": {
+                    "commit_sha": "abc1234",
+                    "branch": "main",
+                    "diff_stat": "1 file changed",
+                    "changed_files": ["companion-extension/src/services/taskExecutionService.ts"],
+                    "validation": ["npm test"],
+                    "residual_risks": ["none"],
+                },
             }
         ),
     )
@@ -307,6 +314,46 @@ def test_task_wait_json_returns_structured_terminal_payload(tmp_path: Path, monk
     assert payload["task"]["phase"] == "committed"
     assert payload["task"]["terminal_receipt"]["summary"] == "Committed cleanly"
     assert payload["task"]["terminal_receipt"]["payload"]["commit_sha"] == "abc1234"
+    assert payload["committed_result"]["commit_sha"] == "abc1234"
+    assert payload["committed_result"]["changed_files"] == ["companion-extension/src/services/taskExecutionService.ts"]
+    assert payload["committed_result"]["validation"] == ["npm test"]
+
+
+def test_task_wait_json_normalizes_committed_result_list_fields(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WJ2", repo_path="/r")
+    repo.mark_acked(task_id="T-WJ2", session_id="session-json-wait-2")
+    repo.mark_committed(task_id="T-WJ2")
+    JournalRepository(_make_paths(tmp_path).db_path).append(
+        "T-WJ2",
+        "daemon",
+        "committed",
+        json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "T-WJ2",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "COMMITTED",
+                "summary": "Committed cleanly",
+                "payload": {
+                    "commit_sha": "abc1234",
+                    "changed_files": "companion-extension/src/services/taskExecutionService.ts",
+                    "validation": "npm test",
+                    "residual_risks": "none",
+                },
+            }
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["task", "wait", "T-WJ2", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["committed_result"]["changed_files"] == ["companion-extension/src/services/taskExecutionService.ts"]
+    assert payload["committed_result"]["validation"] == ["npm test"]
+    assert payload["committed_result"]["residual_risks"] == ["none"]
 
 
 def test_task_wait_json_returns_not_found_error(tmp_path: Path, monkeypatch):

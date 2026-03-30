@@ -21,6 +21,7 @@ class StructuredTerminalReceipt:
 
 
 _VALID_STATUSES = frozenset({"EVIDENCE_PACK", "BLOCKED", "COMMITTED"})
+_LISTISH_COMMITTED_FIELDS = frozenset({"changed_files", "validation", "residual_risks"})
 
 
 def parse_structured_terminal_receipt(
@@ -82,6 +83,22 @@ def structured_receipt_to_dict(receipt: StructuredTerminalReceipt) -> dict[str, 
     return payload
 
 
+def committed_result_from_receipt(receipt: StructuredTerminalReceipt) -> dict[str, Any] | None:
+    if receipt.status != "COMMITTED":
+        return None
+    normalized_payload: dict[str, Any] = {}
+    for key, value in receipt.payload.items():
+        if key in _LISTISH_COMMITTED_FIELDS:
+            normalized_payload[key] = _normalize_listish_field(value)
+            continue
+        normalized_payload[key] = value
+    return {
+        "schema_version": receipt.schema_version,
+        "summary": receipt.summary,
+        **normalized_payload,
+    }
+
+
 def blocked_reason_from_receipt(receipt: StructuredTerminalReceipt, fallback: str) -> str:
     summary = receipt.summary.strip()
     if summary:
@@ -90,3 +107,19 @@ def blocked_reason_from_receipt(receipt: StructuredTerminalReceipt, fallback: st
     if isinstance(message, str) and message.strip():
         return message.strip()
     return fallback
+
+
+def _normalize_listish_field(value: Any) -> list[str]:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    if isinstance(value, list):
+        normalized: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            stripped = item.strip()
+            if stripped:
+                normalized.append(stripped)
+        return normalized
+    return []

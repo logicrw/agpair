@@ -181,6 +181,7 @@ describe("Heartbeat integration scenarios", () => {
   it("TASK handoff uses the stable interactive session creation fallback path", async () => {
     const tracker = new DelegationTaskTracker();
     let capturedOptions: unknown = null;
+    let capturedPrompt = "";
 
     const service = new AgentBusDelegationService({
       enabled: true,
@@ -188,7 +189,8 @@ describe("Heartbeat integration scenarios", () => {
       workspacePathsProvider: () => ["/tmp/repo-strict"],
       outputChannel: { appendLine: () => undefined },
       sessionCtrl: {
-        async createBackgroundSession(_prompt: string, options?: unknown) {
+        async createBackgroundSession(prompt: string, options?: unknown) {
+          capturedPrompt = prompt;
           capturedOptions = options ?? null;
           return { ok: true, session_id: "sess-strict-1" };
         },
@@ -211,6 +213,10 @@ describe("Heartbeat integration scenarios", () => {
       allowInteractiveFallback: true,
       contextLabel: "delegated task TASK-STRICT",
     });
+    assert.match(capturedPrompt, /"schema_version": "1"/);
+    assert.match(capturedPrompt, /"payload"/);
+    assert.match(capturedPrompt, /"changed_files"/);
+    assert.match(capturedPrompt, /"validation"/);
 
     service.dispose();
   });
@@ -568,6 +574,46 @@ describe("Heartbeat integration scenarios", () => {
       allowPanelFallback: false,
       contextLabel: "delegated task TASK-REVIEW-STRICT (REVIEW)",
     });
+
+    service.dispose();
+  });
+
+  it("APPROVED prompt asks for structured COMMITTED payload", async () => {
+    const tracker = new DelegationTaskTracker();
+    let capturedPrompt = "";
+
+    registerPendingTask(tracker, "TASK-APPROVED-STRUCT");
+
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async createBackgroundSession() {
+          throw new Error("should not be called");
+        },
+        async sendPrompt(_sessionId: string, prompt: string) {
+          capturedPrompt = prompt;
+          return { ok: true };
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      receiptPollIntervalMs: 60000,
+      heartbeatIntervalMs: 60000,
+      sendReply: async () => undefined,
+    });
+
+    await service.handleMessages([
+      { id: 700, task_id: "TASK-APPROVED-STRUCT", status: "APPROVED", body: "Commit it." },
+    ]);
+
+    assert.match(capturedPrompt, /"schema_version": "1"/);
+    assert.match(capturedPrompt, /"status": "COMMITTED"/);
+    assert.match(capturedPrompt, /"commit_sha"/);
+    assert.match(capturedPrompt, /"changed_files"/);
+    assert.match(capturedPrompt, /"residual_risks"/);
 
     service.dispose();
   });

@@ -10,10 +10,12 @@ describe("TaskExecutionService automation fallback policy", () => {
     const sessionStore = new TaskSessionStore();
     const eventStore = new PendingEventStore();
     let capturedOptions: unknown = null;
+    let capturedPrompt = "";
 
     const service = new TaskExecutionService(
       {
-        async createBackgroundSession(_prompt: string, options?: unknown) {
+        async createBackgroundSession(prompt: string, options?: unknown) {
+          capturedPrompt = prompt;
           capturedOptions = options ?? null;
           return { ok: true, session_id: "sess-run-1" };
         },
@@ -35,6 +37,10 @@ describe("TaskExecutionService automation fallback policy", () => {
       allowInteractiveFallback: true,
       contextLabel: "task TASK-RUN-STRICT",
     });
+    assert.match(capturedPrompt, /"schema_version": "1"/);
+    assert.match(capturedPrompt, /"changed_files": \["\.\.\."\]/);
+    assert.match(capturedPrompt, /"validation": \["\.\.\."\]/);
+    assert.match(capturedPrompt, /"residual_risks": \["\.\.\."\]/);
   });
 
   it("continueTask forbids prompt-panel fallback", async () => {

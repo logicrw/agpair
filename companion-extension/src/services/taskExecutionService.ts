@@ -485,9 +485,9 @@ export class TaskExecutionService {
 
     const payloadInstructions = [
       `The "payload" field MUST be a JSON object containing status-specific data:`,
-      ` - For COMMITTED: {"commit_sha": "...", "branch": "...", "diff_stat": "...", "changed_files": ["..."], "validation": "...", "residual_risks": "..."}`,
+      ` - For COMMITTED: {"commit_sha": "...", "branch": "...", "diff_stat": "...", "changed_files": ["..."], "validation": ["..."], "residual_risks": ["..."]}`,
       ` - For BLOCKED: {"blocker_type": "...", "message": "...", "recoverable": true|false, "suggested_action": "...", "last_error_excerpt": "..."}`,
-      ` - For EVIDENCE_PACK: {"diff_stat": "...", "changed_files": ["..."], "validation": "...", "residual_risks": "..."}`
+      ` - For EVIDENCE_PACK: {"diff_stat": "...", "changed_files": ["..."], "validation": ["..."], "residual_risks": ["..."]}`
     ].join("\n");
 
     return prompt +

@@ -22,7 +22,11 @@ from agpair.cli.wait import (
 )
 from agpair.config import AppPaths
 from agpair.runtime_liveness import LivenessState, classify_liveness, is_task_live
-from agpair.terminal_receipts import parse_structured_terminal_receipt, structured_receipt_to_dict
+from agpair.terminal_receipts import (
+    committed_result_from_receipt,
+    parse_structured_terminal_receipt,
+    structured_receipt_to_dict,
+)
 from agpair.storage.db import ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskNotFoundError, TaskRepository
@@ -71,6 +75,15 @@ def _structured_receipt_payload(body: str) -> dict | None:
     return structured_receipt_to_dict(receipt)
 
 
+def _committed_result_payload(receipt_payload: dict | None) -> dict | None:
+    if receipt_payload is None:
+        return None
+    receipt = parse_structured_terminal_receipt(json.dumps(receipt_payload, ensure_ascii=False))
+    if receipt is None:
+        return None
+    return committed_result_from_receipt(receipt)
+
+
 def _latest_terminal_receipt(paths: AppPaths, task_id: str) -> dict | None:
     journal = JournalRepository(paths.db_path)
     for row in journal.tail(task_id, limit=20):
@@ -87,6 +100,7 @@ def _task_payload(paths: AppPaths, task) -> dict:
     waiters = WaiterRepository(paths.db_path)
     waiter = waiters.get_active_waiter(task.task_id)
     terminal_receipt = _latest_terminal_receipt(paths, task.task_id) if task.phase in TERMINAL_PHASES else None
+    committed_result = _committed_result_payload(terminal_receipt)
     return {
         "task_id": task.task_id,
         "phase": task.phase,
@@ -101,6 +115,7 @@ def _task_payload(paths: AppPaths, task) -> dict:
         "liveness_state": liveness.value if liveness is not None else None,
         "waiter": _waiter_payload(waiter),
         "terminal_receipt": terminal_receipt,
+        "committed_result": committed_result,
     }
 
 
@@ -334,6 +349,12 @@ def task_status(
             "terminal_receipt_payload: "
             + json.dumps(terminal_receipt["payload"], ensure_ascii=False, sort_keys=True)
         )
+    committed_result = payload["committed_result"]
+    if committed_result is not None:
+        typer.echo(
+            "committed_result: "
+            + json.dumps(committed_result, ensure_ascii=False, sort_keys=True)
+        )
     waiter = payload["waiter"]
     if waiter:
         typer.echo(f"waiter_state: {waiter['state']}")
@@ -510,6 +531,7 @@ def wait_task(
     code = exit_code_for_dispatch(result)
     current_task = tasks.get_task(task_id)
     if json_output:
+        task_payload = _task_payload(paths, current_task) if current_task is not None else None
         _emit_json(
             {
                 "ok": code == 0,
@@ -518,7 +540,8 @@ def wait_task(
                 "timed_out": result.timed_out,
                 "watchdog_triggered": result.watchdog_triggered,
                 "exit_code": code,
-                "task": _task_payload(paths, current_task) if current_task is not None else None,
+                "task": task_payload,
+                "committed_result": task_payload["committed_result"] if task_payload is not None else None,
             }
         )
         if code != 0:

@@ -230,6 +230,8 @@ def test_task_status_json_includes_structured_terminal_receipt(tmp_path: Path, m
     assert payload["terminal_receipt"]["schema_version"] == "1"
     assert payload["terminal_receipt"]["summary"] == "Committed cleanly"
     assert payload["terminal_receipt"]["payload"]["commit_sha"] == "abc1234"
+    assert payload["committed_result"]["commit_sha"] == "abc1234"
+    assert payload["committed_result"]["branch"] == "main"
 
 
 def test_task_status_json_returns_not_found_error(tmp_path: Path, monkeypatch) -> None:
