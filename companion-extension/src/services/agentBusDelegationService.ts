@@ -170,7 +170,7 @@ export class AgentBusDelegationService {
       receiptPath,
     });
     const result = await this.sessionCtrl.createBackgroundSession(prompt, {
-      allowInteractiveFallback: false,
+      allowInteractiveFallback: true,
       contextLabel: `delegated task ${taskId}`,
     });
     if (!result.ok || !result.session_id) {

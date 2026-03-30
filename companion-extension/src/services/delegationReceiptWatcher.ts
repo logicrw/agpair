@@ -252,7 +252,7 @@ export class DelegationReceiptWatcher {
       await this.sessionCtrl.terminateSession(task.sessionId);
 
       const result = await this.sessionCtrl.createBackgroundSession(task.taskBody, {
-        allowInteractiveFallback: false,
+        allowInteractiveFallback: true,
         contextLabel: `delegation recovery ${task.taskId}`,
       });
       if (!result.ok || !result.session_id) {

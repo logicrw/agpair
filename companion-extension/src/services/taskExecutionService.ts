@@ -206,7 +206,7 @@ export class TaskExecutionService {
     const promptWithSuffix = this.appendReceiptInstruction(req.prompt, req, outputFile);
 
     const result = await this.sessionCtrl.createBackgroundSession(promptWithSuffix, {
-      allowInteractiveFallback: false,
+      allowInteractiveFallback: true,
       contextLabel: `task ${req.task_id}`,
     });
 

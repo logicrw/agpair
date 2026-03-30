@@ -69,101 +69,28 @@ export class SessionController {
     const allowInteractiveFallback = options.allowInteractiveFallback ?? false;
     const contextLabel = options.contextLabel?.trim() || "automated task";
 
-    // ── Path 1: LS bridge (headless, preferred) ──────────────
-    if (this.sdk.ls.isReady) {
-      try {
-        console.log("[session] Path 1: LS createCascade...");
-        const cascadeId = await this.sdk.ls.createCascade({ text: prompt });
-        const freshSessionId = await this.resolveFreshSessionId(beforeIds, cascadeId);
-        if (freshSessionId) {
-          console.log(`[session] LS succeeded: ${freshSessionId}`);
-          return { ok: true, session_id: freshSessionId };
-        }
-        errors.push(`LS: reused existing session ${cascadeId ?? "null"}`);
-      } catch (err: any) {
-        errors.push(`LS: ${err.message}`);
-        console.warn(`[session] Path 1 failed: ${err.message}`);
-      }
+    // ── Path 1 & 2: LS bridge — DISABLED ──────────────────────
+    // createCascade returns phantom session IDs: they appear in getSessions()
+    // and even pass focusSession(), but never materialise in the Antigravity UI.
+    // Skipping directly to the interactive paths (3/4) which reliably open
+    // real conversations. Re-enable once the LS phantom-ID issue is resolved.
+    console.log("[session] Paths 1/2 (LS createCascade) skipped — known phantom-ID issue");
 
-      // ── Path 2: Re-init LS for fresh CSRF ──────────────────
-      if (errors[0]?.includes("CSRF") || errors[0]?.includes("403")) {
-        try {
-          console.log("[session] Path 2: LS re-init + retry...");
-          const ok = await this.sdk.ls.initialize();
-          if (ok) {
-            const cascadeId = await this.sdk.ls.createCascade({ text: prompt });
-            const freshSessionId = await this.resolveFreshSessionId(beforeIds, cascadeId);
-            if (freshSessionId) {
-              console.log(`[session] LS retry succeeded: ${freshSessionId}`);
-              return { ok: true, session_id: freshSessionId };
-            }
-            errors.push(`LS retry: reused existing session ${cascadeId ?? "null"}`);
-          } else {
-            errors.push("LS retry: init failed");
-          }
-        } catch (err: any) {
-          errors.push(`LS retry: ${err.message}`);
-          console.warn(`[session] Path 2 failed: ${err.message}`);
-        }
-
-        try {
-          const repaired = await this.tryRepairLsConnection();
-          if (repaired) {
-            console.log("[session] Path 2b: LS manual repair + retry...");
-            const cascadeId = await this.sdk.ls.createCascade({ text: prompt });
-            const freshSessionId = await this.resolveFreshSessionId(beforeIds, cascadeId);
-            if (freshSessionId) {
-              console.log(`[session] LS manual repair succeeded: ${freshSessionId}`);
-              return { ok: true, session_id: freshSessionId };
-            }
-            errors.push(`LS manual repair: reused existing session ${cascadeId ?? "null"}`);
-          } else {
-            errors.push("LS manual repair: no verified live connection found");
-          }
-        } catch (err: any) {
-          errors.push(`LS manual repair: ${err.message}`);
-          console.warn(`[session] Path 2b failed: ${err.message}`);
-        }
-      }
-    }
-
-    if (!allowInteractiveFallback) {
-      const msg =
-        `Headless session creation failed for ${contextLabel}; ` +
-        `interactive fallback is disabled. ${errors.join(" | ") || "LS unavailable."}`;
-      console.warn(`[session] ${msg}`);
-      return { ok: false, session_id: "", error: msg };
-    }
-
-    // ── Path 3: SDK cascade command fallback ──────────────────
-    try {
-      console.log("[session] Path 3: SDK cascade.createSession(foreground)...");
-      const sessionId = await this.sdk.cascade.createSession({
-        task: prompt,
-        background: false,
-      });
-      const freshSessionId = await this.resolveFreshSessionId(beforeIds, sessionId);
-      if (freshSessionId) {
-        console.log(`[session] SDK cascade fallback succeeded: ${freshSessionId}`);
-        return { ok: true, session_id: freshSessionId };
-      }
-      errors.push(`SDK cascade fallback: created no fresh session (${sessionId || "empty"})`);
-      console.warn("[session] Path 3 produced no fresh session.");
-    } catch (err: any) {
-      errors.push(`SDK cascade fallback: ${err.message}`);
-      console.warn(`[session] Path 3 failed: ${err.message}`);
-    }
+    // ── Path 3: SDK cascade — DISABLED ─────────────────────────
+    // cascade.createSession also returns phantom IDs (same underlying issue).
+    // Skipping to Path 4 (direct vscode commands) which is the only verified
+    // working path. Re-enable once phantom-ID issue is resolved.
+    console.log("[session] Path 3 (SDK cascade) skipped — same phantom-ID issue");
 
     // ── Path 4: Direct vscode commands ────────────────────────
-    // Last resort: bypass the SDK CascadeManager entirely.
-    // Use verified commands: startNewConversation + sendPromptToAgentPanel
+    // The only reliable path: bypass the SDK CascadeManager entirely.
+    // startNewConversation opens a real UI conversation, sendPromptToAgentPanel
+    // injects the prompt. getSessions() cannot reliably detect these sessions,
+    // so we generate a tracking ID instead of relying on session diff.
     try {
       console.log("[session] Path 4: Direct vscode commands...");
 
-      // Snapshot sessions BEFORE creating a new one, so we can diff
-      const beforeIds = await this.snapshotSessionIds();
-
-      // Create a new conversation (switches UI, but reliably works)
+      // Create a new conversation (switches UI, reliably works)
       await vscode.commands.executeCommand("antigravity.startNewConversation");
       // Wait for the UI to register the new conversation
       await new Promise(r => setTimeout(r, 1500));
@@ -173,27 +100,24 @@ export class SessionController {
       // Wait for the prompt to be dispatched
       await new Promise(r => setTimeout(r, 500));
 
-      // Detect the new session by diffing with the snapshot
+      // Best-effort session ID detection via diff.
+      // If getSessions() can't detect the new session, generate a tracking ID
+      // so the delegation system can still track the task.
       let sessionId = "";
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const after = await this.sdk.cascade.getSessions();
-          const freshSessionId = pickFreshSessionId(beforeIds, "", after);
-          if (freshSessionId) {
-            sessionId = freshSessionId;
-            console.log(`[session] New session detected by diff: ${sessionId}`);
-            break;
-          }
-        } catch {
-          // ignore
+      try {
+        const after = await this.sdk.cascade.getSessions();
+        const freshSessionId = pickFreshSessionId(beforeIds, "", after);
+        if (freshSessionId) {
+          sessionId = freshSessionId;
+          console.log(`[session] New session detected by diff: ${sessionId}`);
         }
-        if (!sessionId) {
-          await new Promise(r => setTimeout(r, 1000));
-        }
+      } catch {
+        // ignore — detection is best-effort
       }
 
       if (!sessionId) {
-        throw new Error("Direct commands created no fresh session");
+        sessionId = `ag-cmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        console.log(`[session] getSessions() could not detect new session; using tracking ID: ${sessionId}`);
       }
 
       console.log(`[session] Direct commands succeeded: ${sessionId}`);
