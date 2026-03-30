@@ -22,6 +22,7 @@ from agpair.cli.wait import (
     wait_for_terminal_phase,
 )
 from agpair.config import AppPaths
+from agpair.models import a2a_state_hint_from_phase
 from agpair.runtime_liveness import LivenessState, classify_liveness, is_task_live
 from agpair.terminal_receipts import (
     blocked_failure_context_from_receipt,
@@ -159,6 +160,7 @@ def _task_payload(paths: AppPaths, task) -> dict:
     return {
         "task_id": task.task_id,
         "phase": task.phase,
+        "a2a_state_hint": a2a_state_hint_from_phase(task.phase),
         "repo_path": task.repo_path,
         "session_id": task.antigravity_session_id,
         "attempt_no": task.attempt_no,
@@ -429,6 +431,7 @@ def task_status(
         return
     typer.echo(f"task_id: {payload['task_id']}")
     typer.echo(f"phase: {payload['phase']}")
+    typer.echo(f"a2a_state_hint: {payload['a2a_state_hint']}")
     typer.echo(f"repo_path: {payload['repo_path']}")
     typer.echo(f"session_id: {payload['session_id']}")
     typer.echo(f"attempt_no: {payload['attempt_no']}")
@@ -642,6 +645,7 @@ def wait_task(
                 "ok": code == 0,
                 "task_id": task_id,
                 "phase": result.phase,
+                "a2a_state_hint": a2a_state_hint_from_phase(result.phase),
                 "timed_out": result.timed_out,
                 "watchdog_triggered": result.watchdog_triggered,
                 "exit_code": code,

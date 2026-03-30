@@ -413,6 +413,7 @@ def test_task_wait_json_includes_failure_context_for_stuck_task(tmp_path: Path, 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
     assert payload["phase"] == "stuck"
+    assert payload["a2a_state_hint"] == "failed"
     assert payload["failure_context"]["blocker_type"] == "executor_runtime_failure"
     assert payload["failure_context"]["recoverable"] is True
     assert payload["failure_context"]["recommended_next_action"] == "retry"

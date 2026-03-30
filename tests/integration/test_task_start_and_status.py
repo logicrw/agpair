@@ -342,6 +342,7 @@ def test_task_status_shows_phase_and_session(tmp_path: Path, monkeypatch) -> Non
     result = CliRunner().invoke(app, ["task", "status", "TASK-1"])
     assert result.exit_code == 0
     assert "phase: acked" in result.stdout
+    assert "a2a_state_hint: working" in result.stdout
     assert "session_id: session-123" in result.stdout
 
 
@@ -358,6 +359,7 @@ def test_task_status_json_returns_structured_payload(tmp_path: Path, monkeypatch
     assert payload["ok"] is True
     assert payload["task_id"] == "TASK-JSON-1"
     assert payload["phase"] == "acked"
+    assert payload["a2a_state_hint"] == "working"
     assert payload["session_id"] == "session-json-1"
     assert payload["waiter"] is None
     assert payload["liveness_state"] in {"active_via_heartbeat", "silent", "active_via_workspace"}

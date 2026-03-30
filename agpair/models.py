@@ -52,3 +52,17 @@ TERMINAL_PHASES: frozenset[str] = frozenset(
 
 def utcnow_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def a2a_state_hint_from_phase(phase: str) -> str:
+    """Map an agpair phase to the closest A2A TaskState hint."""
+    mapping = {
+        "new": "submitted",
+        "acked": "working",
+        "evidence_ready": "input-required",
+        "committed": "completed",
+        "blocked": "failed",
+        "stuck": "failed",
+        "abandoned": "canceled",
+    }
+    return mapping.get(phase, "unknown")
