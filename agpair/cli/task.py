@@ -24,6 +24,7 @@ from agpair.cli.wait import (
 from agpair.config import AppPaths
 from agpair.runtime_liveness import LivenessState, classify_liveness, is_task_live
 from agpair.terminal_receipts import (
+    blocked_failure_context_from_receipt,
     committed_result_from_receipt,
     parse_structured_terminal_receipt,
     structured_receipt_to_dict,
@@ -76,13 +77,64 @@ def _structured_receipt_payload(body: str) -> dict | None:
     return structured_receipt_to_dict(receipt)
 
 
-def _committed_result_payload(receipt_payload: dict | None) -> dict | None:
+def _parsed_structured_receipt(receipt_payload: dict | None):
     if receipt_payload is None:
         return None
-    receipt = parse_structured_terminal_receipt(json.dumps(receipt_payload, ensure_ascii=False))
+    return parse_structured_terminal_receipt(json.dumps(receipt_payload, ensure_ascii=False))
+
+
+def _committed_result_payload(receipt_payload: dict | None) -> dict | None:
+    receipt = _parsed_structured_receipt(receipt_payload)
     if receipt is None:
         return None
     return committed_result_from_receipt(receipt)
+
+
+def _failure_context_payload(task, terminal_receipt: dict | None) -> dict | None:
+    receipt = _parsed_structured_receipt(terminal_receipt)
+    if receipt is not None:
+        failure_context = blocked_failure_context_from_receipt(receipt)
+        if failure_context is not None:
+            return failure_context
+    if task.phase not in {"blocked", "stuck"}:
+        return None
+    reason = (task.stuck_reason or "").strip()
+    if not reason:
+        return None
+    normalized = reason.lower()
+    blocker_type = "unknown"
+    recoverable = True
+    recommended_next_action = "inspect_logs"
+    if task.phase == "stuck" or "timeout" in normalized or "no progress" in normalized:
+        blocker_type = "executor_runtime_failure"
+        recommended_next_action = "retry"
+    elif "dispatch failed" in normalized or "failed to start" in normalized or "failed to send" in normalized:
+        blocker_type = "session_transport_failure"
+        recommended_next_action = "retry"
+    elif "bridge" in normalized:
+        blocker_type = "bridge_unavailable"
+        recommended_next_action = "fix_environment_then_retry"
+    elif "workspace" in normalized or "open the target repo" in normalized:
+        blocker_type = "workspace_conflict"
+        recommended_next_action = "fix_environment_then_retry"
+    elif "validation" in normalized or "lint" in normalized or "typecheck" in normalized or "test" in normalized:
+        blocker_type = "validation_failure"
+        recoverable = False
+        recommended_next_action = "continue"
+    elif "executor" in normalized or "session" in normalized:
+        blocker_type = "executor_runtime_failure"
+        recommended_next_action = "retry"
+    return {
+        "summary": reason,
+        "blocker_type": blocker_type,
+        "recoverable": recoverable,
+        "recommended_next_action": recommended_next_action,
+        "last_error_excerpt": reason,
+        "details": {
+            "phase": task.phase,
+            "reason": reason,
+        },
+    }
 
 
 def _latest_terminal_receipt(paths: AppPaths, task_id: str) -> dict | None:
@@ -102,6 +154,7 @@ def _task_payload(paths: AppPaths, task) -> dict:
     waiter = waiters.get_active_waiter(task.task_id)
     terminal_receipt = _latest_terminal_receipt(paths, task.task_id) if task.phase in TERMINAL_PHASES else None
     committed_result = _committed_result_payload(terminal_receipt)
+    failure_context = _failure_context_payload(task, terminal_receipt)
     return {
         "task_id": task.task_id,
         "phase": task.phase,
@@ -117,6 +170,7 @@ def _task_payload(paths: AppPaths, task) -> dict:
         "waiter": _waiter_payload(waiter),
         "terminal_receipt": terminal_receipt,
         "committed_result": committed_result,
+        "failure_context": failure_context,
     }
 
 
@@ -399,6 +453,12 @@ def task_status(
             "committed_result: "
             + json.dumps(committed_result, ensure_ascii=False, sort_keys=True)
         )
+    failure_context = payload["failure_context"]
+    if failure_context is not None:
+        typer.echo(
+            "failure_context: "
+            + json.dumps(failure_context, ensure_ascii=False, sort_keys=True)
+        )
     waiter = payload["waiter"]
     if waiter:
         typer.echo(f"waiter_state: {waiter['state']}")
@@ -586,6 +646,7 @@ def wait_task(
                 "exit_code": code,
                 "task": task_payload,
                 "committed_result": task_payload["committed_result"] if task_payload is not None else None,
+                "failure_context": task_payload["failure_context"] if task_payload is not None else None,
             }
         )
         if code != 0:

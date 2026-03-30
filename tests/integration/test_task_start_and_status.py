@@ -336,6 +336,47 @@ def test_task_status_json_includes_structured_terminal_receipt(tmp_path: Path, m
     assert payload["committed_result"]["branch"] == "main"
 
 
+def test_task_status_json_includes_failure_context_for_structured_blocked_receipt(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-JSON-BLOCKED", repo_path="/tmp/repo")
+    repo.mark_acked(task_id="TASK-JSON-BLOCKED", session_id="session-json-blocked")
+    repo.mark_blocked(task_id="TASK-JSON-BLOCKED", reason="Need a human credential")
+    journal = make_journal_repo(tmp_path)
+    journal.append(
+        "TASK-JSON-BLOCKED",
+        "daemon",
+        "blocked",
+        json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "TASK-JSON-BLOCKED",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "BLOCKED",
+                "summary": "Need a human credential",
+                "payload": {
+                    "blocker_type": "auth",
+                    "message": "Missing credential",
+                    "recoverable": True,
+                    "suggested_action": "Provide token",
+                    "last_error_excerpt": "401 unauthorized",
+                },
+            }
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-JSON-BLOCKED", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["failure_context"]["blocker_type"] == "auth"
+    assert payload["failure_context"]["recoverable"] is True
+    assert payload["failure_context"]["recommended_next_action"] == "Provide token"
+    assert payload["failure_context"]["last_error_excerpt"] == "401 unauthorized"
+    assert payload["failure_context"]["details"]["message"] == "Missing credential"
+
+
 def test_task_status_json_returns_not_found_error(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
 
@@ -444,6 +485,13 @@ def test_task_start_marks_blocked_when_dispatch_fails(tmp_path: Path, monkeypatc
     assert task is not None
     assert task.phase == "blocked"
     assert task.stuck_reason is not None
+
+    status = CliRunner().invoke(app, ["task", "status", "TASK-FAIL-1", "--json"])
+    assert status.exit_code == 0
+    payload = json.loads(status.stdout)
+    assert payload["failure_context"]["blocker_type"] == "session_transport_failure"
+    assert payload["failure_context"]["recoverable"] is True
+    assert payload["failure_context"]["recommended_next_action"] == "retry"
 
 
 def test_task_logs_fails_when_task_is_missing(tmp_path: Path, monkeypatch) -> None:

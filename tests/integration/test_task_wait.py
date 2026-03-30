@@ -370,6 +370,24 @@ def test_task_wait_json_returns_not_found_error(tmp_path: Path, monkeypatch):
     }
 
 
+def test_task_wait_json_includes_failure_context_for_stuck_task(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-W-STUCK", repo_path="/r")
+    repo.mark_acked(task_id="T-W-STUCK", session_id="test-session")
+    repo.mark_stuck(task_id="T-W-STUCK", reason="no progress before timeout")
+
+    result = CliRunner().invoke(app, ["task", "wait", "T-W-STUCK", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["phase"] == "stuck"
+    assert payload["failure_context"]["blocker_type"] == "executor_runtime_failure"
+    assert payload["failure_context"]["recoverable"] is True
+    assert payload["failure_context"]["recommended_next_action"] == "retry"
+    assert payload["failure_context"]["last_error_excerpt"] == "no progress before timeout"
+
+
 def test_task_wait_exits_1_on_blocked(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = _make_repo(tmp_path)

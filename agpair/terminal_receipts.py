@@ -99,6 +99,36 @@ def committed_result_from_receipt(receipt: StructuredTerminalReceipt) -> dict[st
     }
 
 
+def blocked_failure_context_from_receipt(receipt: StructuredTerminalReceipt) -> dict[str, Any] | None:
+    if receipt.status != "BLOCKED":
+        return None
+    payload = receipt.payload
+    blocker_type = payload.get("blocker_type")
+    if not isinstance(blocker_type, str) or not blocker_type.strip():
+        blocker_type = "unknown"
+    recoverable = payload.get("recoverable")
+    if not isinstance(recoverable, bool):
+        recoverable = False
+    recommended_next_action = payload.get("suggested_action")
+    if not isinstance(recommended_next_action, str) or not recommended_next_action.strip():
+        recommended_next_action = "inspect_logs"
+    last_error_excerpt = payload.get("last_error_excerpt")
+    if not isinstance(last_error_excerpt, str) or not last_error_excerpt.strip():
+        message = payload.get("message")
+        if isinstance(message, str) and message.strip():
+            last_error_excerpt = message.strip()
+        else:
+            last_error_excerpt = receipt.summary
+    return {
+        "summary": receipt.summary,
+        "blocker_type": blocker_type.strip(),
+        "recoverable": recoverable,
+        "recommended_next_action": recommended_next_action.strip(),
+        "last_error_excerpt": last_error_excerpt.strip(),
+        "details": payload,
+    }
+
+
 def blocked_reason_from_receipt(receipt: StructuredTerminalReceipt, fallback: str) -> str:
     summary = receipt.summary.strip()
     if summary:
