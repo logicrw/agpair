@@ -12,8 +12,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   last_heartbeat_at TEXT,
-  last_workspace_activity_at TEXT
+  last_workspace_activity_at TEXT,
+  client_idempotency_key TEXT
 );
+-- NOTE: uq_tasks_repo_idempotency index on (repo_path, client_idempotency_key)
+-- is created by _migrate_schema() in db.py to support both fresh and migrated databases.
 
 CREATE TABLE IF NOT EXISTS receipts (
   message_id TEXT PRIMARY KEY,

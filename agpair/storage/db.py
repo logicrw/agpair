@@ -56,6 +56,19 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
               ON waiters (task_id) WHERE state = 'waiting';
         """)
         conn.commit()
+    # Migration 6: add caller idempotency key on tasks
+    task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "client_idempotency_key" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN client_idempotency_key TEXT")
+        conn.commit()
+    task_indexes = {row[1] for row in conn.execute("PRAGMA index_list(tasks)").fetchall()}
+    if "uq_tasks_repo_idempotency" not in task_indexes:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_repo_idempotency "
+            "ON tasks (repo_path, client_idempotency_key) "
+            "WHERE client_idempotency_key IS NOT NULL"
+        )
+        conn.commit()
 
 
 def ensure_database(db_path: Path) -> None:

@@ -169,6 +169,108 @@ def test_task_start_creates_local_record_and_sends_task(tmp_path: Path, monkeypa
     assert recorded[-1]["argv"][:4] == ["agent-bus", "send", "--sender", "desktop"]
 
 
+def test_task_start_reuses_existing_task_for_same_repo_and_idempotency_key(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+
+    runner = CliRunner()
+    first = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            "/tmp/repo-a",
+            "--body",
+            "Goal: first dispatch",
+            "--task-id",
+            "TASK-IDEMP-1",
+            "--idempotency-key",
+            "caller-key-1",
+            "--no-wait",
+        ],
+    )
+    second = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            "/tmp/repo-a",
+            "--body",
+            "Goal: duplicate dispatch",
+            "--task-id",
+            "TASK-IDEMP-2",
+            "--idempotency-key",
+            "caller-key-1",
+            "--no-wait",
+        ],
+    )
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    assert first.stdout.strip() == "TASK-IDEMP-1"
+    assert second.stdout.strip() == "TASK-IDEMP-1"
+    assert make_task_repo(tmp_path).get_task("TASK-IDEMP-2") is None
+    recorded = read_calls(calls_path)
+    assert len(recorded) == 1
+    assert recorded[0]["argv"][:4] == ["agent-bus", "send", "--sender", "desktop"]
+
+
+def test_task_start_idempotency_key_is_scoped_to_repo_path(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+
+    runner = CliRunner()
+    first = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            "/tmp/repo-a",
+            "--body",
+            "Goal: first dispatch",
+            "--task-id",
+            "TASK-IDEMP-REPO-A",
+            "--idempotency-key",
+            "caller-key-2",
+            "--no-wait",
+        ],
+    )
+    second = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            "/tmp/repo-b",
+            "--body",
+            "Goal: second dispatch",
+            "--task-id",
+            "TASK-IDEMP-REPO-B",
+            "--idempotency-key",
+            "caller-key-2",
+            "--no-wait",
+        ],
+    )
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    assert first.stdout.strip() == "TASK-IDEMP-REPO-A"
+    assert second.stdout.strip() == "TASK-IDEMP-REPO-B"
+    assert make_task_repo(tmp_path).get_task("TASK-IDEMP-REPO-A") is not None
+    assert make_task_repo(tmp_path).get_task("TASK-IDEMP-REPO-B") is not None
+    recorded = read_calls(calls_path)
+    assert len(recorded) == 2
+
+
 def test_task_status_shows_phase_and_session(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = make_task_repo(tmp_path)

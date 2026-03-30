@@ -20,6 +20,7 @@ class TaskRecord:
     updated_at: str
     last_heartbeat_at: str | None = None
     last_workspace_activity_at: str | None = None
+    client_idempotency_key: str | None = None
 
 
 @dataclass(frozen=True)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 import json
+import sqlite3
 import subprocess
 from urllib import error, request
 
@@ -273,6 +274,7 @@ def start_task(
     repo_path: str = typer.Option(..., "--repo-path"),
     body: str = typer.Option(..., "--body"),
     task_id: str | None = typer.Option(None, "--task-id"),
+    idempotency_key: str | None = typer.Option(None, "--idempotency-key"),
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
@@ -283,7 +285,49 @@ def start_task(
     journal = JournalRepository(paths.db_path)
     final_task_id = task_id or f"TASK-{uuid4().hex[:12].upper()}"
 
-    tasks.create_task(task_id=final_task_id, repo_path=repo_path)
+    if idempotency_key:
+        existing_task = tasks.get_task_by_idempotency_key(
+            repo_path=repo_path,
+            client_idempotency_key=idempotency_key,
+        )
+        if existing_task is not None:
+            typer.echo(existing_task.task_id)
+            maybe_auto_wait(
+                paths.db_path,
+                existing_task.task_id,
+                wait=wait,
+                success_phases=DISPATCH_SUCCESS_PHASES,
+                interval_seconds=interval_seconds,
+                timeout_seconds=timeout_seconds,
+                waiter_command="task_start_auto_wait",
+            )
+            return
+    try:
+        tasks.create_task(
+            task_id=final_task_id,
+            repo_path=repo_path,
+            client_idempotency_key=idempotency_key,
+        )
+    except sqlite3.IntegrityError:
+        if not idempotency_key:
+            raise
+        existing_task = tasks.get_task_by_idempotency_key(
+            repo_path=repo_path,
+            client_idempotency_key=idempotency_key,
+        )
+        if existing_task is None:
+            raise
+        typer.echo(existing_task.task_id)
+        maybe_auto_wait(
+            paths.db_path,
+            existing_task.task_id,
+            wait=wait,
+            success_phases=DISPATCH_SUCCESS_PHASES,
+            interval_seconds=interval_seconds,
+            timeout_seconds=timeout_seconds,
+            waiter_command="task_start_auto_wait",
+        )
+        return
     journal.append(final_task_id, "cli", "created", body)
     try:
         message_id = bus.send_task(task_id=final_task_id, body=body, repo_path=repo_path)

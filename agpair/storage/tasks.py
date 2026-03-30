@@ -39,7 +39,7 @@ class TaskRepository:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
 
-    def create_task(self, *, task_id: str, repo_path: str) -> None:
+    def create_task(self, *, task_id: str, repo_path: str, client_idempotency_key: str | None = None) -> None:
         now = utcnow_iso()
         with connect(self.db_path) as conn:
             conn.execute(
@@ -47,12 +47,27 @@ class TaskRepository:
                 INSERT INTO tasks (
                   task_id, repo_path, phase, antigravity_session_id, attempt_no, retry_count,
                   last_receipt_id, stuck_reason, retry_recommended, last_activity_at, created_at, updated_at,
-                  last_heartbeat_at, last_workspace_activity_at
-                ) VALUES (?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL)
+                  last_heartbeat_at, last_workspace_activity_at, client_idempotency_key
+                ) VALUES (?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?)
                 """,
-                (task_id, repo_path, now, now, now),
+                (task_id, repo_path, now, now, now, client_idempotency_key),
             )
             conn.commit()
+
+    def get_task_by_idempotency_key(self, *, repo_path: str, client_idempotency_key: str) -> TaskRecord | None:
+        with connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM tasks
+                WHERE repo_path = ? AND client_idempotency_key = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (repo_path, client_idempotency_key),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._task_from_row(row)
 
     def mark_acked(self, *, task_id: str, session_id: str) -> None:
         task = self.get_task(task_id)
@@ -352,6 +367,10 @@ class TaskRepository:
             ws_activity = row["last_workspace_activity_at"]
         except (IndexError, KeyError):
             ws_activity = None
+        try:
+            idempotency_key = row["client_idempotency_key"]
+        except (IndexError, KeyError):
+            idempotency_key = None
         return TaskRecord(
             task_id=row["task_id"],
             repo_path=row["repo_path"],
@@ -367,4 +386,5 @@ class TaskRepository:
             updated_at=row["updated_at"],
             last_heartbeat_at=row["last_heartbeat_at"],
             last_workspace_activity_at=ws_activity,
+            client_idempotency_key=idempotency_key,
         )
