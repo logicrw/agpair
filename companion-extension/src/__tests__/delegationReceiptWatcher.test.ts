@@ -787,7 +787,7 @@ describe("DelegationReceiptWatcher", () => {
       JSON.stringify({
         schema_version: "1",
         task_id: "TASK-V1-MAL",
-        // missing attempt_no, review_round, summary, payload 
+        // missing attempt_no, review_round, summary, payload
         status: "COMMITTED",
       }),
       "utf-8",
