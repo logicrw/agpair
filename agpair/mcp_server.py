@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -51,9 +52,18 @@ def _run_cli_json(args: list[str], *, allow_nonzero: bool = False) -> dict[str, 
 
 def _extract_task_id(stdout: str) -> str:
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-    if len(lines) != 1:
+    if not lines:
         raise RuntimeError(f"expected single-line task id output, got: {stdout!r}")
-    return lines[0]
+        
+    if len(lines) == 1:
+        return lines[0]
+        
+    task_id = lines[-1]
+    # Keep the parser conservative: do not silently accept ambiguous multi-line output.
+    if " " in task_id or any(" " not in line for line in lines[:-1]):
+        raise RuntimeError(f"expected single-line task id output, got: {stdout!r}")
+        
+    return task_id
 
 
 def _dispatch_then_maybe_wait(
@@ -136,6 +146,12 @@ def agpair_start_task(
     timeout_seconds: float = 3600.0,
 ) -> dict[str, Any]:
     """Dispatch a new task via agpair and optionally wait for a terminal phase."""
+    path = Path(repo_path)
+    if not path.is_absolute():
+        raise RuntimeError(f"repo_path must be an absolute path: {repo_path}")
+    if not path.is_dir():
+        raise RuntimeError(f"repo_path must be an existing directory: {repo_path}")
+
     args = ["task", "start", "--repo-path", repo_path, "--body", body]
     if task_id:
         args.extend(["--task-id", task_id])
