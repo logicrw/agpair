@@ -14,7 +14,7 @@ import {
 
 export interface AgentBusDelegationReply {
   taskId: string;
-  status: "ACK" | "RUNNING" | "EVIDENCE_PACK" | "BLOCKED" | "COMMITTED";
+  status: "ACK" | "RUNNING" | "EVIDENCE_PACK" | "BLOCKED" | "COMMITTED" | "REVIEW_ACK" | "REVIEW_NACK" | "APPROVE_ACK" | "APPROVE_NACK";
   body: string;
 }
 
@@ -279,13 +279,18 @@ export class AgentBusDelegationService {
       this.outputChannel.appendLine(
         `[companion] ${status} for ${taskId} sent into session ${tracked.sessionId}`,
       );
+      await this.sendReplyFn({
+        taskId,
+        status: "REVIEW_ACK",
+        body: `Successfully sent ${status} prompt into session ${tracked.sessionId}`,
+      });
     } catch (err: any) {
       this.outputChannel.appendLine(
         `[companion] ${status} continuation failed for ${taskId}: ${err.message}`,
       );
       await this.sendReplyFn({
         taskId,
-        status: "BLOCKED",
+        status: "REVIEW_NACK",
         body: `Failed to send ${status} into session ${tracked.sessionId}: ${err.message}`,
       });
     }
@@ -342,13 +347,18 @@ export class AgentBusDelegationService {
       this.outputChannel.appendLine(
         `[companion] APPROVED for ${taskId} sent into session ${tracked.sessionId} (commit phase)`,
       );
+      await this.sendReplyFn({
+        taskId,
+        status: "APPROVE_ACK",
+        body: `Successfully sent APPROVED prompt into session ${tracked.sessionId}`,
+      });
     } catch (err: any) {
       this.outputChannel.appendLine(
         `[companion] APPROVED commit continuation failed for ${taskId}: ${err.message}`,
       );
       await this.sendReplyFn({
         taskId,
-        status: "BLOCKED",
+        status: "APPROVE_NACK",
         body: `Failed to send APPROVED into session ${tracked.sessionId}: ${err.message}`,
       });
     }

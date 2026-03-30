@@ -745,7 +745,15 @@ def _send_semantic_or_exit(
     event_ok: str,
     event_fail: str,
     body: str,
+    ack_statuses: frozenset[str] = frozenset(),
+    nack_statuses: frozenset[str] = frozenset(),
 ) -> int:
+    import time
+    from agpair.config import AppPaths
+    from agpair.daemon.loop import ingest_new_receipts
+    from agpair.transport.bus import AgentBusClient
+    from datetime import datetime, UTC
+
     try:
         message_id = send_fn()
     except (subprocess.SubprocessError, FileNotFoundError) as exc:
@@ -753,8 +761,68 @@ def _send_semantic_or_exit(
         journal.append(task_id, "cli", event_fail, reason)
         typer.echo(reason, err=True)
         raise typer.Exit(code=1)
-    journal.append(task_id, "cli", event_ok, f"id={message_id} {body}")
-    return message_id
+
+    if not ack_statuses:
+        # Legacy fire-and-forget (e.g. if we used this for something else)
+        journal.append(task_id, "cli", event_ok, f"id={message_id} {body}")
+        return message_id
+
+    paths = AppPaths.default()
+    bus = AgentBusClient(paths.agent_bus_bin)
+    
+    start_time = time.time()
+    
+    while time.time() - start_time < 15.0:  # 15s confirmation window
+        # Force ingest to ensure we get latest receipts synchronously
+        ingest_new_receipts(paths, bus, current=datetime.now(UTC))
+        
+        # Check journal tail
+        rows = journal.tail(task_id, limit=20)
+        for row in rows:
+            if row.event in ack_statuses:
+                # We need to ensure we don't accidentally match an old ack 
+                # from a previous continue/approve attempt. Since agent-bus 
+                # applies monotonically increasing message IDs, the ACK will 
+                # be generated AFTER our `message_id`. However, finding that 
+                # safely from journal is tricky. The naive but effective way
+                # is checking if the journal row was created very recently 
+                # (since our function started).
+                # To avoid complex time parsing, we can just look for `id=` if we 
+                # know daemon didn't put it there. The daemon now does not put `id=`
+                # Wait, loop.py DOES put it there because I changed it?
+                # No, wait, I didn't add `f"id={message_id}"` in loop.py! I just used `clean_body`.
+                
+                # So we just trust that it was created recently.
+                # Actually, `ingest_new_receipts` avoids double ingestion. So if
+                # it's a NEW receipt, it will be added to the journal.
+                # Since we loop immediately, we could hit an old event that happens
+                # to still be in the tail of the journal.
+                try:
+                    event_dt = datetime.fromisoformat(row.created_at.replace("Z", "+00:00"))
+                    # If this event occurred after we started waiting (minus a small clock skew buffer)
+                    if event_dt.timestamp() > start_time - 1.0:
+                        journal.append(task_id, "cli", event_ok, f"id={message_id} {body}")
+                        return message_id
+                except (ValueError, TypeError):
+                    pass
+
+            if row.event in nack_statuses:
+                try:
+                    event_dt = datetime.fromisoformat(row.created_at.replace("Z", "+00:00"))
+                    if event_dt.timestamp() > start_time - 1.0:
+                        reason = row.body
+                        journal.append(task_id, "cli", event_fail, f"rejected by extension: {reason}")
+                        typer.echo(f"Command failed: {reason}", err=True)
+                        raise typer.Exit(code=1)
+                except (ValueError, TypeError):
+                    pass
+        
+        time.sleep(0.5)
+
+    reason = "timeout waiting for extension confirmation"
+    journal.append(task_id, "cli", event_fail, reason)
+    typer.echo(reason, err=True)
+    raise typer.Exit(code=1)
 
 
 # ---------------------------------------------------------------------------
@@ -785,6 +853,8 @@ def continue_task(
         event_ok="continued",
         event_fail="continue_failed",
         body=body,
+        ack_statuses=frozenset({"review_ack"}),
+        nack_statuses=frozenset({"review_nack"}),
     )
     typer.echo(task.task_id)
 
@@ -826,6 +896,8 @@ def approve_task(
         event_ok="approved",
         event_fail="approve_failed",
         body=body,
+        ack_statuses=frozenset({"approve_ack"}),
+        nack_statuses=frozenset({"approve_nack"}),
     )
     typer.echo(task.task_id)
 
@@ -868,6 +940,8 @@ def reject_task(
         event_ok="rejected",
         event_fail="reject_failed",
         body=body,
+        ack_statuses=frozenset({"review_ack"}),
+        nack_statuses=frozenset({"review_nack"}),
     )
     typer.echo(task.task_id)
 

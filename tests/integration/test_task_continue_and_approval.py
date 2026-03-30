@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 from typer.testing import CliRunner
 
@@ -26,12 +27,21 @@ def test_task_continue_sends_review_for_existing_session(tmp_path: Path, monkeyp
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
     seed_acked_task(tmp_path)
+    
+    pull_path.write_text(json.dumps({
+        "messages": [
+            {"id": 102, "task_id": "TASK-1", "status": "REVIEW_ACK", "body": "OK"}
+        ]
+    }))
 
     result = CliRunner().invoke(app, ["task", "continue", "TASK-1", "--body", "Please fix edge case", "--no-wait"])
 
     assert result.exit_code == 0
     recorded = read_calls(calls_path)
-    assert recorded[-1]["argv"][:8] == [
+    # The last call is the 'pull' from ingest_new_receipts.
+    # We look for the 'send' call before it.
+    sent_calls = [c for c in recorded if c["argv"][1] == "send"]
+    assert sent_calls[-1]["argv"][:8] == [
         "agent-bus",
         "send",
         "--sender",
@@ -43,6 +53,62 @@ def test_task_continue_sends_review_for_existing_session(tmp_path: Path, monkeyp
     ]
 
 
+def test_task_continue_fails_on_nack(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    seed_acked_task(tmp_path)
+    
+    pull_path.write_text(json.dumps({
+        "messages": [
+            {"id": 102, "task_id": "TASK-1", "status": "REVIEW_NACK", "body": "Session lost"}
+        ]
+    }))
+
+    result = CliRunner().invoke(app, ["task", "continue", "TASK-1", "--body", "Please fix", "--no-wait"])
+    assert result.exit_code == 1
+    assert "Session lost" in result.stderr
+
+
+def test_task_continue_fails_on_timeout(tmp_path: Path, monkeypatch) -> None:
+    # We patch time.time locally to simulate a timeout without actually waiting 15s.
+    import time
+    original_time = time.time
+    
+    class FakeTime:
+        def __init__(self):
+            self.current = original_time()
+            self.calls = 0
+            
+        def __call__(self):
+            self.calls += 1
+            if self.calls > 3:  # third time.time() check
+                self.current += 30.0
+            return self.current
+            
+        def sleep(self, seconds):
+            self.current += seconds
+            
+    fake_time = FakeTime()
+    monkeypatch.setattr("time.time", fake_time)
+    monkeypatch.setattr("time.sleep", fake_time.sleep)
+    
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    seed_acked_task(tmp_path)
+    
+    # pull.json returns nothing
+    
+    result = CliRunner().invoke(app, ["task", "continue", "TASK-1", "--body", "Please fix", "--no-wait"])
+    assert result.exit_code == 1
+    assert "timeout waiting for extension confirmation" in result.stderr
+
+
 def test_task_approve_sends_approved(tmp_path: Path, monkeypatch) -> None:
     binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
@@ -51,11 +117,18 @@ def test_task_approve_sends_approved(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
     seed_acked_task(tmp_path)
 
+    pull_path.write_text(json.dumps({
+        "messages": [
+            {"id": 102, "task_id": "TASK-1", "status": "APPROVE_ACK", "body": "OK"}
+        ]
+    }))
+
     result = CliRunner().invoke(app, ["task", "approve", "TASK-1", "--body", "Looks good", "--no-wait"])
 
     assert result.exit_code == 0
     recorded = read_calls(calls_path)
-    assert recorded[-1]["argv"][:8] == [
+    sent_calls = [c for c in recorded if c["argv"][1] == "send"]
+    assert sent_calls[-1]["argv"][:8] == [
         "agent-bus",
         "send",
         "--sender",
@@ -67,6 +140,26 @@ def test_task_approve_sends_approved(tmp_path: Path, monkeypatch) -> None:
     ]
 
 
+def test_task_approve_fails_on_nack(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    seed_acked_task(tmp_path)
+
+    pull_path.write_text(json.dumps({
+        "messages": [
+            {"id": 102, "task_id": "TASK-1", "status": "APPROVE_NACK", "body": "Session deleted"}
+        ]
+    }))
+
+    result = CliRunner().invoke(app, ["task", "approve", "TASK-1", "--body", "Looks good", "--no-wait"])
+
+    assert result.exit_code == 1
+    assert "Session deleted" in result.stderr
+
+
 def test_task_reject_routes_back_as_review_feedback(tmp_path: Path, monkeypatch) -> None:
     binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
@@ -75,11 +168,18 @@ def test_task_reject_routes_back_as_review_feedback(tmp_path: Path, monkeypatch)
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
     seed_acked_task(tmp_path)
 
+    pull_path.write_text(json.dumps({
+        "messages": [
+            {"id": 102, "task_id": "TASK-1", "status": "REVIEW_ACK", "body": "OK"}
+        ]
+    }))
+
     result = CliRunner().invoke(app, ["task", "reject", "TASK-1", "--body", "Still failing", "--no-wait"])
 
     assert result.exit_code == 0
     recorded = read_calls(calls_path)
-    assert recorded[-1]["argv"][:8] == [
+    sent_calls = [c for c in recorded if c["argv"][1] == "send"]
+    assert sent_calls[-1]["argv"][:8] == [
         "agent-bus",
         "send",
         "--sender",
@@ -108,7 +208,8 @@ def test_task_retry_creates_fresh_attempt_and_new_task_message(tmp_path: Path, m
     assert task.retry_count == 1
     assert task.antigravity_session_id is None
     recorded = read_calls(calls_path)
-    assert recorded[-1]["argv"][:8] == [
+    sent_calls = [c for c in recorded if c["argv"][1] == "send"]
+    assert sent_calls[-1]["argv"][:8] == [
         "agent-bus",
         "send",
         "--sender",

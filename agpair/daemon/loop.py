@@ -186,6 +186,14 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
             elif status == messages.COMMITTED:
                 tasks.mark_committed(task_id=task_id, last_receipt_id=message_id)
                 journal.append(task_id, "daemon", "committed", journal_body)
+            elif status == messages.REVIEW_ACK:
+                journal.append(task_id, "daemon", "review_ack", clean_body)
+            elif status == messages.REVIEW_NACK:
+                journal.append(task_id, "daemon", "review_nack", clean_body)
+            elif status == messages.APPROVE_ACK:
+                journal.append(task_id, "daemon", "approve_ack", clean_body)
+            elif status == messages.APPROVE_NACK:
+                journal.append(task_id, "daemon", "approve_nack", clean_body)
             else:
                 journal.append(task_id, "daemon", "receipt_ignored", f"{status}: {body}", "invalid")
         except (TaskNotFoundError, IllegalTransitionError):
