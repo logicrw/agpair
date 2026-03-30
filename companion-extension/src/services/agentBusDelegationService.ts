@@ -236,6 +236,7 @@ export class AgentBusDelegationService {
     status: string,
   ): Promise<void> {
     const tracked = this.tracker.get(taskId);
+    const replyBody = (detail: string) => buildContinuationReplyBody(detail, message.id);
     if (!tracked) {
       this.outputChannel.appendLine(
         `[companion] ${status} for unknown task ${taskId} — sending REVIEW_NACK`,
@@ -243,7 +244,7 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "REVIEW_NACK",
-        body: `Cannot continue: task ${taskId} is not tracked by this extension instance.`,
+        body: replyBody(`Cannot continue: task ${taskId} is not tracked by this extension instance.`),
       });
       return;
     }
@@ -255,7 +256,7 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "REVIEW_NACK",
-        body: `Cannot continue: tracked task ${taskId} has no associated session.`,
+        body: replyBody(`Cannot continue: tracked task ${taskId} has no associated session.`),
       });
       return;
     }
@@ -282,7 +283,7 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "REVIEW_ACK",
-        body: `Successfully sent ${status} prompt into session ${tracked.sessionId}`,
+        body: replyBody(`Successfully sent ${status} prompt into session ${tracked.sessionId}`),
       });
     } catch (err: any) {
       this.outputChannel.appendLine(
@@ -291,7 +292,7 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "REVIEW_NACK",
-        body: `Failed to send ${status} into session ${tracked.sessionId}: ${err.message}`,
+        body: replyBody(`Failed to send ${status} into session ${tracked.sessionId}: ${err.message}`),
       });
     }
   }
@@ -305,6 +306,7 @@ export class AgentBusDelegationService {
     taskId: string,
   ): Promise<void> {
     const tracked = this.tracker.get(taskId);
+    const replyBody = (detail: string) => buildContinuationReplyBody(detail, message.id);
     if (!tracked) {
       this.outputChannel.appendLine(
         `[companion] APPROVED for unknown task ${taskId} — sending APPROVE_NACK`,
@@ -312,7 +314,7 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "APPROVE_NACK",
-        body: `Cannot commit: task ${taskId} is not tracked by this extension instance.`,
+        body: replyBody(`Cannot commit: task ${taskId} is not tracked by this extension instance.`),
       });
       return;
     }
@@ -324,7 +326,7 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "APPROVE_NACK",
-        body: `Cannot commit: tracked task ${taskId} has no associated session.`,
+        body: replyBody(`Cannot commit: tracked task ${taskId} has no associated session.`),
       });
       return;
     }
@@ -350,7 +352,7 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "APPROVE_ACK",
-        body: `Successfully sent APPROVED prompt into session ${tracked.sessionId}`,
+        body: replyBody(`Successfully sent APPROVED prompt into session ${tracked.sessionId}`),
       });
     } catch (err: any) {
       this.outputChannel.appendLine(
@@ -359,7 +361,7 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "APPROVE_NACK",
-        body: `Failed to send APPROVED into session ${tracked.sessionId}: ${err.message}`,
+        body: replyBody(`Failed to send APPROVED into session ${tracked.sessionId}: ${err.message}`),
       });
     }
   }
@@ -430,6 +432,13 @@ export class AgentBusDelegationService {
       });
     });
   }
+}
+
+function buildContinuationReplyBody(detail: string, messageId: number | undefined): string {
+  if (typeof messageId !== "number" || !Number.isInteger(messageId) || messageId <= 0) {
+    return detail;
+  }
+  return `reply_to_message_id=${messageId}\n${detail}`;
 }
 
 function resolveAgentBusCommand(requestedCommand: string): string {

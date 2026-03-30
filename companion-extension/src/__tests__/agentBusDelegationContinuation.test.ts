@@ -32,12 +32,12 @@ function registerPendingTask(tracker: DelegationTaskTracker, taskId: string): vo
   });
 }
 
-describe("AgentBusDelegationService Continutation ACKs", () => {
+describe("AgentBusDelegationService Continuation ACKs", () => {
   it("emits REVIEW_ACK when sendPrompt succeeds for REVIEW", async () => {
     const tracker = new DelegationTaskTracker();
     registerPendingTask(tracker, "TASK-REV-ACK");
 
-    const replies: Array<{ taskId: string; status: string }> = [];
+    const replies: AgentBusDelegationReply[] = [];
     const service = new AgentBusDelegationService({
       enabled: true,
       command: "agent-bus",
@@ -53,7 +53,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
       receiptPollIntervalMs: 60000,
       heartbeatIntervalMs: 60000,
       sendReply: async (reply: AgentBusDelegationReply) => {
-        replies.push({ taskId: reply.taskId, status: reply.status });
+        replies.push(reply);
       },
     });
 
@@ -63,6 +63,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
 
     assert.equal(replies.length, 1);
     assert.equal(replies[0].status, "REVIEW_ACK");
+    assert.match(replies[0].body, /^reply_to_message_id=1\n/);
     service.dispose();
   });
 
@@ -70,7 +71,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
     const tracker = new DelegationTaskTracker();
     registerPendingTask(tracker, "TASK-REV-NACK");
 
-    const replies: Array<{ taskId: string; status: string }> = [];
+    const replies: AgentBusDelegationReply[] = [];
     const service = new AgentBusDelegationService({
       enabled: true,
       command: "agent-bus",
@@ -86,7 +87,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
       receiptPollIntervalMs: 60000,
       heartbeatIntervalMs: 60000,
       sendReply: async (reply: AgentBusDelegationReply) => {
-        replies.push({ taskId: reply.taskId, status: reply.status });
+        replies.push(reply);
       },
     });
 
@@ -96,6 +97,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
 
     assert.equal(replies.length, 1);
     assert.equal(replies[0].status, "REVIEW_NACK");
+    assert.match(replies[0].body, /^reply_to_message_id=2\n/);
     service.dispose();
   });
 
@@ -103,7 +105,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
     const tracker = new DelegationTaskTracker();
     registerPendingTask(tracker, "TASK-APP-ACK");
 
-    const replies: Array<{ taskId: string; status: string }> = [];
+    const replies: AgentBusDelegationReply[] = [];
     const service = new AgentBusDelegationService({
       enabled: true,
       command: "agent-bus",
@@ -119,7 +121,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
       receiptPollIntervalMs: 60000,
       heartbeatIntervalMs: 60000,
       sendReply: async (reply: AgentBusDelegationReply) => {
-        replies.push({ taskId: reply.taskId, status: reply.status });
+        replies.push(reply);
       },
     });
 
@@ -129,6 +131,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
 
     assert.equal(replies.length, 1);
     assert.equal(replies[0].status, "APPROVE_ACK");
+    assert.match(replies[0].body, /^reply_to_message_id=3\n/);
     service.dispose();
   });
 
@@ -136,7 +139,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
     const tracker = new DelegationTaskTracker();
     registerPendingTask(tracker, "TASK-APP-NACK");
 
-    const replies: Array<{ taskId: string; status: string }> = [];
+    const replies: AgentBusDelegationReply[] = [];
     const service = new AgentBusDelegationService({
       enabled: true,
       command: "agent-bus",
@@ -152,7 +155,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
       receiptPollIntervalMs: 60000,
       heartbeatIntervalMs: 60000,
       sendReply: async (reply: AgentBusDelegationReply) => {
-        replies.push({ taskId: reply.taskId, status: reply.status });
+        replies.push(reply);
       },
     });
 
@@ -162,6 +165,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
 
     assert.equal(replies.length, 1);
     assert.equal(replies[0].status, "APPROVE_NACK");
+    assert.match(replies[0].body, /^reply_to_message_id=4\n/);
     service.dispose();
   });
 
