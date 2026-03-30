@@ -20,6 +20,12 @@ def seed_acked_task(tmp_path: Path, task_id: str = "TASK-1") -> TaskRepository:
     return repo
 
 
+def seed_evidence_ready_task(tmp_path: Path, task_id: str = "TASK-1") -> TaskRepository:
+    repo = seed_acked_task(tmp_path, task_id)
+    repo.mark_evidence_ready(task_id=task_id, last_receipt_id="101")
+    return repo
+
+
 def test_task_continue_sends_review_for_existing_session(tmp_path: Path, monkeypatch) -> None:
     binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
@@ -27,6 +33,39 @@ def test_task_continue_sends_review_for_existing_session(tmp_path: Path, monkeyp
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
     seed_acked_task(tmp_path)
+    
+    pull_path.write_text(json.dumps({
+        "messages": [
+            {"id": 102, "task_id": "TASK-1", "status": "REVIEW_ACK", "body": "OK"}
+        ]
+    }))
+
+    result = CliRunner().invoke(app, ["task", "continue", "TASK-1", "--body", "Please fix edge case", "--no-wait"])
+
+    assert result.exit_code == 0
+    recorded = read_calls(calls_path)
+    # The last call is the 'pull' from ingest_new_receipts.
+    # We look for the 'send' call before it.
+    sent_calls = [c for c in recorded if c["argv"][1] == "send"]
+    assert sent_calls[-1]["argv"][:8] == [
+        "agent-bus",
+        "send",
+        "--sender",
+        "desktop",
+        "--task-id",
+        "TASK-1",
+        "--status",
+        "REVIEW",
+    ]
+
+
+def test_task_continue_sends_review_for_evidence_ready_task(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    seed_evidence_ready_task(tmp_path)
     
     pull_path.write_text(json.dumps({
         "messages": [
@@ -116,6 +155,37 @@ def test_task_approve_sends_approved(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
     seed_acked_task(tmp_path)
+
+    pull_path.write_text(json.dumps({
+        "messages": [
+            {"id": 102, "task_id": "TASK-1", "status": "APPROVE_ACK", "body": "OK"}
+        ]
+    }))
+
+    result = CliRunner().invoke(app, ["task", "approve", "TASK-1", "--body", "Looks good", "--no-wait"])
+
+    assert result.exit_code == 0
+    recorded = read_calls(calls_path)
+    sent_calls = [c for c in recorded if c["argv"][1] == "send"]
+    assert sent_calls[-1]["argv"][:8] == [
+        "agent-bus",
+        "send",
+        "--sender",
+        "desktop",
+        "--task-id",
+        "TASK-1",
+        "--status",
+        "APPROVED",
+    ]
+
+
+def test_task_approve_sends_approved_for_evidence_ready_task(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    seed_evidence_ready_task(tmp_path)
 
     pull_path.write_text(json.dumps({
         "messages": [
