@@ -157,10 +157,11 @@ def _task_payload(paths: AppPaths, task) -> dict:
     terminal_receipt = _latest_terminal_receipt(paths, task.task_id) if task.phase in TERMINAL_PHASES else None
     committed_result = _committed_result_payload(terminal_receipt)
     failure_context = _failure_context_payload(task, terminal_receipt)
+    blocker_type = failure_context["blocker_type"] if failure_context else None
     return {
         "task_id": task.task_id,
         "phase": task.phase,
-        "a2a_state_hint": a2a_state_hint_from_phase(task.phase),
+        "a2a_state_hint": a2a_state_hint_from_phase(task.phase, blocker_type=blocker_type),
         "repo_path": task.repo_path,
         "session_id": task.antigravity_session_id,
         "attempt_no": task.attempt_no,
@@ -640,18 +641,20 @@ def wait_task(
     current_task = tasks.get_task(task_id)
     if json_output:
         task_payload = _task_payload(paths, current_task) if current_task is not None else None
+        failure_context = task_payload["failure_context"] if task_payload is not None else None
+        blocker_type = failure_context["blocker_type"] if failure_context else None
         _emit_json(
             {
                 "ok": code == 0,
                 "task_id": task_id,
                 "phase": result.phase,
-                "a2a_state_hint": a2a_state_hint_from_phase(result.phase),
+                "a2a_state_hint": a2a_state_hint_from_phase(result.phase, blocker_type=blocker_type),
                 "timed_out": result.timed_out,
                 "watchdog_triggered": result.watchdog_triggered,
                 "exit_code": code,
                 "task": task_payload,
                 "committed_result": task_payload["committed_result"] if task_payload is not None else None,
-                "failure_context": task_payload["failure_context"] if task_payload is not None else None,
+                "failure_context": failure_context,
             }
         )
         if code != 0:

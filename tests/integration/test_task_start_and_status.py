@@ -441,6 +441,40 @@ def test_task_status_json_includes_failure_context_for_structured_blocked_receip
     assert payload["failure_context"]["details"]["message"] == "Missing credential"
 
 
+def test_task_status_json_maps_auth_blocker_to_auth_required(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-JSON-AUTH", repo_path="/tmp/repo")
+    repo.mark_acked(task_id="TASK-JSON-AUTH", session_id="session-json-auth")
+    repo.mark_blocked(task_id="TASK-JSON-AUTH", reason="Browser requested human solve")
+    journal = make_journal_repo(tmp_path)
+    journal.append(
+        "TASK-JSON-AUTH",
+        "daemon",
+        "blocked",
+        json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "TASK-JSON-AUTH",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "BLOCKED",
+                "summary": "Need human auth",
+                "payload": {
+                    "blocker_type": "auth",
+                },
+            }
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-JSON-AUTH", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["failure_context"]["blocker_type"] == "auth"
+    assert payload["a2a_state_hint"] == "auth-required"
+
+
 def test_task_status_json_ignores_malformed_structured_receipt(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = make_task_repo(tmp_path)

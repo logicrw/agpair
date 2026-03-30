@@ -54,8 +54,10 @@ def utcnow_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def a2a_state_hint_from_phase(phase: str) -> str:
+def a2a_state_hint_from_phase(phase: str, blocker_type: str | None = None) -> str:
     """Map an agpair phase to the closest A2A TaskState hint."""
+    if phase == "blocked" and blocker_type == "auth":
+        return "auth-required"
     mapping = {
         "new": "submitted",
         "acked": "working",

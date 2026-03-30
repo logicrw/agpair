@@ -420,6 +420,40 @@ def test_task_wait_json_includes_failure_context_for_stuck_task(tmp_path: Path, 
     assert payload["failure_context"]["last_error_excerpt"] == "no progress before timeout"
 
 
+def test_task_wait_json_maps_auth_blocker_to_auth_required(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WJ-AUTH", repo_path="/r")
+    repo.mark_acked(task_id="T-WJ-AUTH", session_id="session-json-wait-auth")
+    repo.mark_blocked(task_id="T-WJ-AUTH", reason="Browser requested human solve")
+    JournalRepository(_make_paths(tmp_path).db_path).append(
+        "T-WJ-AUTH",
+        "daemon",
+        "blocked",
+        json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "T-WJ-AUTH",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "BLOCKED",
+                "summary": "Need human auth",
+                "payload": {
+                    "blocker_type": "auth",
+                },
+            }
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["task", "wait", "T-WJ-AUTH", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["phase"] == "blocked"
+    assert payload["a2a_state_hint"] == "auth-required"
+    assert payload["failure_context"]["blocker_type"] == "auth"
+
+
 def test_task_wait_exits_1_on_blocked(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = _make_repo(tmp_path)
