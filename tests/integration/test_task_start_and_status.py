@@ -2,12 +2,13 @@ from pathlib import Path
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import sqlite3
 import threading
 from typer.testing import CliRunner
 
 from agpair.cli.app import app
 from agpair.config import AppPaths
-from agpair.storage.db import ensure_database
+from agpair.storage.db import connect, ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.receipts import ReceiptRepository
 from agpair.storage.tasks import TaskNotFoundError, TaskRepository
@@ -104,6 +105,67 @@ def test_ensure_database_creates_sqlite_schema(tmp_path: Path) -> None:
     paths = make_paths(tmp_path)
     ensure_database(paths.db_path)
     assert paths.db_path.exists()
+
+
+def test_ensure_database_enables_wal_and_connect_sets_busy_timeout(tmp_path: Path) -> None:
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+
+    with sqlite3.connect(paths.db_path) as conn:
+        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    assert str(journal_mode).lower() == "wal"
+
+    with connect(paths.db_path) as conn:
+        busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    assert busy_timeout == 5000
+
+
+def test_ensure_database_migrates_existing_db_to_wal(tmp_path: Path) -> None:
+    db_path = tmp_path / "existing.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS tasks (
+              task_id TEXT PRIMARY KEY,
+              repo_path TEXT NOT NULL,
+              phase TEXT NOT NULL,
+              antigravity_session_id TEXT,
+              attempt_no INTEGER NOT NULL DEFAULT 1,
+              retry_count INTEGER NOT NULL DEFAULT 0,
+              last_receipt_id TEXT,
+              stuck_reason TEXT,
+              retry_recommended INTEGER NOT NULL DEFAULT 0,
+              last_activity_at TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS receipts (
+              message_id TEXT PRIMARY KEY,
+              task_id TEXT NOT NULL,
+              status TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS journal (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              task_id TEXT NOT NULL,
+              source TEXT NOT NULL,
+              event TEXT NOT NULL,
+              body TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS daemon_health (
+              name TEXT PRIMARY KEY,
+              updated_at TEXT NOT NULL,
+              body TEXT NOT NULL
+            );
+        """)
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.commit()
+
+    ensure_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    assert str(journal_mode).lower() == "wal"
 
 
 def test_task_repository_persists_session_mapping(tmp_path: Path) -> None:

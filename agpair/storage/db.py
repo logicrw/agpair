@@ -6,6 +6,7 @@ import sqlite3
 
 
 SCHEMA_SQL = (Path(__file__).with_name("schema.sql")).read_text(encoding="utf-8")
+DEFAULT_BUSY_TIMEOUT_MS = 5000
 
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
@@ -71,12 +72,19 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
+def _configure_connection(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA busy_timeout={DEFAULT_BUSY_TIMEOUT_MS}")
+
+
 def ensure_database(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.executescript(SCHEMA_SQL)
         conn.commit()
         _migrate_schema(conn)
+        _configure_connection(conn)
+        conn.commit()
     _initialized.add(db_path)
 
 
@@ -90,6 +98,7 @@ def connect(db_path: Path):
         _initialized.add(db_path)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    _configure_connection(conn)
     try:
         yield conn
     finally:
