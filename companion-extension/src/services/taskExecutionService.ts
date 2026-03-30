@@ -460,32 +460,45 @@ export class TaskExecutionService {
     req: RunTaskRequest | ContinueTaskRequest,
     outputFile: string,
   ): string {
-    const receipt = JSON.stringify({
-      status: "<YOUR_STATUS>",
+    const receiptObj = {
+      schema_version: "1",
       task_id: req.task_id,
       attempt_no: req.attempt_no,
       review_round: req.review_round,
+      status: "<YOUR_STATUS>",
       summary: "<YOUR_SUMMARY>",
-    });
+      payload: {
+        "__instruction": "Replace this object with the status-specific payload. See prompt for schema."
+      }
+    };
+    const receiptTemplate = JSON.stringify(receiptObj, null, 2);
 
     let preferred = "";
     if (this.bridgeCtx) {
       const url = `http://127.0.0.1:${this.bridgeCtx.port}/write_receipt`;
-      preferred = `PREFERRED: POST JSON to ${url} with body: ${receipt}`;
+      preferred = `PREFERRED: POST JSON to ${url} with body:\n${receiptTemplate}\n`;
       if (this.bridgeCtx.authToken) {
-        preferred += `\nInclude header: Authorization: Bearer ${this.bridgeCtx.authToken}`;
+        preferred += `Include header: Authorization: Bearer ${this.bridgeCtx.authToken}\n`;
       }
       preferred += "\n";
     }
 
+    const payloadInstructions = [
+      `The "payload" field MUST be a JSON object containing status-specific data:`,
+      ` - For COMMITTED: {"commit_sha": "...", "branch": "...", "diff_stat": "...", "changed_files": ["..."], "validation": "...", "residual_risks": "..."}`,
+      ` - For BLOCKED: {"blocker_type": "...", "message": "...", "recoverable": true|false, "suggested_action": "...", "last_error_excerpt": "..."}`,
+      ` - For EVIDENCE_PACK: {"diff_stat": "...", "changed_files": ["..."], "validation": "...", "residual_risks": "..."}`
+    ].join("\n");
+
     return prompt +
-      `\n\nAFTER completing your task, submit your result receipt. ` +
+      `\n\nAFTER completing your task, submit your structured v1 result receipt. ` +
       `Replace <YOUR_STATUS> with one of: EVIDENCE_PACK, BLOCKED, COMMITTED. ` +
-      `Replace <YOUR_SUMMARY> with a brief description.\n` +
+      `Replace <YOUR_SUMMARY> with a brief description.\n\n` +
+      `${payloadInstructions}\n\n` +
       preferred +
       `FALLBACK: If the bridge is unavailable, create the file ${outputFile} ` +
       `containing the same JSON object.\n` +
-      `Template: ${receipt}`;
+      `Template:\n${receiptTemplate}`;
   }
 
   /**

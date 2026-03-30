@@ -199,6 +199,39 @@ def test_task_status_json_returns_structured_payload(tmp_path: Path, monkeypatch
     assert payload["liveness_state"] in {"active_via_heartbeat", "silent", "active_via_workspace"}
 
 
+def test_task_status_json_includes_structured_terminal_receipt(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-JSON-TERM", repo_path="/tmp/repo")
+    repo.mark_acked(task_id="TASK-JSON-TERM", session_id="session-json-term")
+    repo.mark_committed(task_id="TASK-JSON-TERM")
+    journal = make_journal_repo(tmp_path)
+    journal.append(
+        "TASK-JSON-TERM",
+        "daemon",
+        "committed",
+        json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "TASK-JSON-TERM",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "COMMITTED",
+                "summary": "Committed cleanly",
+                "payload": {"commit_sha": "abc1234", "branch": "main"},
+            }
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-JSON-TERM", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["terminal_receipt"]["schema_version"] == "1"
+    assert payload["terminal_receipt"]["summary"] == "Committed cleanly"
+    assert payload["terminal_receipt"]["payload"]["commit_sha"] == "abc1234"
+
+
 def test_task_status_json_returns_not_found_error(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
 
@@ -246,6 +279,36 @@ def test_task_logs_json_returns_structured_rows(tmp_path: Path, monkeypatch) -> 
     assert payload["logs"][0]["source"] == "daemon"
     assert payload["logs"][1]["event"] == "created"
     assert payload["logs"][1]["classification"] == "normal"
+
+
+def test_task_logs_json_includes_structured_receipt_payload(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-LOGS-STRUCT", repo_path="/tmp/repo")
+    journal = make_journal_repo(tmp_path)
+    journal.append(
+        "TASK-LOGS-STRUCT",
+        "daemon",
+        "blocked",
+        json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "TASK-LOGS-STRUCT",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "BLOCKED",
+                "summary": "Need a credential",
+                "payload": {"blocker_type": "auth", "recoverable": True},
+            }
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["task", "logs", "TASK-LOGS-STRUCT", "--limit", "1", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["logs"][0]["structured_receipt"]["summary"] == "Need a credential"
+    assert payload["logs"][0]["structured_receipt"]["payload"]["blocker_type"] == "auth"
 
 
 def test_task_logs_json_returns_not_found_error(tmp_path: Path, monkeypatch) -> None:

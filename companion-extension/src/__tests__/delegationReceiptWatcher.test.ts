@@ -21,6 +21,10 @@ afterEach(() => {
   }
 });
 
+function parseTransportBody(wireBody: string): any {
+  return JSON.parse(wireBody.replace(/^X-Delivery-Id:\s*\S+\n/, ""));
+}
+
 describe("DelegationReceiptWatcher", () => {
   it("detects a receipt file and sends terminal status", async () => {
     const dir = makeTempDir();
@@ -570,6 +574,228 @@ describe("DelegationReceiptWatcher", () => {
 
     await watcher.poll();
     assert.equal(sent.length, 1, "should NOT send duplicate COMMITTED");
+
+    watcher.dispose();
+  });
+
+  it("detects a v1 EVIDENCE_PACK receipt", async () => {
+    const dir = makeTempDir();
+    const tracker = new DelegationTaskTracker();
+    const sent: Array<{ taskId: string; status: string; body: string }> = [];
+
+    const watcher = new DelegationReceiptWatcher({
+      tracker,
+      receiptDir: dir,
+      pollIntervalMs: 60000,
+      outputChannel: { appendLine: () => undefined },
+      sendTerminal: async (taskId, status, body) => {
+        sent.push({ taskId, status, body });
+      },
+    });
+
+    const receiptPath = DelegationReceiptWatcher.receiptPath(dir, "TASK-V1-EP");
+    tracker.register({
+      taskId: "TASK-V1-EP",
+      sessionId: "sess-v1-ep",
+      repoPath: "/tmp/repo",
+      receiptPath,
+      status: "ACKED",
+      ackedAt: new Date().toISOString(),
+      terminalSentAt: null,
+      terminalStatus: null,
+      terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
+    });
+
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({
+        schema_version: "1",
+        task_id: "TASK-V1-EP",
+        attempt_no: 1,
+        review_round: 0,
+        status: "EVIDENCE_PACK",
+        summary: "Done v1",
+        payload: { diff_stat: "+10 -5", validation: "passed" }
+      }),
+      "utf-8",
+    );
+
+    await watcher.poll();
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].taskId, "TASK-V1-EP");
+    assert.equal(sent[0].status, "EVIDENCE_PACK");
+
+    const parsedBody = parseTransportBody(sent[0].body);
+    assert.equal(parsedBody.schema_version, "1");
+    assert.equal(parsedBody.task_id, "TASK-V1-EP");
+    assert.equal(parsedBody.payload.diff_stat, "+10 -5");
+
+    watcher.dispose();
+  });
+
+  it("detects a v1 BLOCKED receipt", async () => {
+    const dir = makeTempDir();
+    const tracker = new DelegationTaskTracker();
+    const sent: Array<{ taskId: string; status: string; body: string }> = [];
+
+    const watcher = new DelegationReceiptWatcher({
+      tracker,
+      receiptDir: dir,
+      pollIntervalMs: 60000,
+      outputChannel: { appendLine: () => undefined },
+      sendTerminal: async (taskId, status, body) => {
+        sent.push({ taskId, status, body });
+      },
+    });
+
+    const receiptPath = DelegationReceiptWatcher.receiptPath(dir, "TASK-V1-BLK");
+    tracker.register({
+      taskId: "TASK-V1-BLK",
+      sessionId: "sess-v1-blk",
+      repoPath: "/tmp/repo",
+      receiptPath,
+      status: "ACKED",
+      ackedAt: new Date().toISOString(),
+      terminalSentAt: null,
+      terminalStatus: null,
+      terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
+    });
+
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({
+        schema_version: "1",
+        task_id: "TASK-V1-BLK",
+        attempt_no: 1,
+        review_round: 0,
+        status: "BLOCKED",
+        summary: "Blocked v1",
+        payload: { message: "Cannot access network" }
+      }),
+      "utf-8",
+    );
+
+    await watcher.poll();
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].taskId, "TASK-V1-BLK");
+    assert.equal(sent[0].status, "BLOCKED");
+
+    const parsedBody = parseTransportBody(sent[0].body);
+    assert.equal(parsedBody.payload.message, "Cannot access network");
+
+    watcher.dispose();
+  });
+
+  it("detects a v1 COMMITTED receipt", async () => {
+    const dir = makeTempDir();
+    const tracker = new DelegationTaskTracker();
+    const sent: Array<{ taskId: string; status: string; body: string }> = [];
+
+    const watcher = new DelegationReceiptWatcher({
+      tracker,
+      receiptDir: dir,
+      pollIntervalMs: 60000,
+      outputChannel: { appendLine: () => undefined },
+      sendTerminal: async (taskId, status, body) => {
+        sent.push({ taskId, status, body });
+      },
+    });
+
+    const receiptPath = DelegationReceiptWatcher.receiptPath(dir, "TASK-V1-COM");
+    tracker.register({
+      taskId: "TASK-V1-COM",
+      sessionId: "sess-v1-com",
+      repoPath: "/tmp/repo",
+      receiptPath,
+      status: "ACKED",
+      ackedAt: new Date().toISOString(),
+      terminalSentAt: null,
+      terminalStatus: null,
+      terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
+    });
+
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({
+        schema_version: "1",
+        task_id: "TASK-V1-COM",
+        attempt_no: 1,
+        review_round: 0,
+        status: "COMMITTED",
+        summary: "Committed v1",
+        payload: { commit_sha: "abc1234" }
+      }),
+      "utf-8",
+    );
+
+    await watcher.poll();
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].taskId, "TASK-V1-COM");
+    assert.equal(sent[0].status, "COMMITTED");
+
+    const parsedBody = parseTransportBody(sent[0].body);
+    assert.equal(parsedBody.payload.commit_sha, "abc1234");
+
+    watcher.dispose();
+  });
+
+  it("rejects a malformed v1 receipt", async () => {
+    const dir = makeTempDir();
+    const tracker = new DelegationTaskTracker();
+    const sent: Array<{ taskId: string; status: string; body: string }> = [];
+
+    const watcher = new DelegationReceiptWatcher({
+      tracker,
+      receiptDir: dir,
+      pollIntervalMs: 60000,
+      outputChannel: { appendLine: () => undefined },
+      sendTerminal: async (taskId, status, body) => {
+        sent.push({ taskId, status, body });
+      },
+    });
+
+    const receiptPath = DelegationReceiptWatcher.receiptPath(dir, "TASK-V1-MAL");
+    tracker.register({
+      taskId: "TASK-V1-MAL",
+      sessionId: "sess-v1-mal",
+      repoPath: "/tmp/repo",
+      receiptPath,
+      status: "ACKED",
+      ackedAt: new Date().toISOString(),
+      terminalSentAt: null,
+      terminalStatus: null,
+      terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
+    });
+
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({
+        schema_version: "1",
+        task_id: "TASK-V1-MAL",
+        // missing attempt_no, review_round, summary, payload 
+        status: "COMMITTED",
+      }),
+      "utf-8",
+    );
+
+    await watcher.poll();
+
+    assert.equal(sent.length, 0, "Should reject malformed v1 receipt");
 
     watcher.dispose();
   });

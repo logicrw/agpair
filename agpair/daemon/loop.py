@@ -9,6 +9,7 @@ import time
 
 from agpair.config import AppPaths
 from agpair.models import utcnow_iso
+from agpair.terminal_receipts import blocked_reason_from_receipt, parse_structured_terminal_receipt
 from agpair.storage.db import connect, ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.receipts import ReceiptRepository
@@ -144,6 +145,14 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
         parsed = parse_delivery_header(status, body)
         delivery_id = parsed.delivery_id
         clean_body = parsed.clean_body
+        structured_receipt = None
+        if status in {messages.EVIDENCE_PACK, messages.BLOCKED, messages.COMMITTED}:
+            structured_receipt = parse_structured_terminal_receipt(
+                clean_body,
+                expected_status=status,
+                expected_task_id=task_id,
+            )
+        journal_body = structured_receipt.raw_body if structured_receipt is not None else clean_body
 
         is_new = receipts.record(message_id, task_id, status, delivery_id=delivery_id)
         if not is_new:
@@ -167,13 +176,16 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 journal.append(task_id, "daemon", "heartbeat", body or "RUNNING")
             elif status == messages.EVIDENCE_PACK:
                 tasks.mark_evidence_ready(task_id=task_id, last_receipt_id=message_id)
-                journal.append(task_id, "daemon", "evidence_ready", clean_body)
+                journal.append(task_id, "daemon", "evidence_ready", journal_body)
             elif status == messages.BLOCKED:
-                tasks.mark_blocked(task_id=task_id, reason=clean_body or "blocked")
-                journal.append(task_id, "daemon", "blocked", clean_body)
+                reason = clean_body or "blocked"
+                if structured_receipt is not None:
+                    reason = blocked_reason_from_receipt(structured_receipt, reason)
+                tasks.mark_blocked(task_id=task_id, reason=reason)
+                journal.append(task_id, "daemon", "blocked", journal_body)
             elif status == messages.COMMITTED:
                 tasks.mark_committed(task_id=task_id, last_receipt_id=message_id)
-                journal.append(task_id, "daemon", "committed", clean_body)
+                journal.append(task_id, "daemon", "committed", journal_body)
             else:
                 journal.append(task_id, "daemon", "receipt_ignored", f"{status}: {body}", "invalid")
         except (TaskNotFoundError, IllegalTransitionError):

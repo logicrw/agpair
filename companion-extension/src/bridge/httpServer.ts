@@ -21,6 +21,7 @@ import * as crypto from "crypto";
 import { TaskSessionStore } from "../state/taskSessionStore";
 import { PendingEventStore, PendingEvent } from "../state/pendingEventStore";
 import type { DelegationTaskTracker } from "../state/delegationTaskTracker";
+import { canonicalizeReceiptV1, isTerminalReceiptStatus } from "../protocols/receipt";
 import { TaskExecutionService } from "../services/taskExecutionService";
 import { HealthService } from "../services/healthService";
 import { MonitorController } from "../sdk/monitorController";
@@ -235,8 +236,13 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
 
       } else if (method === "POST" && path === "/write_receipt") {
         const body = JSON.parse(await readBody(req));
-        if (!body.task_id || body.attempt_no === undefined || body.review_round === undefined ||
-            !body.status || !body.summary) {
+        if (
+          !body.task_id ||
+          typeof body.attempt_no !== "number" ||
+          typeof body.review_round !== "number" ||
+          typeof body.status !== "string" ||
+          typeof body.summary !== "string"
+        ) {
           sendJson(res, 400, {
             ok: false,
             message: "task_id, attempt_no, review_round, status, and summary are required",
@@ -253,7 +259,7 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
           );
           effectiveStatus = "BLOCKED";
         }
-        if (!validStatuses.includes(effectiveStatus)) {
+        if (!isTerminalReceiptStatus(effectiveStatus) || !validStatuses.includes(effectiveStatus)) {
           sendJson(res, 400, {
             ok: false,
             message: `status must be one of: ${validStatuses.join(", ")}`,
@@ -261,6 +267,23 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
           return;
         }
         body.status = effectiveStatus;
+        const wantsStructuredV1 = body.schema_version === "1" || body.payload !== undefined;
+        if (wantsStructuredV1) {
+          if (body.schema_version !== "1") {
+            sendJson(res, 400, {
+              ok: false,
+              message: 'schema_version must be "1" when payload is provided',
+            });
+            return;
+          }
+          if (typeof body.payload !== "object" || body.payload === null) {
+            sendJson(res, 400, {
+              ok: false,
+              message: "payload must be a JSON object for schema_version=1 receipts",
+            });
+            return;
+          }
+        }
         // Validate task_id
         const idErr = TaskExecutionService.validateTaskId(body.task_id);
         if (idErr) {
@@ -284,13 +307,23 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
           const fs = require("fs");
           MonitorController.ensureReceiptDir(repoPath);
           const rawText = makeStructuredReceiptText(body);
-          const receipt = JSON.stringify({
-            status: body.status,
-            task_id: body.task_id,
-            attempt_no: body.attempt_no,
-            review_round: body.review_round,
-            summary: body.summary,
-          });
+          const receipt = wantsStructuredV1
+            ? canonicalizeReceiptV1({
+                schema_version: "1",
+                task_id: body.task_id,
+                attempt_no: body.attempt_no,
+                review_round: body.review_round,
+                status: body.status,
+                summary: body.summary,
+                payload: body.payload,
+              })
+            : JSON.stringify({
+                status: body.status,
+                task_id: body.task_id,
+                attempt_no: body.attempt_no,
+                review_round: body.review_round,
+                summary: body.summary,
+              });
           fs.writeFileSync(receiptPath, receipt, "utf-8");
 
           // Emit the terminal event immediately so supervisor polling does not
@@ -309,6 +342,17 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
             payload: {
               summary: body.summary,
               raw_text: rawText,
+              structured_receipt: wantsStructuredV1
+                ? {
+                    schema_version: "1",
+                    task_id: body.task_id,
+                    attempt_no: body.attempt_no,
+                    review_round: body.review_round,
+                    status: body.status,
+                    summary: body.summary,
+                    payload: body.payload,
+                  }
+                : undefined,
               step_count: sess.last_step_count || 0,
             },
             emitted_at: now,

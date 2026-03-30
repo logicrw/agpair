@@ -23,6 +23,7 @@ from agpair.cli.wait import (
 )
 from agpair.config import AppPaths
 from agpair.storage.db import ensure_database
+from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
 from tests.fixtures.fake_agent_bus import write_fake_agent_bus
 
@@ -275,6 +276,22 @@ def test_task_wait_json_returns_structured_terminal_payload(tmp_path: Path, monk
     repo.create_task(task_id="T-WJ1", repo_path="/r")
     repo.mark_acked(task_id="T-WJ1", session_id="session-json-wait")
     repo.mark_committed(task_id="T-WJ1")
+    JournalRepository(_make_paths(tmp_path).db_path).append(
+        "T-WJ1",
+        "daemon",
+        "committed",
+        json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "T-WJ1",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "COMMITTED",
+                "summary": "Committed cleanly",
+                "payload": {"commit_sha": "abc1234"},
+            }
+        ),
+    )
 
     result = CliRunner().invoke(app, ["task", "wait", "T-WJ1", "--json"])
 
@@ -288,6 +305,8 @@ def test_task_wait_json_returns_structured_terminal_payload(tmp_path: Path, monk
     assert payload["exit_code"] == 0
     assert payload["task"]["task_id"] == "T-WJ1"
     assert payload["task"]["phase"] == "committed"
+    assert payload["task"]["terminal_receipt"]["summary"] == "Committed cleanly"
+    assert payload["task"]["terminal_receipt"]["payload"]["commit_sha"] == "abc1234"
 
 
 def test_task_wait_json_returns_not_found_error(tmp_path: Path, monkeypatch):

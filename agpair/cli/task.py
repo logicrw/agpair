@@ -22,6 +22,7 @@ from agpair.cli.wait import (
 )
 from agpair.config import AppPaths
 from agpair.runtime_liveness import LivenessState, classify_liveness, is_task_live
+from agpair.terminal_receipts import parse_structured_terminal_receipt, structured_receipt_to_dict
 from agpair.storage.db import ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskNotFoundError, TaskRepository
@@ -63,10 +64,29 @@ def _waiter_payload(waiter) -> dict | None:
     }
 
 
+def _structured_receipt_payload(body: str) -> dict | None:
+    receipt = parse_structured_terminal_receipt(body)
+    if receipt is None:
+        return None
+    return structured_receipt_to_dict(receipt)
+
+
+def _latest_terminal_receipt(paths: AppPaths, task_id: str) -> dict | None:
+    journal = JournalRepository(paths.db_path)
+    for row in journal.tail(task_id, limit=20):
+        if row.event not in {"evidence_ready", "blocked", "committed"}:
+            continue
+        parsed = _structured_receipt_payload(row.body)
+        if parsed is not None:
+            return parsed
+    return None
+
+
 def _task_payload(paths: AppPaths, task) -> dict:
     liveness = classify_liveness(task) if task.phase == "acked" else None
     waiters = WaiterRepository(paths.db_path)
     waiter = waiters.get_active_waiter(task.task_id)
+    terminal_receipt = _latest_terminal_receipt(paths, task.task_id) if task.phase in TERMINAL_PHASES else None
     return {
         "task_id": task.task_id,
         "phase": task.phase,
@@ -80,6 +100,7 @@ def _task_payload(paths: AppPaths, task) -> dict:
         "last_workspace_activity_at": task.last_workspace_activity_at,
         "liveness_state": liveness.value if liveness is not None else None,
         "waiter": _waiter_payload(waiter),
+        "terminal_receipt": terminal_receipt,
     }
 
 
@@ -89,6 +110,7 @@ def _journal_row_payload(row) -> dict:
         "source": row.source,
         "event": row.event,
         "body": row.body,
+        "structured_receipt": _structured_receipt_payload(row.body),
         "classification": row.classification,
     }
 
@@ -303,6 +325,15 @@ def task_status(
     typer.echo(f"last_workspace_activity_at: {payload['last_workspace_activity_at']}")
     if payload["liveness_state"] is not None:
         typer.echo(f"liveness_state: {payload['liveness_state']}")
+    terminal_receipt = payload["terminal_receipt"]
+    if terminal_receipt is not None:
+        typer.echo(f"terminal_receipt_schema_version: {terminal_receipt['schema_version']}")
+        typer.echo(f"terminal_receipt_status: {terminal_receipt['status']}")
+        typer.echo(f"terminal_receipt_summary: {terminal_receipt['summary']}")
+        typer.echo(
+            "terminal_receipt_payload: "
+            + json.dumps(terminal_receipt["payload"], ensure_ascii=False, sort_keys=True)
+        )
     waiter = payload["waiter"]
     if waiter:
         typer.echo(f"waiter_state: {waiter['state']}")
@@ -381,7 +412,15 @@ def task_logs(
         )
         return
     for row in rows:
-        typer.echo(f"{row.created_at} [{row.source}] {row.event}: {row.body}")
+        structured_receipt = _structured_receipt_payload(row.body)
+        if structured_receipt is None:
+            typer.echo(f"{row.created_at} [{row.source}] {row.event}: {row.body}")
+            continue
+        typer.echo(f"{row.created_at} [{row.source}] {row.event}: {structured_receipt['summary']}")
+        typer.echo(
+            "  payload: "
+            + json.dumps(structured_receipt["payload"], ensure_ascii=False, sort_keys=True)
+        )
 
 
 @app.command("abandon")

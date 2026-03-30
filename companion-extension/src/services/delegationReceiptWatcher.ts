@@ -21,14 +21,9 @@
 import * as fs from "fs";
 import * as path from "path";
 
+import { parseDelegationReceipt, type DelegationReceipt } from "../protocols/receipt";
 import type { DelegationTaskTracker } from "../state/delegationTaskTracker";
 import type { SessionController } from "../sdk/sessionController";
-
-export interface DelegationReceipt {
-  task_id: string;
-  status: "EVIDENCE_PACK" | "BLOCKED" | "COMMITTED";
-  body: string;
-}
 
 export interface DelegationReceiptWatcherOptions {
   tracker: DelegationTaskTracker;
@@ -182,22 +177,7 @@ export class DelegationReceiptWatcher {
     raw: string,
     expectedTaskId: string,
   ): DelegationReceipt | null {
-    try {
-      const parsed = JSON.parse(raw);
-      const taskId = parsed.task_id;
-      const status = parsed.status;
-      const body = typeof parsed.body === "string" ? parsed.body : "";
-
-      if (typeof taskId !== "string" || taskId !== expectedTaskId) {
-        return null;
-      }
-      if (status !== "EVIDENCE_PACK" && status !== "BLOCKED" && status !== "COMMITTED") {
-        return null;
-      }
-      return { task_id: taskId, status, body };
-    } catch {
-      return null;
-    }
+    return parseDelegationReceipt(raw, expectedTaskId);
   }
 
   private ensureDir(): void {

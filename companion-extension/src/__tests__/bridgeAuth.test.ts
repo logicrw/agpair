@@ -379,6 +379,14 @@ describe("/write_receipt prompt wiring", () => {
       result.includes("http://127.0.0.1:9999/write_receipt"),
       "Prompt should include the bridge URL",
     );
+    assert.ok(
+      result.includes('"schema_version": "1"'),
+      "Prompt should instruct schema_version=1",
+    );
+    assert.ok(
+      result.includes('"payload"'),
+      "Prompt should mention the payload field",
+    );
   });
 
   it("appendReceiptInstruction omits Authorization header when token is empty", () => {

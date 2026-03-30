@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+import json
 
 from agpair.config import AppPaths
+from agpair.terminal_receipts import StructuredTerminalReceipt, blocked_reason_from_receipt
 from agpair.storage.db import ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
@@ -110,3 +112,123 @@ def test_daemon_accepts_colon_space_session_id_format(tmp_path: Path) -> None:
     assert task is not None
     assert task.phase == "acked"
     assert task.antigravity_session_id == "session-456"
+
+
+def test_daemon_ingests_structured_blocked_receipt_uses_summary_for_reason(tmp_path: Path) -> None:
+    from agpair.daemon.loop import run_once
+
+    paths = seed_task(tmp_path)
+    repo = TaskRepository(paths.db_path)
+    repo.mark_acked(task_id="TASK-1", session_id="session-123")
+    structured_body = json.dumps(
+        {
+            "schema_version": "1",
+            "task_id": "TASK-1",
+            "attempt_no": 1,
+            "review_round": 0,
+            "status": "BLOCKED",
+            "summary": "Need a human credential",
+            "payload": {
+                "blocker_type": "auth",
+                "message": "Missing credential",
+                "recoverable": True,
+                "suggested_action": "Provide token",
+                "last_error_excerpt": "401 unauthorized",
+            },
+        }
+    )
+    bus = FakePullBus(
+        [
+            {
+                "id": 4,
+                "task_id": "TASK-1",
+                "status": "BLOCKED",
+                "body": structured_body,
+            }
+        ]
+    )
+
+    run_once(paths, now=datetime(2026, 3, 21, 12, 3, tzinfo=UTC), bus=bus)
+
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.phase == "blocked"
+    assert task.stuck_reason == "Need a human credential"
+    rows = JournalRepository(paths.db_path).tail("TASK-1", limit=1)
+    assert json.loads(rows[0].body)["schema_version"] == "1"
+
+
+def test_daemon_ingests_structured_committed_receipt_preserves_payload(tmp_path: Path) -> None:
+    from agpair.daemon.loop import run_once
+
+    paths = seed_task(tmp_path)
+    repo = TaskRepository(paths.db_path)
+    repo.mark_acked(task_id="TASK-1", session_id="session-123")
+    structured_body = json.dumps(
+        {
+            "schema_version": "1",
+            "task_id": "TASK-1",
+            "attempt_no": 1,
+            "review_round": 0,
+            "status": "COMMITTED",
+            "summary": "Committed cleanly",
+            "payload": {
+                "commit_sha": "abc1234",
+                "branch": "main",
+                "diff_stat": "1 file changed",
+                "changed_files": ["companion-extension/src/services/delegationReceiptWatcher.ts"],
+                "validation": "npm test",
+                "residual_risks": "none",
+            },
+        }
+    )
+    bus = FakePullBus(
+        [
+            {
+                "id": 5,
+                "task_id": "TASK-1",
+                "status": "COMMITTED",
+                "body": structured_body,
+            }
+        ]
+    )
+
+    run_once(paths, now=datetime(2026, 3, 21, 12, 4, tzinfo=UTC), bus=bus)
+
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.phase == "committed"
+    rows = JournalRepository(paths.db_path).tail("TASK-1", limit=1)
+    parsed = json.loads(rows[0].body)
+    assert parsed["summary"] == "Committed cleanly"
+    assert parsed["payload"]["commit_sha"] == "abc1234"
+
+
+def test_blocked_reason_from_receipt_prefers_payload_message_when_summary_empty() -> None:
+    receipt = StructuredTerminalReceipt(
+        schema_version="1",
+        task_id="TASK-1",
+        attempt_no=1,
+        review_round=0,
+        status="BLOCKED",
+        summary="",
+        payload={"message": "Missing credential"},
+        raw_body="{}",
+    )
+
+    assert blocked_reason_from_receipt(receipt, "fallback") == "Missing credential"
+
+
+def test_blocked_reason_from_receipt_uses_fallback_when_summary_and_message_missing() -> None:
+    receipt = StructuredTerminalReceipt(
+        schema_version="1",
+        task_id="TASK-1",
+        attempt_no=1,
+        review_round=0,
+        status="BLOCKED",
+        summary="",
+        payload={"message": 401},
+        raw_body="{}",
+    )
+
+    assert blocked_reason_from_receipt(receipt, "fallback") == "fallback"
