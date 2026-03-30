@@ -10,6 +10,7 @@ readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12"
 dependencies = [
+  "mcp[cli]>=1.26,<2.0",
   "typer>=0.16,<1.0",
 ]
 
@@ -20,6 +21,7 @@ dev = [
 
 [project.scripts]
 agpair = "agpair.cli.app:main"
+agpair-mcp = "agpair.mcp_server:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
