@@ -141,10 +141,12 @@ What already works:
 
 - `agent-bus`-based task dispatch with auto-wait
 - Local SQLite-backed task / receipt / journal state
-- Continuation flow: `continue`, `approve`, `reject`, `retry`, `abandon`
+- Continuation flow: `continue`, `approve`, `reject`, `retry`, `abandon` (with explicit ACK/NACK hardening)
 - Standalone `task wait` with configurable timeout/interval
 - Daemon with receipt ingestion, session continuity, and stuck detection
-- `doctor` preflight checks (local health, desktop conflicts, bridge health)
+- `doctor` preflight checks (local health, desktop conflicts, bridge health, concurrency policy/pending tasks)
+- Structured terminal receipts (v1) and JSON CLI output with A2A state hints
+- Task start idempotency keys and structured committed result/failure context
 
 What is explicitly *not* in scope:
 
@@ -180,7 +182,7 @@ This is a **single self-contained repo**. No external checkout is needed.
 
 ### A2A State Hints
 
-The CLI JSON outputs (`task status` and `task wait`) include an `a2a_state_hint` field mapping internal phases to approximate A2A `TaskState` values. This is purely a semantic hint-level alignment for AI consumers—**agpair does not implement a full A2A server or the complete A2A protocol**. Its primary goal remains to be a robust local execution bridge.
+The CLI JSON outputs (`task status` and `task wait`) include an `a2a_state_hint` field mapping internal phases to approximate A2A `TaskState` values (e.g., mapping blocked auth tasks to `auth-required`). This is purely a semantic hint-level alignment for AI consumers—**agpair does not implement a full A2A server or the complete A2A protocol**. Its primary goal remains to be a robust local execution bridge.
 
 ### Concurrency rule (one task per worktree)
 

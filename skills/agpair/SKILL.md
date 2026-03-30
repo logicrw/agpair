@@ -241,8 +241,12 @@ Do NOT rely on auto-clear as a shortcut to skip waiting for `committed`.
 Antigravity occasionally fails with "error unknown" when its AI backend is overloaded or the context is too large. These practices reduce failure rate:
 
 - **Keep tasks small.** Each task should touch 2–5 files. If a plan has 10+ files, split it into multiple sequential tasks. Smaller context = fewer API errors.
+- **Default to single-language, single-layer task cards.** If the work spans Python + TypeScript, runtime transport + product logic, or schema + UI, do not send it as one card unless the boundary is already extremely explicit.
+- **Split only when necessary.** Do not over-decompose simple work. If a task is already single-language, single-focus, and mechanically implementable, send it as one card. Split only when cross-boundary coupling would otherwise make the brief ambiguous or fragile.
 - **Leave a gap between tasks.** After `committed`, wait 5–10 seconds before dispatching the next task. Don't rapid-fire tasks back-to-back.
 - **Prefer retry over long continue chains.** If a task has gone through 3+ rounds of `continue`/`reject`, the conversation context is bloated. Use `agpair task retry` to start fresh with a clean session instead of another `continue`.
+- **Keep the controller/executor split clean.** Let the controller agent decide schema/contracts, dependency order, and acceptance gates; let Antigravity do the implementation and focused verification work. Do not stuff cross-task orchestration decisions into a single executor brief.
+- **Treat `evidence_ready -> continue/approve` as a fragile path.** Prefer Rule 5 direct-commit flows when possible. If a task does reach `evidence_ready`, review status and logs before choosing `continue`, `approve`, or `retry`; do not assume the old session is the most reliable place to add more work.
 
 ## Anti-patterns
 
