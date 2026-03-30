@@ -6,7 +6,7 @@ import { TaskSessionStore } from "../state/taskSessionStore";
 import { PendingEventStore } from "../state/pendingEventStore";
 
 describe("TaskExecutionService automation fallback policy", () => {
-  it("runTask forbids interactive session creation fallback", async () => {
+  it("runTask allows the stable interactive session creation fallback path", async () => {
     const sessionStore = new TaskSessionStore();
     const eventStore = new PendingEventStore();
     let capturedOptions: unknown = null;
@@ -32,7 +32,7 @@ describe("TaskExecutionService automation fallback policy", () => {
 
     assert.equal(result.ok, true);
     assert.deepEqual(capturedOptions, {
-      allowInteractiveFallback: false,
+      allowInteractiveFallback: true,
       contextLabel: "task TASK-RUN-STRICT",
     });
   });

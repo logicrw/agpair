@@ -178,7 +178,7 @@ describe("DelegationHeartbeatService", () => {
 // ── Integration: TASK → ACK → RUNNING heartbeat → EVIDENCE_PACK ──
 
 describe("Heartbeat integration scenarios", () => {
-  it("TASK handoff forbids interactive session fallback", async () => {
+  it("TASK handoff uses the stable interactive session creation fallback path", async () => {
     const tracker = new DelegationTaskTracker();
     let capturedOptions: unknown = null;
 
@@ -208,7 +208,7 @@ describe("Heartbeat integration scenarios", () => {
     ]);
 
     assert.deepEqual(capturedOptions, {
-      allowInteractiveFallback: false,
+      allowInteractiveFallback: true,
       contextLabel: "delegated task TASK-STRICT",
     });
 
