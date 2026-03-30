@@ -40,6 +40,59 @@ def _paths() -> AppPaths:
     return paths
 
 
+def _emit_json(payload: dict) -> None:
+    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _not_found_payload(task_id: str) -> dict:
+    return {
+        "ok": False,
+        "error": "task_not_found",
+        "task_id": task_id,
+    }
+
+
+def _waiter_payload(waiter) -> dict | None:
+    if waiter is None:
+        return None
+    return {
+        "state": waiter.state,
+        "command": waiter.command,
+        "started_at": waiter.started_at,
+        "last_poll_at": waiter.last_poll_at,
+    }
+
+
+def _task_payload(paths: AppPaths, task) -> dict:
+    liveness = classify_liveness(task) if task.phase == "acked" else None
+    waiters = WaiterRepository(paths.db_path)
+    waiter = waiters.get_active_waiter(task.task_id)
+    return {
+        "task_id": task.task_id,
+        "phase": task.phase,
+        "repo_path": task.repo_path,
+        "session_id": task.antigravity_session_id,
+        "attempt_no": task.attempt_no,
+        "retry_count": task.retry_count,
+        "retry_recommended": task.retry_recommended,
+        "stuck_reason": task.stuck_reason,
+        "last_heartbeat_at": task.last_heartbeat_at,
+        "last_workspace_activity_at": task.last_workspace_activity_at,
+        "liveness_state": liveness.value if liveness is not None else None,
+        "waiter": _waiter_payload(waiter),
+    }
+
+
+def _journal_row_payload(row) -> dict:
+    return {
+        "created_at": row.created_at,
+        "source": row.source,
+        "event": row.event,
+        "body": row.body,
+        "classification": row.classification,
+    }
+
+
 def _bridge_marker_candidates(
     repo_path: str | None,
     marker_name: str,
@@ -170,6 +223,7 @@ def _cancel_bridge_task(*, task_id: str, attempt_no: int, repo_path: str | None,
 _WAIT_OPTION = typer.Option(True, "--wait/--no-wait", help="Wait for a terminal phase after dispatch (default: on).")
 _INTERVAL_OPTION = typer.Option(DEFAULT_INTERVAL_SECONDS, "--interval-seconds", help="Seconds between status polls during wait.")
 _TIMEOUT_OPTION = typer.Option(DEFAULT_TIMEOUT_SECONDS, "--timeout-seconds", help="Maximum seconds to wait before timing out.")
+_JSON_OPTION = typer.Option(False, "--json", help="Emit machine-readable JSON.")
 
 
 # ---------------------------------------------------------------------------
@@ -222,33 +276,39 @@ def start_task(
 
 
 @app.command("status")
-def task_status(task_id: str) -> None:
+def task_status(
+    task_id: str,
+    json_output: bool = _JSON_OPTION,
+) -> None:
     paths = _paths()
     tasks = TaskRepository(paths.db_path)
     task = tasks.get_task(task_id)
     if task is None:
+        if json_output:
+            _emit_json(_not_found_payload(task_id))
         raise typer.Exit(code=1)
-    liveness = classify_liveness(task) if task.phase == "acked" else None
-    typer.echo(f"task_id: {task.task_id}")
-    typer.echo(f"phase: {task.phase}")
-    typer.echo(f"repo_path: {task.repo_path}")
-    typer.echo(f"session_id: {task.antigravity_session_id}")
-    typer.echo(f"attempt_no: {task.attempt_no}")
-    typer.echo(f"retry_count: {task.retry_count}")
-    typer.echo(f"retry_recommended: {task.retry_recommended}")
-    typer.echo(f"stuck_reason: {task.stuck_reason}")
-    typer.echo(f"last_heartbeat_at: {task.last_heartbeat_at}")
-    typer.echo(f"last_workspace_activity_at: {task.last_workspace_activity_at}")
-    if liveness is not None:
-        typer.echo(f"liveness_state: {liveness.value}")
-    # Waiter state
-    waiters = WaiterRepository(paths.db_path)
-    waiter = waiters.get_active_waiter(task_id)
+    payload = _task_payload(paths, task)
+    if json_output:
+        _emit_json({"ok": True, **payload})
+        return
+    typer.echo(f"task_id: {payload['task_id']}")
+    typer.echo(f"phase: {payload['phase']}")
+    typer.echo(f"repo_path: {payload['repo_path']}")
+    typer.echo(f"session_id: {payload['session_id']}")
+    typer.echo(f"attempt_no: {payload['attempt_no']}")
+    typer.echo(f"retry_count: {payload['retry_count']}")
+    typer.echo(f"retry_recommended: {payload['retry_recommended']}")
+    typer.echo(f"stuck_reason: {payload['stuck_reason']}")
+    typer.echo(f"last_heartbeat_at: {payload['last_heartbeat_at']}")
+    typer.echo(f"last_workspace_activity_at: {payload['last_workspace_activity_at']}")
+    if payload["liveness_state"] is not None:
+        typer.echo(f"liveness_state: {payload['liveness_state']}")
+    waiter = payload["waiter"]
     if waiter:
-        typer.echo(f"waiter_state: {waiter.state}")
-        typer.echo(f"waiter_command: {waiter.command}")
-        typer.echo(f"waiter_started_at: {waiter.started_at}")
-        typer.echo(f"waiter_last_poll_at: {waiter.last_poll_at}")
+        typer.echo(f"waiter_state: {waiter['state']}")
+        typer.echo(f"waiter_command: {waiter['command']}")
+        typer.echo(f"waiter_started_at: {waiter['started_at']}")
+        typer.echo(f"waiter_last_poll_at: {waiter['last_poll_at']}")
     else:
         typer.echo("waiter_state: none")
 
@@ -298,13 +358,29 @@ def active_waits() -> None:
 
 
 @app.command("logs")
-def task_logs(task_id: str, limit: int = typer.Option(20, "--limit")) -> None:
+def task_logs(
+    task_id: str,
+    limit: int = typer.Option(20, "--limit"),
+    json_output: bool = _JSON_OPTION,
+) -> None:
     paths = _paths()
     tasks = TaskRepository(paths.db_path)
     journal = JournalRepository(paths.db_path)
     if tasks.get_task(task_id) is None:
+        if json_output:
+            _emit_json(_not_found_payload(task_id))
         raise typer.Exit(code=1)
-    for row in journal.tail(task_id, limit=limit):
+    rows = journal.tail(task_id, limit=limit)
+    if json_output:
+        _emit_json(
+            {
+                "ok": True,
+                "task_id": task_id,
+                "logs": [_journal_row_payload(row) for row in rows],
+            }
+        )
+        return
+    for row in rows:
         typer.echo(f"{row.created_at} [{row.source}] {row.event}: {row.body}")
 
 
@@ -363,6 +439,7 @@ def wait_task(
     task_id: str,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
+    json_output: bool = _JSON_OPTION,
 ) -> None:
     """Wait for a task to reach a terminal phase.
 
@@ -375,10 +452,14 @@ def wait_task(
     paths = _paths()
     tasks = TaskRepository(paths.db_path)
     if tasks.get_task(task_id) is None:
+        if json_output:
+            _emit_json(_not_found_payload(task_id))
+            raise typer.Exit(code=1)
         typer.echo(f"task not found: {task_id}", err=True)
         raise typer.Exit(code=1)
 
-    typer.echo(f"Waiting for task {task_id} to reach a terminal phase …")
+    if not json_output:
+        typer.echo(f"Waiting for task {task_id} to reach a terminal phase …")
     result = wait_for_terminal_phase(
         paths.db_path,
         task_id,
@@ -386,6 +467,24 @@ def wait_task(
         timeout_seconds=timeout_seconds,
         waiter_command="task_wait",
     )
+
+    code = exit_code_for_dispatch(result)
+    current_task = tasks.get_task(task_id)
+    if json_output:
+        _emit_json(
+            {
+                "ok": code == 0,
+                "task_id": task_id,
+                "phase": result.phase,
+                "timed_out": result.timed_out,
+                "watchdog_triggered": result.watchdog_triggered,
+                "exit_code": code,
+                "task": _task_payload(paths, current_task) if current_task is not None else None,
+            }
+        )
+        if code != 0:
+            raise typer.Exit(code=code)
+        return
 
     if result.watchdog_triggered:
         typer.echo(
@@ -404,7 +503,6 @@ def wait_task(
         raise typer.Exit(code=1)
 
     typer.echo(f"Task {task_id} reached phase: {result.phase}")
-    code = exit_code_for_dispatch(result)
     if code != 0:
         raise typer.Exit(code=code)
 

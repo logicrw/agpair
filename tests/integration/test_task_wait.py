@@ -1,6 +1,7 @@
 """Tests for ``agpair task wait`` and default auto-wait behaviour."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -266,6 +267,41 @@ def test_task_wait_exits_0_on_evidence_ready(tmp_path: Path, monkeypatch):
     ])
     assert result.exit_code == 0
     assert "evidence_ready" in result.stdout
+
+
+def test_task_wait_json_returns_structured_terminal_payload(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WJ1", repo_path="/r")
+    repo.mark_acked(task_id="T-WJ1", session_id="session-json-wait")
+    repo.mark_committed(task_id="T-WJ1")
+
+    result = CliRunner().invoke(app, ["task", "wait", "T-WJ1", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["task_id"] == "T-WJ1"
+    assert payload["phase"] == "committed"
+    assert payload["timed_out"] is False
+    assert payload["watchdog_triggered"] is False
+    assert payload["exit_code"] == 0
+    assert payload["task"]["task_id"] == "T-WJ1"
+    assert payload["task"]["phase"] == "committed"
+
+
+def test_task_wait_json_returns_not_found_error(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+
+    result = CliRunner().invoke(app, ["task", "wait", "T-W404", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "ok": False,
+        "error": "task_not_found",
+        "task_id": "T-W404",
+    }
 
 
 def test_task_wait_exits_1_on_blocked(tmp_path: Path, monkeypatch):

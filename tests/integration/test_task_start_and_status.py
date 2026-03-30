@@ -181,6 +181,38 @@ def test_task_status_shows_phase_and_session(tmp_path: Path, monkeypatch) -> Non
     assert "session_id: session-123" in result.stdout
 
 
+def test_task_status_json_returns_structured_payload(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-JSON-1", repo_path="/tmp/repo")
+    repo.mark_acked(task_id="TASK-JSON-1", session_id="session-json-1")
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-JSON-1", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["task_id"] == "TASK-JSON-1"
+    assert payload["phase"] == "acked"
+    assert payload["session_id"] == "session-json-1"
+    assert payload["waiter"] is None
+    assert payload["liveness_state"] in {"active_via_heartbeat", "silent", "active_via_workspace"}
+
+
+def test_task_status_json_returns_not_found_error(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-404", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "ok": False,
+        "error": "task_not_found",
+        "task_id": "TASK-404",
+    }
+
+
 def test_task_logs_prints_recent_journal_entries(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = make_task_repo(tmp_path)
@@ -193,6 +225,41 @@ def test_task_logs_prints_recent_journal_entries(tmp_path: Path, monkeypatch) ->
     assert result.exit_code == 0
     assert "[daemon] acked: session-123" in result.stdout
     assert "[cli] created: Goal: test" in result.stdout
+
+
+def test_task_logs_json_returns_structured_rows(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-LOGS-JSON", repo_path="/tmp/repo")
+    journal = make_journal_repo(tmp_path)
+    journal.append("TASK-LOGS-JSON", "cli", "created", "Goal: test")
+    journal.append("TASK-LOGS-JSON", "daemon", "acked", "session-123")
+
+    result = CliRunner().invoke(app, ["task", "logs", "TASK-LOGS-JSON", "--limit", "2", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["task_id"] == "TASK-LOGS-JSON"
+    assert len(payload["logs"]) == 2
+    assert payload["logs"][0]["event"] == "acked"
+    assert payload["logs"][0]["source"] == "daemon"
+    assert payload["logs"][1]["event"] == "created"
+    assert payload["logs"][1]["classification"] == "normal"
+
+
+def test_task_logs_json_returns_not_found_error(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+
+    result = CliRunner().invoke(app, ["task", "logs", "TASK-404", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "ok": False,
+        "error": "task_not_found",
+        "task_id": "TASK-404",
+    }
 
 
 def test_task_start_marks_blocked_when_dispatch_fails(tmp_path: Path, monkeypatch) -> None:
