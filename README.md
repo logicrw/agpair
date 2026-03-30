@@ -144,6 +144,7 @@ What already works:
 - Continuation flow: `continue`, `approve`, `reject`, `retry`, `abandon` (with explicit ACK/NACK hardening)
 - Standalone `task wait` with configurable timeout/interval
 - Daemon with receipt ingestion, session continuity, and stuck detection
+- `inspect` command for unified local repo/task overview, integrating `doctor` and task context
 - `doctor` preflight checks (local health, desktop conflicts, bridge health, concurrency policy/pending tasks)
 - Structured terminal receipts (v1) and JSON CLI output with A2A state hints
 - Task start idempotency keys and structured committed result/failure context

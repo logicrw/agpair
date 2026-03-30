@@ -150,7 +150,7 @@ def _latest_terminal_receipt(paths: AppPaths, task_id: str) -> dict | None:
     return None
 
 
-def _task_payload(paths: AppPaths, task) -> dict:
+def build_task_payload(paths: AppPaths, task) -> dict:
     liveness = classify_liveness(task) if task.phase == "acked" else None
     waiters = WaiterRepository(paths.db_path)
     waiter = waiters.get_active_waiter(task.task_id)
@@ -426,7 +426,7 @@ def task_status(
         if json_output:
             _emit_json(_not_found_payload(task_id))
         raise typer.Exit(code=1)
-    payload = _task_payload(paths, task)
+    payload = build_task_payload(paths, task)
     if json_output:
         _emit_json({"ok": True, **payload})
         return
@@ -640,7 +640,7 @@ def wait_task(
     code = exit_code_for_dispatch(result)
     current_task = tasks.get_task(task_id)
     if json_output:
-        task_payload = _task_payload(paths, current_task) if current_task is not None else None
+        task_payload = build_task_payload(paths, current_task) if current_task is not None else None
         failure_context = task_payload["failure_context"] if task_payload is not None else None
         blocker_type = failure_context["blocker_type"] if failure_context else None
         _emit_json(

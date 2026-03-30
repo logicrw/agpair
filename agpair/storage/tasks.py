@@ -287,6 +287,28 @@ class TaskRepository:
         assert updated is not None
         return updated
 
+    def get_most_relevant_active_task(self, repo_path: str) -> TaskRecord | None:
+        """Find the most relevant active or recently active task for a repo."""
+        with connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM tasks
+                WHERE repo_path = ?
+                ORDER BY
+                  CASE
+                    WHEN phase IN ('new', 'acked', 'evidence_ready') THEN 0
+                    WHEN phase IN ('blocked', 'stuck') THEN 1
+                    ELSE 2
+                  END ASC,
+                  updated_at DESC
+                LIMIT 1
+                """,
+                (repo_path,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._task_from_row(row)
+
     def get_task(self, task_id: str) -> TaskRecord | None:
         with connect(self.db_path) as conn:
             row = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
