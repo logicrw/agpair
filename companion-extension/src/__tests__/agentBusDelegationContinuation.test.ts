@@ -164,4 +164,130 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
     assert.equal(replies[0].status, "APPROVE_NACK");
     service.dispose();
   });
+
+  it("emits REVIEW_NACK when task is untracked", async () => {
+    const tracker = new DelegationTaskTracker();
+    const replies: Array<{ taskId: string; status: string }> = [];
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {} as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      sendReply: async (reply: AgentBusDelegationReply) => {
+        replies.push({ taskId: reply.taskId, status: reply.status });
+      },
+    });
+
+    await service.handleMessages([{ id: 5, task_id: "UNTRACKED-TASK", status: "REVIEW", body: "Fix it." }]);
+
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].status, "REVIEW_NACK");
+    service.dispose();
+  });
+
+  it("emits REVIEW_NACK when task has no session id", async () => {
+    const tracker = new DelegationTaskTracker();
+    // Register but with no session Id
+    tracker.register({
+      taskId: "NO-SESSION-TASK",
+      sessionId: "",
+      repoPath: "/tmp/repo",
+      receiptPath: `/tmp/receipts/NO-SESSION-TASK.receipt.json`,
+      status: "ACKED",
+      ackedAt: "2026-01-01T00:00:00Z",
+      lastActivityAt: "2026-01-01T00:00:00Z",
+      terminalSentAt: null,
+      terminalStatus: null,
+      terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
+    });
+    
+    const replies: Array<{ taskId: string; status: string }> = [];
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {} as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      sendReply: async (reply: AgentBusDelegationReply) => {
+        replies.push({ taskId: reply.taskId, status: reply.status });
+      },
+    });
+
+    await service.handleMessages([{ id: 6, task_id: "NO-SESSION-TASK", status: "REVIEW", body: "Fix it." }]);
+
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].status, "REVIEW_NACK");
+    service.dispose();
+  });
+
+  it("emits APPROVE_NACK when task is untracked", async () => {
+    const tracker = new DelegationTaskTracker();
+    const replies: Array<{ taskId: string; status: string }> = [];
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {} as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      sendReply: async (reply: AgentBusDelegationReply) => {
+        replies.push({ taskId: reply.taskId, status: reply.status });
+      },
+    });
+
+    await service.handleMessages([{ id: 7, task_id: "UNTRACKED-TASK", status: "APPROVED", body: "LGTM." }]);
+
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].status, "APPROVE_NACK");
+    service.dispose();
+  });
+
+  it("emits APPROVE_NACK when task has no session id", async () => {
+    const tracker = new DelegationTaskTracker();
+    // Register but with no session Id
+    tracker.register({
+      taskId: "NO-SESSION-TASK",
+      sessionId: "",
+      repoPath: "/tmp/repo",
+      receiptPath: `/tmp/receipts/NO-SESSION-TASK.receipt.json`,
+      status: "ACKED",
+      ackedAt: "2026-01-01T00:00:00Z",
+      lastActivityAt: "2026-01-01T00:00:00Z",
+      terminalSentAt: null,
+      terminalStatus: null,
+      terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
+    });
+    
+    const replies: Array<{ taskId: string; status: string }> = [];
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {} as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      sendReply: async (reply: AgentBusDelegationReply) => {
+        replies.push({ taskId: reply.taskId, status: reply.status });
+      },
+    });
+
+    await service.handleMessages([{ id: 8, task_id: "NO-SESSION-TASK", status: "APPROVED", body: "LGTM." }]);
+
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].status, "APPROVE_NACK");
+    service.dispose();
+  });
 });

@@ -238,11 +238,11 @@ export class AgentBusDelegationService {
     const tracked = this.tracker.get(taskId);
     if (!tracked) {
       this.outputChannel.appendLine(
-        `[companion] ${status} for unknown task ${taskId} — sending BLOCKED`,
+        `[companion] ${status} for unknown task ${taskId} — sending REVIEW_NACK`,
       );
       await this.sendReplyFn({
         taskId,
-        status: "BLOCKED",
+        status: "REVIEW_NACK",
         body: `Cannot continue: task ${taskId} is not tracked by this extension instance.`,
       });
       return;
@@ -250,11 +250,11 @@ export class AgentBusDelegationService {
 
     if (!tracked.sessionId) {
       this.outputChannel.appendLine(
-        `[companion] ${status} for ${taskId} has no sessionId — sending BLOCKED`,
+        `[companion] ${status} for ${taskId} has no sessionId — sending REVIEW_NACK`,
       );
       await this.sendReplyFn({
         taskId,
-        status: "BLOCKED",
+        status: "REVIEW_NACK",
         body: `Cannot continue: tracked task ${taskId} has no associated session.`,
       });
       return;
@@ -307,11 +307,11 @@ export class AgentBusDelegationService {
     const tracked = this.tracker.get(taskId);
     if (!tracked) {
       this.outputChannel.appendLine(
-        `[companion] APPROVED for unknown task ${taskId} — sending BLOCKED`,
+        `[companion] APPROVED for unknown task ${taskId} — sending APPROVE_NACK`,
       );
       await this.sendReplyFn({
         taskId,
-        status: "BLOCKED",
+        status: "APPROVE_NACK",
         body: `Cannot commit: task ${taskId} is not tracked by this extension instance.`,
       });
       return;
@@ -319,11 +319,11 @@ export class AgentBusDelegationService {
 
     if (!tracked.sessionId) {
       this.outputChannel.appendLine(
-        `[companion] APPROVED for ${taskId} has no sessionId — sending BLOCKED`,
+        `[companion] APPROVED for ${taskId} has no sessionId — sending APPROVE_NACK`,
       );
       await this.sendReplyFn({
         taskId,
-        status: "BLOCKED",
+        status: "APPROVE_NACK",
         body: `Cannot commit: tracked task ${taskId} has no associated session.`,
       });
       return;
