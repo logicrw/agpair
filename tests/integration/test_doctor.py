@@ -838,10 +838,10 @@ def test_doctor_reports_pending_tasks_and_concurrency_policy(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    
+
     assert payload["repo_bridge_pending_task_count"] == 2
     assert payload["repo_bridge_pending_task_ids"] == ["T-1", "T-3"]
-    
+
     policy = payload["repo_bridge_concurrency_policy"]
     assert policy["same_worktree_parallel_safe"] is False
     assert policy["safe_isolation_boundary"] == "different repo or different git worktree"

@@ -36,7 +36,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
   it("emits REVIEW_ACK when sendPrompt succeeds for REVIEW", async () => {
     const tracker = new DelegationTaskTracker();
     registerPendingTask(tracker, "TASK-REV-ACK");
-    
+
     const replies: Array<{ taskId: string; status: string }> = [];
     const service = new AgentBusDelegationService({
       enabled: true,
@@ -69,7 +69,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
   it("emits REVIEW_NACK when sendPrompt fails for REVIEW", async () => {
     const tracker = new DelegationTaskTracker();
     registerPendingTask(tracker, "TASK-REV-NACK");
-    
+
     const replies: Array<{ taskId: string; status: string }> = [];
     const service = new AgentBusDelegationService({
       enabled: true,
@@ -102,7 +102,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
   it("emits APPROVE_ACK when sendPrompt succeeds for APPROVED", async () => {
     const tracker = new DelegationTaskTracker();
     registerPendingTask(tracker, "TASK-APP-ACK");
-    
+
     const replies: Array<{ taskId: string; status: string }> = [];
     const service = new AgentBusDelegationService({
       enabled: true,
@@ -135,7 +135,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
   it("emits APPROVE_NACK when sendPrompt fails for APPROVED", async () => {
     const tracker = new DelegationTaskTracker();
     registerPendingTask(tracker, "TASK-APP-NACK");
-    
+
     const replies: Array<{ taskId: string; status: string }> = [];
     const service = new AgentBusDelegationService({
       enabled: true,
@@ -206,7 +206,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
       pendingTerminalBody: null,
       pendingTerminalPreparedAt: null,
     });
-    
+
     const replies: Array<{ taskId: string; status: string }> = [];
     const service = new AgentBusDelegationService({
       enabled: true,
@@ -269,7 +269,7 @@ describe("AgentBusDelegationService Continutation ACKs", () => {
       pendingTerminalBody: null,
       pendingTerminalPreparedAt: null,
     });
-    
+
     const replies: Array<{ taskId: string; status: string }> = [];
     const service = new AgentBusDelegationService({
       enabled: true,

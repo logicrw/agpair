@@ -769,29 +769,29 @@ def _send_semantic_or_exit(
 
     paths = AppPaths.default()
     bus = AgentBusClient(paths.agent_bus_bin)
-    
+
     start_time = time.time()
-    
+
     while time.time() - start_time < 15.0:  # 15s confirmation window
         # Force ingest to ensure we get latest receipts synchronously
         ingest_new_receipts(paths, bus, current=datetime.now(UTC))
-        
+
         # Check journal tail
         rows = journal.tail(task_id, limit=20)
         for row in rows:
             if row.event in ack_statuses:
-                # We need to ensure we don't accidentally match an old ack 
-                # from a previous continue/approve attempt. Since agent-bus 
-                # applies monotonically increasing message IDs, the ACK will 
-                # be generated AFTER our `message_id`. However, finding that 
+                # We need to ensure we don't accidentally match an old ack
+                # from a previous continue/approve attempt. Since agent-bus
+                # applies monotonically increasing message IDs, the ACK will
+                # be generated AFTER our `message_id`. However, finding that
                 # safely from journal is tricky. The naive but effective way
-                # is checking if the journal row was created very recently 
+                # is checking if the journal row was created very recently
                 # (since our function started).
-                # To avoid complex time parsing, we can just look for `id=` if we 
+                # To avoid complex time parsing, we can just look for `id=` if we
                 # know daemon didn't put it there. The daemon now does not put `id=`
                 # Wait, loop.py DOES put it there because I changed it?
                 # No, wait, I didn't add `f"id={message_id}"` in loop.py! I just used `clean_body`.
-                
+
                 # So we just trust that it was created recently.
                 # Actually, `ingest_new_receipts` avoids double ingestion. So if
                 # it's a NEW receipt, it will be added to the journal.
@@ -816,7 +816,7 @@ def _send_semantic_or_exit(
                         raise typer.Exit(code=1)
                 except (ValueError, TypeError):
                     pass
-        
+
         time.sleep(0.5)
 
     reason = "timeout waiting for extension confirmation"

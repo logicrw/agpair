@@ -280,13 +280,13 @@ def _build_repo_bridge_report(repo_path: Path) -> dict:
     if isinstance(delegation_status, dict):
         raw = delegation_status.get("receipt_watcher_running")
         receipt_watcher_running = bool(raw) if isinstance(raw, bool) else None
-        
+
         summary = delegation_status.get("tracker_summary")
         if isinstance(summary, dict):
             raw_pending = summary.get("pending")
             if isinstance(raw_pending, int):
                 pending_task_count = raw_pending
-            
+
             tasks = summary.get("tasks")
             if isinstance(tasks, list):
                 pending_task_ids = [

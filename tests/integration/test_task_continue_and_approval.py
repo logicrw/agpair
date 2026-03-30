@@ -33,7 +33,7 @@ def test_task_continue_sends_review_for_existing_session(tmp_path: Path, monkeyp
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
     seed_acked_task(tmp_path)
-    
+
     pull_path.write_text(json.dumps({
         "messages": [
             {"id": 102, "task_id": "TASK-1", "status": "REVIEW_ACK", "body": "OK"}
@@ -66,7 +66,7 @@ def test_task_continue_sends_review_for_evidence_ready_task(tmp_path: Path, monk
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
     seed_evidence_ready_task(tmp_path)
-    
+
     pull_path.write_text(json.dumps({
         "messages": [
             {"id": 102, "task_id": "TASK-1", "status": "REVIEW_ACK", "body": "OK"}
@@ -99,7 +99,7 @@ def test_task_continue_fails_on_nack(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
     seed_acked_task(tmp_path)
-    
+
     pull_path.write_text(json.dumps({
         "messages": [
             {"id": 102, "task_id": "TASK-1", "status": "REVIEW_NACK", "body": "Session lost"}
@@ -118,7 +118,7 @@ def test_task_continue_fails_on_nack_for_evidence_ready_task(tmp_path: Path, mon
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
     seed_evidence_ready_task(tmp_path)
-    
+
     pull_path.write_text(json.dumps({
         "messages": [
             {"id": 102, "task_id": "TASK-1", "status": "REVIEW_NACK", "body": "Session lost"}
@@ -134,34 +134,34 @@ def test_task_continue_fails_on_timeout(tmp_path: Path, monkeypatch) -> None:
     # We patch time.time locally to simulate a timeout without actually waiting 15s.
     import time
     original_time = time.time
-    
+
     class FakeTime:
         def __init__(self):
             self.current = original_time()
             self.calls = 0
-            
+
         def __call__(self):
             self.calls += 1
             if self.calls > 3:  # third time.time() check
                 self.current += 30.0
             return self.current
-            
+
         def sleep(self, seconds):
             self.current += seconds
-            
+
     fake_time = FakeTime()
     monkeypatch.setattr("time.time", fake_time)
     monkeypatch.setattr("time.sleep", fake_time.sleep)
-    
+
     binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
     seed_acked_task(tmp_path)
-    
+
     # pull.json returns nothing
-    
+
     result = CliRunner().invoke(app, ["task", "continue", "TASK-1", "--body", "Please fix", "--no-wait"])
     assert result.exit_code == 1
     assert "timeout waiting for extension confirmation" in result.stderr
@@ -171,34 +171,34 @@ def test_task_continue_fails_on_timeout_for_evidence_ready_task(tmp_path: Path, 
     # We patch time.time locally to simulate a timeout without actually waiting 15s.
     import time
     original_time = time.time
-    
+
     class FakeTime:
         def __init__(self):
             self.current = original_time()
             self.calls = 0
-            
+
         def __call__(self):
             self.calls += 1
             if self.calls > 3:  # third time.time() check
                 self.current += 30.0
             return self.current
-            
+
         def sleep(self, seconds):
             self.current += seconds
-            
+
     fake_time = FakeTime()
     monkeypatch.setattr("time.time", fake_time)
     monkeypatch.setattr("time.sleep", fake_time.sleep)
-    
+
     binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
     seed_evidence_ready_task(tmp_path)
-    
+
     # pull.json returns nothing
-    
+
     result = CliRunner().invoke(app, ["task", "continue", "TASK-1", "--body", "Please fix", "--no-wait"])
     assert result.exit_code == 1
     assert "timeout waiting for extension confirmation" in result.stderr
