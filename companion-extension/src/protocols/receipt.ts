@@ -41,11 +41,19 @@ export function parseDelegationReceipt(raw: string, expectedTaskId: string): Del
   try {
     const parsed = JSON.parse(raw);
     const taskId = parsed?.task_id;
-    const status = parsed?.status;
+    let status = parsed?.status;
 
     if (typeof taskId !== "string" || taskId !== expectedTaskId) {
       return null;
     }
+
+    if (status === "FAILED") {
+      console.warn(
+        `[receipt] Deprecated STATUS: FAILED received in receipt — remapping to BLOCKED.`
+      );
+      status = "BLOCKED";
+    }
+
     if (!isTerminalReceiptStatus(status)) {
       return null;
     }

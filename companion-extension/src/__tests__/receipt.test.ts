@@ -100,10 +100,20 @@ describe("receipt protocol helpers", () => {
     );
     assert.equal(
       parseDelegationReceipt(
-        JSON.stringify({ task_id: "TASK-1", status: "FAILED", body: "x" }),
+        JSON.stringify({ task_id: "TASK-1", status: "RUNNING", body: "x" }),
         "TASK-1",
       ),
       null,
     );
+  });
+
+  it("remaps legacy FAILED to BLOCKED", () => {
+    const parsed = parseDelegationReceipt(
+      JSON.stringify({ task_id: "TASK-1", status: "FAILED", body: "Legacy fail" }),
+      "TASK-1",
+    );
+    assert.ok(parsed);
+    assert.equal(parsed.status, "BLOCKED");
+    assert.equal(parsed.body, "Legacy fail");
   });
 });
