@@ -24,8 +24,7 @@ export type DelegationTaskStatus =
   | "RUNNING"
   | "EVIDENCE_PACK"
   | "BLOCKED"
-  | "COMMITTED"
-  | "FAILED";
+  | "COMMITTED";
 
 export interface DelegationTask {
   taskId: string;
@@ -179,6 +178,20 @@ export class DelegationTaskTracker {
   }
 
   /**
+   * Find a non-terminal delegated task by Antigravity session ID.
+   * Used by the SDK monitor to translate real step activity back into
+   * tracker-level progress updates for delegated tasks.
+   */
+  findBySessionId(sessionId: string): DelegationTask | undefined {
+    for (const task of this.tasks.values()) {
+      if (task.sessionId === sessionId && !task.terminalSentAt) {
+        return task;
+      }
+    }
+    return undefined;
+  }
+
+  /**
    * Mark a task as having sent its terminal status.
    * Returns false if already sent (dedup guard).
    */
@@ -207,9 +220,9 @@ export class DelegationTaskTracker {
     if (!task) return false;
     if (task.terminalSentAt) return false;
     task.terminalSentAt = new Date().toISOString();
-    task.terminalStatus = "FAILED";
+    task.terminalStatus = "BLOCKED";
     task.terminalBody = body;
-    task.status = "FAILED";
+    task.status = "BLOCKED";
     this.persist();
     return true;
   }

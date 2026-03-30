@@ -15,6 +15,7 @@ import { describe, it, afterEach } from "node:test";
 import * as assert from "node:assert/strict";
 import * as http from "node:http";
 import { constantTimeEqual, createBridgeServer, MAX_BODY_BYTES } from "../bridge/httpServer";
+import { DelegationTaskTracker } from "../state/delegationTaskTracker";
 
 // ── Unit tests for constantTimeEqual ────────────────────────────
 
@@ -166,6 +167,42 @@ describe("Bridge auth integration", () => {
       body: JSON.stringify({ wake_id: "w1", task_id: "t1", reason: "test" }),
     });
     assert.equal(res.status, 401);
+  });
+
+  it("cancel_task also releases pending delegation tracker state", async () => {
+    const tracker = new DelegationTaskTracker();
+    tracker.register({
+      taskId: "TASK-CANCEL-TRACKER",
+      sessionId: "sess-cancel-1",
+      repoPath: "/tmp/repo-cancel",
+      receiptPath: "/tmp/repo-cancel/.agpair/receipts/TASK-CANCEL-TRACKER.json",
+      status: "ACKED",
+      ackedAt: "2026-03-30T00:00:00Z",
+      lastActivityAt: "2026-03-30T00:00:00Z",
+      terminalSentAt: null,
+      terminalStatus: null,
+      terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
+    });
+
+    server = createBridgeServer({
+      ...makeStubConfig(""),
+      delegationTracker: tracker,
+    });
+    port = await listenOnRandomPort(server);
+
+    const res = await httpRequest(port, {
+      method: "POST",
+      path: "/cancel_task",
+      body: JSON.stringify({ task_id: "TASK-CANCEL-TRACKER", attempt_no: 0 }),
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(tracker.pendingCount(), 0);
+    assert.equal(tracker.get("TASK-CANCEL-TRACKER")?.status, "BLOCKED");
   });
 });
 

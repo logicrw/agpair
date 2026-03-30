@@ -251,7 +251,10 @@ export class DelegationReceiptWatcher {
       );
       await this.sessionCtrl.terminateSession(task.sessionId);
 
-      const result = await this.sessionCtrl.createBackgroundSession(task.taskBody);
+      const result = await this.sessionCtrl.createBackgroundSession(task.taskBody, {
+        allowInteractiveFallback: false,
+        contextLabel: `delegation recovery ${task.taskId}`,
+      });
       if (!result.ok || !result.session_id) {
         this.outputChannel.appendLine(
           `[companion] session-recovery: failed to create new session for ${task.taskId}: ${result.error ?? "unknown"}`,

@@ -23,7 +23,6 @@
 import * as vscode from "vscode";
 import * as crypto from "crypto";
 import * as http from "http";
-import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { AntigravitySDK } from "antigravity-sdk";
@@ -38,6 +37,7 @@ import { HealthService } from "./services/healthService";
 import { AgentBusWatchService } from "./services/agentBusWatchService";
 import { AgentBusDelegationService } from "./services/agentBusDelegationService";
 import { startBridgeServer, BridgeConfig } from "./bridge/httpServer";
+import { removeWrittenMarkers, writeMarkerToDir } from "./bridge/discoveryMarkers";
 import { resolveAuth } from "./bridge/authResolver";
 
 let bridgeServer: http.Server | null = null;
@@ -47,6 +47,9 @@ let agentBusWatchService: AgentBusWatchService | null = null;
 let agentBusDelegationService: AgentBusDelegationService | null = null;
 let activeBridgePort = 0;
 let delegationTracker: DelegationTaskTracker | null = null;
+const BRIDGE_PORT_MARKER = "bridge_port";
+const BRIDGE_AUTH_TOKEN_MARKER = "bridge_auth_token";
+const BRIDGE_AUTH_TOKEN_MODE = 0o600;
 
 // ── Module-level stores (shared across services) ────────────────
 const sessionStore = new TaskSessionStore();
@@ -125,7 +128,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     : null;
 
   monitorCtrl = sdkReady
-    ? new MonitorController(sdk!, eventStore, sessionStore)
+    ? new MonitorController(sdk!, eventStore, sessionStore, delegationTracker)
     : null;
 
   // TaskExecutionService: uses real SDK if available, otherwise falls back to skeleton
@@ -168,6 +171,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     monitorCtrl,
     sessionStore,
     extensionVersion,
+    {
+      id: typeof context.extension?.id === "string" ? context.extension.id : null,
+      path: typeof context.extension?.extensionPath === "string" ? context.extension.extensionPath : null,
+    },
     () => vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
     () => agentBusWatchService?.getStatus() ?? { running: false, mode: "disabled", pid: null },
     () => agentBusDelegationService?.getDelegationStatus() ?? {
@@ -189,9 +196,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     healthService,
     sessionStore,
     eventStore,
+    delegationTracker: delegationTracker ?? undefined,
     onTaskDispatched: (repoPath: string) => {
       if (activeBridgePort > 0) {
         writeWorkspaceBridgeMarker(repoPath, activeBridgePort);
+        writeWorkspaceBridgeAuthTokenMarker(repoPath, effectiveToken);
       }
     },
   };
@@ -212,6 +221,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Write port marker file for external discovery
     writeBridgePortMarker(actualPort);
+    writeBridgeAuthTokenMarker(effectiveToken);
 
     // If folders are added/removed after activation, refresh workspace-scoped
     // markers so repo-aware routing does not fall back to the global marker.
@@ -219,6 +229,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
         if (activeBridgePort > 0) {
           writeBridgePortMarker(activeBridgePort);
+          writeBridgeAuthTokenMarker(effectiveToken);
           outputChannel.appendLine("[companion] Workspace folders changed; refreshed bridge markers.");
         }
       }),
@@ -254,7 +265,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         bridgeServer.close();
         bridgeServer = null;
       }
-      removeBridgePortMarker();
+      removeBridgeMarkers();
     },
   });
 
@@ -282,37 +293,27 @@ export function deactivate(): void {
     bridgeServer = null;
   }
 
-  removeBridgePortMarker();
+  removeBridgeMarkers();
   console.log("[companion] Deactivated.");
 }
 
 // ── Port marker helpers ─────────────────────────────────────────
 
-/** Marker file path: ~/.agpair/bridge_port */
-function portMarkerPath(): string {
-  return path.join(os.homedir(), ".agpair", "bridge_port");
-}
-
 /** Track all marker paths written so we can clean them up on deactivate. */
 const writtenMarkerPaths: string[] = [];
 
 /**
- * Write a bridge_port marker to a single directory.
+ * Write a discovery marker to a single directory.
  * @returns true if written successfully.
  */
-function writeMarkerToDir(dir: string, port: number): boolean {
-  try {
-    const markerDir = path.join(dir, ".agpair");
-    fs.mkdirSync(markerDir, { recursive: true });
-    const markerFile = path.join(markerDir, "bridge_port");
-    fs.writeFileSync(markerFile, String(port), "utf-8");
-    if (!writtenMarkerPaths.includes(markerFile)) {
-      writtenMarkerPaths.push(markerFile);
-    }
-    return true;
-  } catch {
-    return false;
-  }
+function writeDiscoveryMarker(dir: string, markerName: string, value: string, mode?: number): boolean {
+  return writeMarkerToDir({
+    dir,
+    markerName,
+    value,
+    writtenPaths: writtenMarkerPaths,
+    mode,
+  });
 }
 
 /**
@@ -325,16 +326,11 @@ function writeMarkerToDir(dir: string, port: number): boolean {
  */
 function writeBridgePortMarker(port: number): void {
   // Global marker
-  const globalDir = path.dirname(portMarkerPath());
-  fs.mkdirSync(globalDir, { recursive: true });
-  try {
-    fs.writeFileSync(portMarkerPath(), String(port), "utf-8");
-    if (!writtenMarkerPaths.includes(portMarkerPath())) {
-      writtenMarkerPaths.push(portMarkerPath());
-    }
-    console.log(`[companion] Wrote global port marker: ${portMarkerPath()} = ${port}`);
-  } catch (e: any) {
-    console.warn(`[companion] Failed to write global port marker: ${e.message}`);
+  const homeDir = os.homedir();
+  if (writeDiscoveryMarker(homeDir, BRIDGE_PORT_MARKER, String(port))) {
+    console.log(`[companion] Wrote global port marker: ${path.join(homeDir, ".agpair", BRIDGE_PORT_MARKER)} = ${port}`);
+  } else {
+    console.warn("[companion] Failed to write global port marker.");
   }
 
   // Workspace-scoped markers
@@ -342,8 +338,32 @@ function writeBridgePortMarker(port: number): void {
   if (folders) {
     for (const folder of folders) {
       const wsPath = folder.uri.fsPath;
-      if (writeMarkerToDir(wsPath, port)) {
+      if (writeDiscoveryMarker(wsPath, BRIDGE_PORT_MARKER, String(port))) {
         console.log(`[companion] Wrote workspace port marker: ${wsPath}/.agpair/bridge_port = ${port}`);
+      }
+    }
+  }
+}
+
+function writeBridgeAuthTokenMarker(authToken: string): void {
+  if (!authToken) {
+    return;
+  }
+  const homeDir = os.homedir();
+  if (writeDiscoveryMarker(homeDir, BRIDGE_AUTH_TOKEN_MARKER, authToken, BRIDGE_AUTH_TOKEN_MODE)) {
+    console.log(
+      `[companion] Wrote global auth marker: ${path.join(homeDir, ".agpair", BRIDGE_AUTH_TOKEN_MARKER)}`
+    );
+  } else {
+    console.warn("[companion] Failed to write global auth marker.");
+  }
+
+  const folders = vscode.workspace.workspaceFolders;
+  if (folders) {
+    for (const folder of folders) {
+      const wsPath = folder.uri.fsPath;
+      if (writeDiscoveryMarker(wsPath, BRIDGE_AUTH_TOKEN_MARKER, authToken, BRIDGE_AUTH_TOKEN_MODE)) {
+        console.log(`[companion] Wrote workspace auth marker: ${wsPath}/.agpair/${BRIDGE_AUTH_TOKEN_MARKER}`);
       }
     }
   }
@@ -356,23 +376,21 @@ function writeBridgePortMarker(port: number): void {
  */
 export function writeWorkspaceBridgeMarker(repoPath: string, port: number): void {
   if (!repoPath) return;
-  if (writeMarkerToDir(repoPath, port)) {
+  if (writeDiscoveryMarker(repoPath, BRIDGE_PORT_MARKER, String(port))) {
     console.log(`[companion] Wrote repo port marker: ${repoPath}/.agpair/bridge_port = ${port}`);
   }
 }
 
-/** Remove all written port marker files on deactivation. */
-function removeBridgePortMarker(): void {
-  for (const markerFile of writtenMarkerPaths) {
-    try {
-      if (fs.existsSync(markerFile)) {
-        fs.unlinkSync(markerFile);
-      }
-    } catch {
-      // best-effort
-    }
+function writeWorkspaceBridgeAuthTokenMarker(repoPath: string, authToken: string): void {
+  if (!repoPath || !authToken) return;
+  if (writeDiscoveryMarker(repoPath, BRIDGE_AUTH_TOKEN_MARKER, authToken, BRIDGE_AUTH_TOKEN_MODE)) {
+    console.log(`[companion] Wrote repo auth marker: ${repoPath}/.agpair/${BRIDGE_AUTH_TOKEN_MARKER}`);
   }
-  writtenMarkerPaths.length = 0;
+}
+
+/** Remove all written discovery marker files on deactivation. */
+function removeBridgeMarkers(): void {
+  removeWrittenMarkers(writtenMarkerPaths);
 }
 
 // ── Skeleton fallback for when SDK is unavailable ───────────────

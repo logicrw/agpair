@@ -196,14 +196,24 @@ def _safe_read_latest_receipt_id(db_path: Path) -> tuple[str | None, str | None]
 
 def _build_repo_bridge_report(repo_path: Path) -> dict:
     repo = repo_path.expanduser().resolve()
-    repo_marker = repo / ".supervisor" / "bridge_port"
-    global_marker = Path.home() / ".supervisor" / "bridge_port"
-    chosen_marker = repo_marker if repo_marker.exists() else global_marker if global_marker.exists() else None
-    marker_source = "repo" if chosen_marker == repo_marker else "global" if chosen_marker == global_marker else None
+    expected_extension_path, expected_extension_version, expected_extension_id = _read_repo_companion_metadata(repo)
+    repo_markers = [
+        repo / ".agpair" / "bridge_port",
+        repo / ".supervisor" / "bridge_port",
+    ]
+    global_markers = [
+        Path.home() / ".agpair" / "bridge_port",
+        Path.home() / ".supervisor" / "bridge_port",
+    ]
+    chosen_marker = next((marker for marker in repo_markers if marker.exists()), None)
+    if chosen_marker is None:
+        chosen_marker = next((marker for marker in global_markers if marker.exists()), None)
+    marker_source = "repo" if chosen_marker in repo_markers else "global" if chosen_marker in global_markers else None
+    preferred_repo_marker = repo_markers[0]
     report = {
         "repo_path": str(repo),
-        "repo_bridge_marker_path": str(repo_marker),
-        "repo_bridge_marker_exists": repo_marker.exists(),
+        "repo_bridge_marker_path": str(preferred_repo_marker),
+        "repo_bridge_marker_exists": any(marker.exists() for marker in repo_markers),
         "repo_bridge_marker_source": marker_source,
         "repo_bridge_marker_source_path": str(chosen_marker) if chosen_marker else None,
         "repo_bridge_port": None,
@@ -221,6 +231,14 @@ def _build_repo_bridge_report(repo_path: Path) -> dict:
         "repo_bridge_session_ready": False,
         "repo_bridge_warning": None,
         "repo_bridge_version": None,
+        "repo_bridge_extension_id": None,
+        "repo_bridge_extension_path": None,
+        "repo_bridge_expected_extension_id": expected_extension_id,
+        "repo_bridge_expected_extension_path": str(expected_extension_path) if expected_extension_path else None,
+        "repo_bridge_expected_version": expected_extension_version,
+        "repo_bridge_running_from_repo": None,
+        "repo_bridge_extension_id_match": None,
+        "repo_bridge_version_match": None,
         "repo_bridge_auth_mode": None,
         "repo_bridge_mutating_auth_required": None,
     }
@@ -281,6 +299,46 @@ def _build_repo_bridge_report(repo_path: Path) -> dict:
     if receipt_watcher_running is False:
         warning_reasons.append("receipt_watcher_running=false")
 
+    running_extension_path = payload.get("extension_path")
+    if not isinstance(running_extension_path, str):
+        running_extension_path = None
+    running_extension_id = payload.get("extension_id")
+    if not isinstance(running_extension_id, str):
+        running_extension_id = None
+    running_extension_version = payload.get("version")
+    if not isinstance(running_extension_version, str):
+        running_extension_version = None
+
+    extension_id_match = None
+    if expected_extension_id is not None and running_extension_id is not None:
+        extension_id_match = running_extension_id == expected_extension_id
+        if not extension_id_match:
+            warning_reasons.append(
+                f"extension id mismatch (running={running_extension_id}, repo={expected_extension_id})"
+            )
+
+    version_match = None
+    if expected_extension_version is not None and running_extension_version is not None:
+        version_match = running_extension_version == expected_extension_version
+        if not version_match:
+            warning_reasons.append(
+                f"extension version mismatch (running={running_extension_version}, repo={expected_extension_version})"
+            )
+
+    running_from_repo = None
+    if expected_extension_path is not None and running_extension_path is not None:
+        try:
+            running_from_repo = Path(running_extension_path).expanduser().resolve() == expected_extension_path
+        except OSError:
+            running_from_repo = False
+        if (
+            not running_from_repo and
+            (extension_id_match is False or version_match is False)
+        ):
+            warning_reasons.append(
+                f"extension_path mismatch (running={running_extension_path}, repo={expected_extension_path})"
+            )
+
     report.update(
         {
             "repo_bridge_reachable": True,
@@ -294,7 +352,12 @@ def _build_repo_bridge_report(repo_path: Path) -> dict:
             "repo_bridge_receipt_watcher_running": receipt_watcher_running,
             "repo_bridge_session_ready": not warning_reasons,
             "repo_bridge_warning": "; ".join(warning_reasons) or None,
-            "repo_bridge_version": payload.get("version"),
+            "repo_bridge_version": running_extension_version,
+            "repo_bridge_extension_id": running_extension_id,
+            "repo_bridge_extension_path": running_extension_path,
+            "repo_bridge_running_from_repo": running_from_repo,
+            "repo_bridge_extension_id_match": extension_id_match,
+            "repo_bridge_version_match": version_match,
             "repo_bridge_auth_mode": payload.get("bridge_auth_mode"),
             "repo_bridge_mutating_auth_required": payload.get("bridge_mutating_auth_required"),
         }
@@ -315,3 +378,18 @@ def _fetch_bridge_health(url: str) -> tuple[dict, str | None]:
     if not isinstance(payload, dict):
         return {}, "bridge health returned non-object payload"
     return payload, None
+
+
+def _read_repo_companion_metadata(repo: Path) -> tuple[Path | None, str | None, str | None]:
+    companion_root = repo / "companion-extension"
+    package_json = companion_root / "package.json"
+    if not package_json.exists():
+        return None, None, None
+    try:
+        raw = json.loads(package_json.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return companion_root.resolve(), None, None
+    version = raw.get("version") if isinstance(raw, dict) else None
+    name = raw.get("name") if isinstance(raw, dict) else None
+    extension_id = f"logicrw.{name}" if isinstance(name, str) and name else None
+    return companion_root.resolve(), version if isinstance(version, str) else None, extension_id

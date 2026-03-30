@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import uuid4
+import json
 import subprocess
+from urllib import error, request
 
 import typer
 
@@ -27,11 +30,137 @@ from agpair.transport.bus import AgentBusClient
 
 app = typer.Typer(no_args_is_help=True)
 
+_BRIDGE_PORT_MARKER = "bridge_port"
+_BRIDGE_AUTH_TOKEN_MARKER = "bridge_auth_token"
+
 
 def _paths() -> AppPaths:
     paths = AppPaths.default()
     ensure_database(paths.db_path)
     return paths
+
+
+def _bridge_marker_candidates(
+    repo_path: str | None,
+    marker_name: str,
+    *,
+    global_root: Path | None,
+) -> list[Path]:
+    candidates: list[Path] = []
+    if repo_path:
+        repo = Path(repo_path).expanduser().resolve()
+        candidates.extend([
+            repo / ".agpair" / marker_name,
+            repo / ".supervisor" / marker_name,
+        ])
+    if global_root is not None:
+        candidates.extend([
+            global_root / marker_name,
+            global_root.parent / ".supervisor" / marker_name,
+        ])
+        default_root = (Path.home() / ".agpair").resolve()
+        if global_root.resolve() != default_root:
+            return candidates
+    home = Path.home()
+    candidates.extend([
+        home / ".agpair" / marker_name,
+        home / ".supervisor" / marker_name,
+    ])
+    return candidates
+
+
+def _read_bridge_marker(
+    repo_path: str | None,
+    marker_name: str,
+    *,
+    global_root: Path | None,
+) -> tuple[str | None, Path | None]:
+    for marker in _bridge_marker_candidates(repo_path, marker_name, global_root=global_root):
+        try:
+            raw = marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if raw:
+            return raw, marker
+    return None, None
+
+
+def _resolve_bridge_port(repo_path: str | None, *, global_root: Path | None) -> tuple[int | None, Path | None, str | None]:
+    raw, marker = _read_bridge_marker(repo_path, _BRIDGE_PORT_MARKER, global_root=global_root)
+    if raw is None:
+        return None, None, "bridge marker not found"
+    try:
+        return int(raw), marker, None
+    except ValueError:
+        return None, marker, f"invalid bridge marker value: {raw!r}"
+
+
+def _fetch_bridge_health(port: int) -> tuple[dict, str | None]:
+    url = f"http://127.0.0.1:{port}/health"
+    try:
+        with request.urlopen(url, timeout=1.5) as response:
+            raw = response.read().decode("utf-8")
+    except (OSError, error.URLError, TimeoutError) as exc:
+        return {}, f"bridge health probe failed: {exc}"
+    try:
+        payload = json.loads(raw or "{}")
+    except json.JSONDecodeError as exc:
+        return {}, f"bridge health returned invalid JSON: {exc}"
+    if not isinstance(payload, dict):
+        return {}, "bridge health returned non-object payload"
+    return payload, None
+
+
+def _cancel_bridge_task(*, task_id: str, attempt_no: int, repo_path: str | None, global_root: Path | None) -> tuple[bool, str]:
+    port, marker, port_error = _resolve_bridge_port(repo_path, global_root=global_root)
+    if port is None:
+        return False, port_error or "bridge marker not found"
+
+    auth_required = True
+    health_payload, health_error = _fetch_bridge_health(port)
+    if health_error is None:
+        raw = health_payload.get("bridge_mutating_auth_required")
+        if isinstance(raw, bool):
+            auth_required = raw
+
+    headers = {"Content-Type": "application/json"}
+    if auth_required:
+        auth_token, auth_marker = _read_bridge_marker(
+            repo_path,
+            _BRIDGE_AUTH_TOKEN_MARKER,
+            global_root=global_root,
+        )
+        if auth_token is None:
+            marker_path = auth_marker or marker
+            location = f" near {marker_path.parent}" if marker_path is not None else ""
+            return False, f"bridge auth token marker not found{location}"
+        headers["Authorization"] = f"Bearer {auth_token}"
+
+    payload = json.dumps({"task_id": task_id, "attempt_no": attempt_no}).encode("utf-8")
+    req = request.Request(
+        f"http://127.0.0.1:{port}/cancel_task",
+        data=payload,
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=1.5) as response:
+            raw = response.read().decode("utf-8")
+    except error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        detail = body or exc.reason
+        return False, f"bridge cancel failed: HTTP {exc.code} {detail}"
+    except (OSError, error.URLError, TimeoutError) as exc:
+        return False, f"bridge cancel failed: {exc}"
+    try:
+        result = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        result = {}
+    if not isinstance(result, dict):
+        return False, "bridge cancel returned non-object payload"
+    if result.get("ok") is not True:
+        return False, f"bridge cancel returned ok=false: {result}"
+    return True, "bridge cancel acknowledged"
 
 
 # ---------------------------------------------------------------------------
@@ -194,8 +323,33 @@ def abandon_task(
         raise typer.Exit(code=1)
     _guard_active_waiter(paths, task_id, force=force, command="abandon")
     _guard_live_task(task, force=force, command="abandon")
+    bridge_cancel_attempted = False
+    if task.phase == "acked" and task.antigravity_session_id:
+        bridge_cancel_attempted = True
+        bridge_cancelled, bridge_message = _cancel_bridge_task(
+            task_id=task.task_id,
+            attempt_no=task.attempt_no,
+            repo_path=task.repo_path,
+            global_root=paths.root,
+        )
+        if not bridge_cancelled and "bridge marker not found" not in bridge_message and not force:
+            typer.echo(
+                f"Refused: failed to release the Antigravity bridge task before abandon. "
+                f"{bridge_message}. Pass --force to abandon locally anyway.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        event = "bridge_cancelled" if bridge_cancelled else "bridge_cancel_skipped"
+        journal.append(task_id, "cli", event, bridge_message)
+        if not bridge_cancelled and force:
+            typer.echo(
+                f"warning: bridge task release failed; abandoning locally anyway ({bridge_message})",
+                err=True,
+            )
     tasks.mark_abandoned(task_id=task_id, reason=reason)
     journal.append(task_id, "cli", "abandoned", reason)
+    if not bridge_cancel_attempted:
+        journal.append(task_id, "cli", "bridge_cancel_skipped", "task had no live bridge session to release")
     typer.echo(task_id)
 
 

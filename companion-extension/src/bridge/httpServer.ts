@@ -20,6 +20,7 @@ import * as http from "http";
 import * as crypto from "crypto";
 import { TaskSessionStore } from "../state/taskSessionStore";
 import { PendingEventStore, PendingEvent } from "../state/pendingEventStore";
+import type { DelegationTaskTracker } from "../state/delegationTaskTracker";
 import { TaskExecutionService } from "../services/taskExecutionService";
 import { HealthService } from "../services/healthService";
 import { MonitorController } from "../sdk/monitorController";
@@ -43,6 +44,7 @@ export interface BridgeConfig {
   healthService: HealthService;
   sessionStore: TaskSessionStore;
   eventStore: PendingEventStore;
+  delegationTracker?: DelegationTaskTracker;
   /** Called after a task is dispatched, with the repo_path. */
   onTaskDispatched?: (repoPath: string) => void;
 }
@@ -170,7 +172,14 @@ function makeStructuredReceiptText(body: {
 
 // ── Server factory ──────────────────────────────────────────────
 export function createBridgeServer(config: BridgeConfig): http.Server {
-  const { authToken, taskExecService, healthService, sessionStore, eventStore } = config;
+  const {
+    authToken,
+    taskExecService,
+    healthService,
+    sessionStore,
+    eventStore,
+    delegationTracker,
+  } = config;
 
   return http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://127.0.0.1:${config.port}`);
@@ -204,7 +213,16 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
       } else if (method === "POST" && path === "/cancel_task") {
         const body = JSON.parse(await readBody(req));
         sessionStore.remove(body.task_id, body.attempt_no);
-        sendJson(res, 200, { ok: true, task_id: body.task_id, message: "cancelled" });
+        const delegationReleased = delegationTracker?.abandon(
+          body.task_id,
+          "Cancelled via bridge /cancel_task",
+        ) ?? false;
+        sendJson(res, 200, {
+          ok: true,
+          task_id: body.task_id,
+          message: "cancelled",
+          delegation_released: delegationReleased,
+        });
 
       } else if (method === "POST" && path === "/events/ack") {
         const body = JSON.parse(await readBody(req));
@@ -225,14 +243,24 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
           });
           return;
         }
-        const validStatuses = ["EVIDENCE_PACK", "BLOCKED", "COMMITTED", "FAILED"];
-        if (!validStatuses.includes(body.status)) {
+        // Canonical terminal statuses; FAILED is legacy-remapped to BLOCKED
+        const validStatuses = ["EVIDENCE_PACK", "BLOCKED", "COMMITTED"];
+        let effectiveStatus = body.status;
+        if (body.status === "FAILED") {
+          console.warn(
+            `[bridge] /write_receipt: deprecated status FAILED received — remapping to BLOCKED. ` +
+            `task_id=${body.task_id}`
+          );
+          effectiveStatus = "BLOCKED";
+        }
+        if (!validStatuses.includes(effectiveStatus)) {
           sendJson(res, 400, {
             ok: false,
             message: `status must be one of: ${validStatuses.join(", ")}`,
           });
           return;
         }
+        body.status = effectiveStatus;
         // Validate task_id
         const idErr = TaskExecutionService.validateTaskId(body.task_id);
         if (idErr) {

@@ -14,6 +14,7 @@ import * as vscode from "vscode";
 import type { AntigravitySDK } from "antigravity-sdk";
 
 import { pickFreshSessionId } from "./freshSession";
+import { discoverLiveLsConnection } from "./lsConnectionRepair";
 
 export interface CreateSessionResult {
   ok: boolean;
@@ -21,9 +22,29 @@ export interface CreateSessionResult {
   error?: string;
 }
 
+export interface CreateBackgroundSessionOptions {
+  /**
+   * Whether the controller may fall back to interactive UI-driven session
+   * creation paths. Automated delegation must keep this false.
+   */
+  allowInteractiveFallback?: boolean;
+  /** Short label used in logs/errors to explain which task requested the session. */
+  contextLabel?: string;
+}
+
 export interface SendPromptResult {
   ok: boolean;
   error?: string;
+}
+
+export interface SendPromptOptions {
+  /**
+   * Whether the controller may fall back to sending the prompt through the
+   * visible agent panel. Automated delegation must keep this false.
+   */
+  allowPanelFallback?: boolean;
+  /** Short label used in logs/errors to explain which task requested the send. */
+  contextLabel?: string;
 }
 
 export class SessionController {
@@ -37,11 +58,16 @@ export class SessionController {
    * Fallback chain:
    *   1. LS bridge createCascade (headless, preferred)
    *   2. LS re-init + retry (fresh CSRF)
-   *   3. Direct vscode commands (startNewConversation — verified working)
+   *   3. Interactive fallbacks (only when explicitly allowed)
    */
-  async createBackgroundSession(prompt: string): Promise<CreateSessionResult> {
+  async createBackgroundSession(
+    prompt: string,
+    options: CreateBackgroundSessionOptions = {},
+  ): Promise<CreateSessionResult> {
     const errors: string[] = [];
     const beforeIds = await this.snapshotSessionIds();
+    const allowInteractiveFallback = options.allowInteractiveFallback ?? false;
+    const contextLabel = options.contextLabel?.trim() || "automated task";
 
     // ── Path 1: LS bridge (headless, preferred) ──────────────
     if (this.sdk.ls.isReady) {
@@ -79,7 +105,34 @@ export class SessionController {
           errors.push(`LS retry: ${err.message}`);
           console.warn(`[session] Path 2 failed: ${err.message}`);
         }
+
+        try {
+          const repaired = await this.tryRepairLsConnection();
+          if (repaired) {
+            console.log("[session] Path 2b: LS manual repair + retry...");
+            const cascadeId = await this.sdk.ls.createCascade({ text: prompt });
+            const freshSessionId = await this.resolveFreshSessionId(beforeIds, cascadeId);
+            if (freshSessionId) {
+              console.log(`[session] LS manual repair succeeded: ${freshSessionId}`);
+              return { ok: true, session_id: freshSessionId };
+            }
+            errors.push(`LS manual repair: reused existing session ${cascadeId ?? "null"}`);
+          } else {
+            errors.push("LS manual repair: no verified live connection found");
+          }
+        } catch (err: any) {
+          errors.push(`LS manual repair: ${err.message}`);
+          console.warn(`[session] Path 2b failed: ${err.message}`);
+        }
       }
+    }
+
+    if (!allowInteractiveFallback) {
+      const msg =
+        `Headless session creation failed for ${contextLabel}; ` +
+        `interactive fallback is disabled. ${errors.join(" | ") || "LS unavailable."}`;
+      console.warn(`[session] ${msg}`);
+      return { ok: false, session_id: "", error: msg };
     }
 
     // ── Path 3: SDK cascade command fallback ──────────────────
@@ -240,7 +293,14 @@ export class SessionController {
   /**
    * Send a prompt to an existing session.
    */
-  async sendPrompt(sessionId: string, prompt: string): Promise<SendPromptResult> {
+  async sendPrompt(
+    sessionId: string,
+    prompt: string,
+    options: SendPromptOptions = {},
+  ): Promise<SendPromptResult> {
+    const allowPanelFallback = options.allowPanelFallback ?? false;
+    const contextLabel = options.contextLabel?.trim() || "automated task";
+
     // Try LS bridge
     if (this.sdk.ls.isReady) {
       try {
@@ -251,7 +311,30 @@ export class SessionController {
         return { ok };
       } catch (err: any) {
         console.warn(`[session] LS sendMessage failed: ${err.message}`);
+        if (String(err?.message ?? "").includes("CSRF") || String(err?.message ?? "").includes("403")) {
+          try {
+            const repaired = await this.tryRepairLsConnection();
+            if (repaired) {
+              const ok = await this.sdk.ls.sendMessage({
+                cascadeId: sessionId,
+                text: prompt,
+              });
+              return { ok };
+            }
+          } catch (repairErr: any) {
+            console.warn(`[session] LS sendMessage repair failed: ${repairErr.message}`);
+          }
+        }
       }
+    }
+
+    if (!allowPanelFallback) {
+      return {
+        ok: false,
+        error:
+          `Headless prompt delivery failed for ${contextLabel}; ` +
+          `prompt-panel fallback is disabled because it requires interactive UI focus.`,
+      };
     }
 
     // Fallback: sendPromptToAgentPanel (sends to active/visible panel)
@@ -273,5 +356,32 @@ export class SessionController {
     } catch {
       return false;
     }
+  }
+
+  private async tryRepairLsConnection(): Promise<boolean> {
+    const connection = await discoverLiveLsConnection(this.workspaceHint());
+    if (!connection) {
+      return false;
+    }
+    this.sdk.ls.setConnection(connection.port, connection.csrfToken, connection.useTls);
+    console.log(
+      `[session] LS repaired: port=${connection.port} tls=${connection.useTls} ` +
+      `source=${connection.source} pid=${connection.pid}`,
+    );
+    return true;
+  }
+
+  private workspaceHint(): string {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) {
+      return "";
+    }
+    return folders[0].uri.fsPath
+      .replace(/\\/g, "/")
+      .split("/")
+      .slice(-4)
+      .join("_")
+      .replace(/[-.\s]/g, "_")
+      .toLowerCase();
   }
 }

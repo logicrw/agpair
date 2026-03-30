@@ -42,6 +42,8 @@ export interface HealthResponse {
   ok: boolean;
   extension_loaded: boolean;
   extension_host: boolean;
+  extension_id: string | null;
+  extension_path: string | null;
   sdk_initialized: boolean;
   ls_bridge_ready: boolean;
   monitor_running: boolean;
@@ -70,6 +72,10 @@ export class HealthService {
     private readonly monitor: MonitorController | null,
     private readonly sessionStore: TaskSessionStore,
     private readonly version: string,
+    private readonly extensionMetadata: { id: string | null; path: string | null } = {
+      id: null,
+      path: null,
+    },
     private readonly workspacePathsProvider: () => string[] = () => [],
     private readonly agentBusWatchStatusProvider: () => {
       running: boolean;
@@ -103,6 +109,8 @@ export class HealthService {
       ok: true,
       extension_loaded: true,
       extension_host: true,
+      extension_id: this.extensionMetadata.id,
+      extension_path: this.extensionMetadata.path,
       sdk_initialized: this.sdk?.isInitialized ?? false,
       ls_bridge_ready: this.sdk?.ls?.isReady ?? false,
       monitor_running: this.monitor?.isRunning ?? false,

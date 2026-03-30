@@ -11,7 +11,7 @@
  *   2. Reads structured JSON receipt from .agpair/receipts/ in the repo
  *      (file path: {repo_path}/.agpair/receipts/{task_id}_{attempt}_{round}.json)
  *   3. Runs structured output parser on the parsed JSON
- *   4. If parser finds STATUS: EVIDENCE_PACK|BLOCKED → emits terminal event
+ *   4. If parser finds STATUS: EVIDENCE_PACK|BLOCKED|COMMITTED → emits terminal event
  *   5. If parser fails → does NOT guess; waits for more output
  *
  * Note: GetConversation RPC returns 404 in Antigravity IDE v25.8.1,
@@ -27,6 +27,7 @@
 import type { AntigravitySDK, IStepCountChange, IActiveSessionChange, IDisposable } from "antigravity-sdk";
 import { PendingEventStore, PendingEvent } from "../state/pendingEventStore";
 import { TaskSessionStore, TaskSession } from "../state/taskSessionStore";
+import type { DelegationTaskTracker } from "../state/delegationTaskTracker";
 import { parseStructuredOutput, ParsedOutput } from "../protocols/parser";
 
 /** Tracks per-session state for terminal detection. */
@@ -68,6 +69,7 @@ export class MonitorController {
     private readonly sdk: AntigravitySDK,
     private readonly eventStore: PendingEventStore,
     private readonly sessionStore: TaskSessionStore,
+    private readonly delegationTracker: DelegationTaskTracker | null = null,
   ) {}
 
   /**
@@ -134,6 +136,17 @@ export class MonitorController {
    *   2. Fetch latest conversation content and check for terminal output
    */
   private handleStepCountChange(change: IStepCountChange): void {
+    const now = new Date().toISOString();
+
+    const delegatedTask = this.delegationTracker?.findBySessionId(change.sessionId);
+    if (delegatedTask) {
+      this.delegationTracker?.touch(delegatedTask.taskId, "RUNNING", now);
+      console.log(
+        `[monitor] Delegation activity: task=${delegatedTask.taskId} session=${change.sessionId} step=${change.newCount}`,
+      );
+      return;
+    }
+
     // Find which task is bound to this session
     let session = this.sessionStore.findBySessionId(change.sessionId);
 
@@ -164,8 +177,6 @@ export class MonitorController {
         return;
       }
     }
-
-    const now = new Date().toISOString();
 
     // Update session heartbeat
     session.last_step_count = change.newCount;
@@ -299,7 +310,7 @@ export class MonitorController {
   }
 
   /**
-   * Emit a terminal pending event (EVIDENCE_PACK, BLOCKED, or FAILED).
+   * Emit a terminal pending event (EVIDENCE_PACK, BLOCKED, or COMMITTED).
    */
   private emitTerminalEvent(
     session: TaskSession,

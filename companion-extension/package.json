@@ -1,5 +1,5 @@
 {
-  "name": "agpair-companion-extension",
+  "name": "antigravity-companion-extension",
   "displayName": "agpair Companion — Antigravity Bridge",
   "version": "1.0.0",
   "private": true,
@@ -77,7 +77,7 @@
     "build:prod": "node esbuild.js --production",
     "dev": "tsc --watch",
     "package": "npm run build:prod && npx -y @vscode/vsce package",
-    "dev:install": "npm run package && antigravity --install-extension agpair-companion-extension-1.0.0.vsix",
+    "dev:install": "npm run package && antigravity --install-extension antigravity-companion-extension-1.0.0.vsix",
     "test": "npm run compile && node --test dist/__tests__/*.js"
   },
   "devDependencies": {

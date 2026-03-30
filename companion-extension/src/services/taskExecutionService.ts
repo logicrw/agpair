@@ -205,7 +205,10 @@ export class TaskExecutionService {
     const outputFile = MonitorController.outputFilePath(repoPath, req.task_id, req.attempt_no, req.review_round);
     const promptWithSuffix = this.appendReceiptInstruction(req.prompt, req, outputFile);
 
-    const result = await this.sessionCtrl.createBackgroundSession(promptWithSuffix);
+    const result = await this.sessionCtrl.createBackgroundSession(promptWithSuffix, {
+      allowInteractiveFallback: false,
+      contextLabel: `task ${req.task_id}`,
+    });
 
     if (!result.ok) {
       return {
@@ -364,7 +367,10 @@ export class TaskExecutionService {
     // Send prompt to existing session with receipt-write instruction
     const outputFile = MonitorController.outputFilePath(repoPath, req.task_id, req.attempt_no, req.review_round);
     const promptWithSuffix = this.appendReceiptInstruction(req.prompt, req, outputFile);
-    const result = await this.sessionCtrl.sendPrompt(session.session_id, promptWithSuffix);
+    const result = await this.sessionCtrl.sendPrompt(session.session_id, promptWithSuffix, {
+      allowPanelFallback: false,
+      contextLabel: `task ${req.task_id}`,
+    });
 
     if (!result.ok) {
       // Session exists in our store but SDK can't reach it → DESYNC
@@ -474,7 +480,7 @@ export class TaskExecutionService {
 
     return prompt +
       `\n\nAFTER completing your task, submit your result receipt. ` +
-      `Replace <YOUR_STATUS> with one of: EVIDENCE_PACK, BLOCKED, FAILED. ` +
+      `Replace <YOUR_STATUS> with one of: EVIDENCE_PACK, BLOCKED, COMMITTED. ` +
       `Replace <YOUR_SUMMARY> with a brief description.\n` +
       preferred +
       `FALLBACK: If the bridge is unavailable, create the file ${outputFile} ` +

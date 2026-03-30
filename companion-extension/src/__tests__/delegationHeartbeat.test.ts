@@ -178,6 +178,99 @@ describe("DelegationHeartbeatService", () => {
 // ── Integration: TASK → ACK → RUNNING heartbeat → EVIDENCE_PACK ──
 
 describe("Heartbeat integration scenarios", () => {
+  it("TASK handoff forbids interactive session fallback", async () => {
+    const tracker = new DelegationTaskTracker();
+    let capturedOptions: unknown = null;
+
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo-strict"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async createBackgroundSession(_prompt: string, options?: unknown) {
+          capturedOptions = options ?? null;
+          return { ok: true, session_id: "sess-strict-1" };
+        },
+        async sendPrompt() {
+          return { ok: true };
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      receiptPollIntervalMs: 60000,
+      heartbeatIntervalMs: 60000,
+      sendReply: async () => undefined,
+    });
+
+    await service.handleMessages([
+      { id: 77, task_id: "TASK-STRICT", status: "TASK", body: "Goal:\nStay headless." },
+    ]);
+
+    assert.deepEqual(capturedOptions, {
+      allowInteractiveFallback: false,
+      contextLabel: "delegated task TASK-STRICT",
+    });
+
+    service.dispose();
+  });
+
+  it("fresh TASK retry with the same task_id replaces the old tracked session", async () => {
+    const tracker = new DelegationTaskTracker();
+    const replies: Array<{ taskId: string; status: string; body: string }> = [];
+    const terminated: string[] = [];
+    const created: string[] = [];
+
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo-retry-same-id"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async createBackgroundSession() {
+          const sessionId = created.length === 0 ? "sess-old-1" : "sess-new-2";
+          created.push(sessionId);
+          return { ok: true, session_id: sessionId };
+        },
+        async terminateSession(sessionId: string) {
+          terminated.push(sessionId);
+          return true;
+        },
+        async sendPrompt() {
+          return { ok: true };
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      receiptPollIntervalMs: 60000,
+      heartbeatIntervalMs: 60000,
+      sendReply: async ({ taskId, status, body }: AgentBusDelegationReply) => {
+        replies.push({ taskId, status, body });
+      },
+    });
+
+    try {
+      await service.handleMessages([
+        { id: 101, task_id: "TASK-SAME-ID", status: "TASK", body: "Goal:\nFirst attempt." },
+      ]);
+      await service.handleMessages([
+        { id: 102, task_id: "TASK-SAME-ID", status: "TASK", body: "Goal:\nFresh retry." },
+      ]);
+
+      assert.deepEqual(created, ["sess-old-1", "sess-new-2"]);
+      assert.deepEqual(terminated, ["sess-old-1"], "retry should terminate the old tracked session");
+      assert.equal(replies.filter((r) => r.status === "ACK").length, 2, "both attempts should ACK");
+
+      const tracked = tracker.get("TASK-SAME-ID");
+      assert.ok(tracked, "task should remain tracked");
+      assert.equal(tracked.sessionId, "sess-new-2", "tracker must point at the fresh retry session");
+      assert.equal(tracked.terminalSentAt, null, "fresh retry must remain pending");
+      assert.equal(tracker.pendingCount(), 1, "old pending entry must be replaced, not duplicated");
+    } finally {
+      service.dispose();
+    }
+  });
+
   it("TASK → ACK → RUNNING heartbeat → terminal EVIDENCE_PACK", async () => {
     const dir = makeTempDir();
     const tracker = new DelegationTaskTracker();
@@ -437,6 +530,45 @@ describe("Heartbeat integration scenarios", () => {
     assert.ok(afterHb.lastHeartbeatAt);
 
     hb.dispose();
+    service.dispose();
+  });
+
+  it("REVIEW continuation forbids prompt-panel fallback", async () => {
+    const tracker = new DelegationTaskTracker();
+    let capturedOptions: unknown = null;
+
+    registerPendingTask(tracker, "TASK-REVIEW-STRICT");
+
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async createBackgroundSession() {
+          throw new Error("should not be called");
+        },
+        async sendPrompt(_sessionId: string, _prompt: string, options?: unknown) {
+          capturedOptions = options ?? null;
+          return { ok: true };
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      receiptPollIntervalMs: 60000,
+      heartbeatIntervalMs: 60000,
+      sendReply: async () => undefined,
+    });
+
+    await service.handleMessages([
+      { id: 88, task_id: "TASK-REVIEW-STRICT", status: "REVIEW", body: "Keep it headless." },
+    ]);
+
+    assert.deepEqual(capturedOptions, {
+      allowPanelFallback: false,
+      contextLabel: "delegated task TASK-REVIEW-STRICT (REVIEW)",
+    });
+
     service.dispose();
   });
 

@@ -59,7 +59,7 @@ python3 -m pip install -e '.[dev]'
 
 # Build and install the companion extension
 cd companion-extension && npm install && npm run package
-antigravity --install-extension agpair-companion-extension-*.vsix
+antigravity --install-extension antigravity-companion-extension-*.vsix
 cd ..
 ```
 

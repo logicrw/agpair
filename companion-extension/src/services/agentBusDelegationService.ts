@@ -138,6 +138,15 @@ export class AgentBusDelegationService {
       return;
     }
 
+    const sameTask = this.tracker.get(taskId);
+    if (sameTask && !sameTask.terminalSentAt) {
+      this.outputChannel.appendLine(
+        `[companion] retry/preempt same TASK ${taskId}: terminating old session ${sameTask.sessionId} before creating a fresh retry session...`,
+      );
+      await this.sessionCtrl.terminateSession(sameTask.sessionId);
+      this.tracker.abandon(taskId, `Superseded by fresh retry for task ${taskId}`);
+    }
+
     const existingTask = this.tracker.getPendingForRepo(repoPath, taskId);
     if (existingTask) {
       this.outputChannel.appendLine(
@@ -160,7 +169,10 @@ export class AgentBusDelegationService {
       body: typeof message.body === "string" ? message.body : "",
       receiptPath,
     });
-    const result = await this.sessionCtrl.createBackgroundSession(prompt);
+    const result = await this.sessionCtrl.createBackgroundSession(prompt, {
+      allowInteractiveFallback: false,
+      contextLabel: `delegated task ${taskId}`,
+    });
     if (!result.ok || !result.session_id) {
       await this.sendReplyFn({
         taskId,
@@ -173,14 +185,8 @@ export class AgentBusDelegationService {
     this.outputChannel.appendLine(
       `[companion] delegated TASK ${taskId} to Antigravity session ${result.session_id}`,
     );
-    await this.sendReplyFn({
-      taskId,
-      status: "ACK",
-      body: `Accepted by Antigravity auto-handoff. session_id=${result.session_id} repo_path=${repoPath}`,
-    });
-
-    // Register in tracker for receipt-based terminal auto-return
-    this.tracker.register({
+    // Register in tracker for receipt-based terminal auto-return before ACK.
+    const registered = this.tracker.register({
       taskId,
       sessionId: result.session_id,
       repoPath,
@@ -195,6 +201,24 @@ export class AgentBusDelegationService {
       pendingTerminalStatus: null,
       pendingTerminalBody: null,
       pendingTerminalPreparedAt: null,
+    });
+    if (!registered) {
+      this.outputChannel.appendLine(
+        `[companion] failed to register delegated TASK ${taskId} for session ${result.session_id}; terminating session to avoid orphaned execution.`,
+      );
+      await this.sessionCtrl.terminateSession(result.session_id);
+      await this.sendReplyFn({
+        taskId,
+        status: "BLOCKED",
+        body: `Failed to track delegated task ${taskId} locally after creating session ${result.session_id}. The session was terminated to avoid orphaned execution.`,
+      });
+      return;
+    }
+
+    await this.sendReplyFn({
+      taskId,
+      status: "ACK",
+      body: `Accepted by Antigravity auto-handoff. session_id=${result.session_id} repo_path=${repoPath}`,
     });
 
     this.outputChannel.appendLine(
@@ -244,7 +268,10 @@ export class AgentBusDelegationService {
     });
 
     try {
-      const result = await this.sessionCtrl.sendPrompt(tracked.sessionId, prompt);
+      const result = await this.sessionCtrl.sendPrompt(tracked.sessionId, prompt, {
+        allowPanelFallback: false,
+        contextLabel: `delegated task ${taskId} (${status})`,
+      });
       if (!result.ok) {
         throw new Error(result.error ?? "sendPrompt returned ok=false");
       }
@@ -304,7 +331,10 @@ export class AgentBusDelegationService {
     });
 
     try {
-      const result = await this.sessionCtrl.sendPrompt(tracked.sessionId, prompt);
+      const result = await this.sessionCtrl.sendPrompt(tracked.sessionId, prompt, {
+        allowPanelFallback: false,
+        contextLabel: `delegated task ${taskId} (APPROVED)`,
+      });
       if (!result.ok) {
         throw new Error(result.error ?? "sendPrompt returned ok=false");
       }

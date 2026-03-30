@@ -535,6 +535,40 @@ def test_doctor_reports_repo_bridge_health_when_repo_marker_is_live(tmp_path: Pa
     assert payload["repo_bridge_version"] == "0.1.12"
 
 
+def test_doctor_reports_repo_bridge_health_when_repo_agpair_marker_is_live(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    _clear_disk_cache(tmp_path)
+    repo_path = tmp_path / "repo"
+    marker_dir = repo_path / ".agpair"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+
+    with run_health_server(
+        {
+            "ok": True,
+            "sdk_initialized": True,
+            "ls_bridge_ready": True,
+            "monitor_running": True,
+            "workspace_paths": [str(repo_path)],
+            "version": "1.0.0",
+            "extension_id": "logicrw.antigravity-companion-extension",
+            "extension_path": str(repo_path / "companion-extension"),
+        }
+    ) as port:
+        (marker_dir / "bridge_port").write_text(str(port), encoding="utf-8")
+        result = CliRunner().invoke(app, ["doctor", "--repo-path", str(repo_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["repo_bridge_marker_exists"] is True
+    assert payload["repo_bridge_marker_source"] == "repo"
+    assert payload["repo_bridge_marker_source_path"] == str(marker_dir / "bridge_port")
+    assert payload["repo_bridge_port"] == port
+    assert payload["repo_bridge_reachable"] is True
+    assert payload["repo_bridge_session_ready"] is True
+    assert payload["repo_bridge_version"] == "1.0.0"
+
+
 def test_doctor_reports_repo_bridge_warning_when_ls_bridge_not_ready(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
@@ -561,6 +595,90 @@ def test_doctor_reports_repo_bridge_warning_when_ls_bridge_not_ready(tmp_path: P
     assert payload["repo_bridge_reachable"] is True
     assert payload["repo_bridge_session_ready"] is False
     assert "ls_bridge_ready=false" in payload["repo_bridge_warning"]
+
+
+def test_doctor_warns_when_running_extension_does_not_match_repo_checkout(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    _clear_disk_cache(tmp_path)
+    repo_path = tmp_path / "repo"
+    marker_dir = repo_path / ".supervisor"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    companion_dir = repo_path / "companion-extension"
+    companion_dir.mkdir(parents=True, exist_ok=True)
+    (companion_dir / "package.json").write_text(
+        json.dumps({"name": "antigravity-companion-extension", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+
+    with run_health_server(
+        {
+            "ok": True,
+            "sdk_initialized": True,
+            "ls_bridge_ready": True,
+            "monitor_running": True,
+            "workspace_paths": [str(repo_path)],
+            "version": "0.1.12",
+            "extension_path": str(tmp_path / ".antigravity" / "extensions" / "logicrw.antigravity-companion-extension-0.1.12"),
+            "extension_id": "logicrw.antigravity-companion-extension",
+        }
+    ) as port:
+        (marker_dir / "bridge_port").write_text(str(port), encoding="utf-8")
+        result = CliRunner().invoke(app, ["doctor", "--repo-path", str(repo_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["repo_bridge_expected_extension_id"] == "logicrw.antigravity-companion-extension"
+    assert payload["repo_bridge_extension_id_match"] is True
+    assert payload["repo_bridge_expected_version"] == "1.0.0"
+    assert payload["repo_bridge_version"] == "0.1.12"
+    assert payload["repo_bridge_version_match"] is False
+    assert payload["repo_bridge_running_from_repo"] is False
+    assert payload["repo_bridge_session_ready"] is False
+    assert "extension version mismatch" in payload["repo_bridge_warning"]
+    assert "extension_path mismatch" in payload["repo_bridge_warning"]
+
+
+def test_doctor_accepts_installed_extension_when_id_and_version_match(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    _clear_disk_cache(tmp_path)
+    repo_path = tmp_path / "repo"
+    marker_dir = repo_path / ".agpair"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    companion_dir = repo_path / "companion-extension"
+    companion_dir.mkdir(parents=True, exist_ok=True)
+    (companion_dir / "package.json").write_text(
+        json.dumps({"name": "antigravity-companion-extension", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+
+    with run_health_server(
+        {
+            "ok": True,
+            "sdk_initialized": True,
+            "ls_bridge_ready": True,
+            "monitor_running": True,
+            "workspace_paths": [str(repo_path)],
+            "version": "1.0.0",
+            "extension_path": str(tmp_path / ".antigravity" / "extensions" / "logicrw.antigravity-companion-extension-1.0.0"),
+            "extension_id": "logicrw.antigravity-companion-extension",
+        }
+    ) as port:
+        (marker_dir / "bridge_port").write_text(str(port), encoding="utf-8")
+        result = CliRunner().invoke(app, ["doctor", "--repo-path", str(repo_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["repo_bridge_version_match"] is True
+    assert payload["repo_bridge_extension_id_match"] is True
+    assert payload["repo_bridge_running_from_repo"] is False
+    assert payload["repo_bridge_session_ready"] is True
+    assert payload["repo_bridge_warning"] is None
 
 
 # ---------------------------------------------------------------------------

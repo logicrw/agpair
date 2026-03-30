@@ -4,7 +4,8 @@
  * Covers:
  *   - parseStructuredOutput with valid EVIDENCE_PACK
  *   - parseStructuredOutput with valid BLOCKED
- *   - parseStructuredOutput with valid FAILED
+ *   - parseStructuredOutput with valid COMMITTED
+ *   - parseStructuredOutput remaps legacy FAILED to BLOCKED
  *   - parseStructuredOutput returns null on missing STATUS
  *   - parseStructuredOutput returns null on missing TASK_ID
  *   - parseStructuredOutput returns null on missing ATTEMPT_NO
@@ -53,10 +54,26 @@ describe("parseStructuredOutput", () => {
     assert.equal(result.task_id, "task-002");
   });
 
-  it("parses FAILED", () => {
+  it("parses COMMITTED", () => {
+    const raw = [
+      "STATUS: COMMITTED",
+      "TASK_ID: task-003",
+      "ATTEMPT_NO: 1",
+      "REVIEW_ROUND: 0",
+      "SUMMARY: All changes committed",
+    ].join("\n");
+
+    const result = parseStructuredOutput(raw);
+    assert.ok(result);
+    assert.equal(result.status, "COMMITTED");
+    assert.equal(result.task_id, "task-003");
+    assert.equal(result.summary, "All changes committed");
+  });
+
+  it("remaps legacy FAILED to BLOCKED", () => {
     const raw = [
       "STATUS: FAILED",
-      "TASK_ID: task-003",
+      "TASK_ID: task-legacy",
       "ATTEMPT_NO: 1",
       "REVIEW_ROUND: 0",
       "SUMMARY: Compilation error",
@@ -64,7 +81,9 @@ describe("parseStructuredOutput", () => {
 
     const result = parseStructuredOutput(raw);
     assert.ok(result);
-    assert.equal(result.status, "FAILED");
+    assert.equal(result.status, "BLOCKED", "legacy FAILED must be remapped to BLOCKED");
+    assert.equal(result.task_id, "task-legacy");
+    assert.equal(result.summary, "Compilation error");
   });
 
   it("returns null on missing STATUS", () => {

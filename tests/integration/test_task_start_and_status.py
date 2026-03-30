@@ -1,4 +1,8 @@
 from pathlib import Path
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+import threading
 from typer.testing import CliRunner
 
 from agpair.cli.app import app
@@ -30,6 +34,70 @@ def make_journal_repo(tmp_path: Path) -> JournalRepository:
     paths = make_paths(tmp_path)
     ensure_database(paths.db_path)
     return JournalRepository(paths.db_path)
+
+
+@contextmanager
+def run_bridge_server(*, expected_token: str):
+    requests: list[dict] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            if self.path != "/health":
+                self.send_response(404)
+                self.end_headers()
+                return
+            body = json.dumps(
+                {
+                    "ok": True,
+                    "bridge_auth_mode": "generated",
+                    "bridge_mutating_auth_required": True,
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):  # noqa: N802
+            raw_length = self.headers.get("Content-Length", "0")
+            length = int(raw_length) if raw_length.isdigit() else 0
+            payload = self.rfile.read(length).decode("utf-8") if length else ""
+            requests.append(
+                {
+                    "path": self.path,
+                    "authorization": self.headers.get("Authorization"),
+                    "body": json.loads(payload or "{}"),
+                }
+            )
+            if self.path != "/cancel_task":
+                self.send_response(404)
+                self.end_headers()
+                return
+            if self.headers.get("Authorization") != f"Bearer {expected_token}":
+                self.send_response(401)
+                self.end_headers()
+                return
+            body = json.dumps({"ok": True, "message": "cancelled"}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):  # noqa: A003
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        yield port, requests
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_ensure_database_creates_sqlite_schema(tmp_path: Path) -> None:
@@ -195,6 +263,39 @@ def test_task_abandon_marks_task_terminal_locally(tmp_path: Path, monkeypatch) -
     assert task.stuck_reason == "manual cleanup"
     rows = journal.tail("TASK-1", limit=5)
     assert any(row.event == "abandoned" and row.source == "cli" for row in rows)
+
+
+def test_task_abandon_notifies_bridge_cancel_when_auth_marker_present(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir(parents=True, exist_ok=True)
+    repo_marker_dir = repo_path / ".agpair"
+    repo_marker_dir.mkdir(parents=True, exist_ok=True)
+
+    repo = make_task_repo(tmp_path)
+    journal = make_journal_repo(tmp_path)
+    repo.create_task(task_id="TASK-BRIDGE-ABANDON", repo_path=str(repo_path))
+    repo.mark_acked(task_id="TASK-BRIDGE-ABANDON", session_id="session-bridge-1")
+    journal.append("TASK-BRIDGE-ABANDON", "daemon", "acked", "session_id=session-bridge-1")
+
+    expected_token = "bridge-auth-token-123"
+    with run_bridge_server(expected_token=expected_token) as (port, requests):
+        (repo_marker_dir / "bridge_port").write_text(str(port), encoding="utf-8")
+        (repo_marker_dir / "bridge_auth_token").write_text(expected_token, encoding="utf-8")
+
+        result = CliRunner().invoke(
+            app,
+            ["task", "abandon", "TASK-BRIDGE-ABANDON", "--reason", "manual cleanup"],
+        )
+
+    assert result.exit_code == 0
+    task = repo.get_task("TASK-BRIDGE-ABANDON")
+    assert task is not None
+    assert task.phase == "abandoned"
+    cancel_request = next((item for item in requests if item["path"] == "/cancel_task"), None)
+    assert cancel_request is not None
+    assert cancel_request["authorization"] == f"Bearer {expected_token}"
+    assert cancel_request["body"] == {"task_id": "TASK-BRIDGE-ABANDON", "attempt_no": 1}
 
 
 def test_task_abandon_fails_when_task_is_missing(tmp_path: Path, monkeypatch) -> None:
