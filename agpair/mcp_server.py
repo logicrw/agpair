@@ -54,15 +54,15 @@ def _extract_task_id(stdout: str) -> str:
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
     if not lines:
         raise RuntimeError(f"expected single-line task id output, got: {stdout!r}")
-        
+
     if len(lines) == 1:
         return lines[0]
-        
+
     task_id = lines[-1]
     # Keep the parser conservative: do not silently accept ambiguous multi-line output.
     if " " in task_id or any(" " not in line for line in lines[:-1]):
         raise RuntimeError(f"expected single-line task id output, got: {stdout!r}")
-        
+
     return task_id
 
 
