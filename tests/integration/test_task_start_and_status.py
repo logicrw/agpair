@@ -439,6 +439,38 @@ def test_task_status_json_includes_failure_context_for_structured_blocked_receip
     assert payload["failure_context"]["details"]["message"] == "Missing credential"
 
 
+def test_task_status_json_ignores_malformed_structured_receipt(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-JSON-MALFORMED", repo_path="/tmp/repo")
+    repo.mark_acked(task_id="TASK-JSON-MALFORMED", session_id="session-json-malformed")
+    repo.mark_committed(task_id="TASK-JSON-MALFORMED")
+    journal = make_journal_repo(tmp_path)
+    journal.append(
+        "TASK-JSON-MALFORMED",
+        "daemon",
+        "committed",
+        json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "TASK-JSON-MALFORMED",
+                "attempt_no": "NOT AN INTEGER",
+                "review_round": 0,
+                "status": "COMMITTED",
+                "summary": "Committed cleanly",
+                "payload": {"commit_sha": "abc1234"},
+            }
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-JSON-MALFORMED", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["terminal_receipt"] is None
+    assert payload["committed_result"] is None
+
+
 def test_task_status_json_returns_not_found_error(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
 

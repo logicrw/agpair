@@ -24,18 +24,13 @@ _VALID_STATUSES = frozenset({"EVIDENCE_PACK", "BLOCKED", "COMMITTED"})
 _LISTISH_COMMITTED_FIELDS = frozenset({"changed_files", "validation", "residual_risks"})
 
 
-def parse_structured_terminal_receipt(
-    body: str,
+def validate_structured_receipt_dict(
+    parsed: Any,
+    raw_body: str = "",
     *,
     expected_status: str | None = None,
     expected_task_id: str | None = None,
 ) -> StructuredTerminalReceipt | None:
-    if not body:
-        return None
-    try:
-        parsed = json.loads(body)
-    except json.JSONDecodeError:
-        return None
     if not isinstance(parsed, dict):
         return None
     if parsed.get("schema_version") != "1":
@@ -73,7 +68,27 @@ def parse_structured_terminal_receipt(
         status=status,
         summary=summary,
         payload=payload,
+        raw_body=raw_body,
+    )
+
+
+def parse_structured_terminal_receipt(
+    body: str,
+    *,
+    expected_status: str | None = None,
+    expected_task_id: str | None = None,
+) -> StructuredTerminalReceipt | None:
+    if not body:
+        return None
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    return validate_structured_receipt_dict(
+        parsed,
         raw_body=body,
+        expected_status=expected_status,
+        expected_task_id=expected_task_id,
     )
 
 

@@ -356,6 +356,37 @@ def test_task_wait_json_normalizes_committed_result_list_fields(tmp_path: Path, 
     assert payload["committed_result"]["residual_risks"] == ["none"]
 
 
+def test_task_wait_json_ignores_malformed_structured_receipt(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WJ-MALFORMED", repo_path="/r")
+    repo.mark_acked(task_id="T-WJ-MALFORMED", session_id="session-json-wait-malformed")
+    repo.mark_committed(task_id="T-WJ-MALFORMED")
+    JournalRepository(_make_paths(tmp_path).db_path).append(
+        "T-WJ-MALFORMED",
+        "daemon",
+        "committed",
+        json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "T-WJ-MALFORMED",
+                "attempt_no": "BAD",
+                "review_round": 0,
+                "status": "COMMITTED",
+                "summary": "Committed cleanly",
+                "payload": {"commit_sha": "abc1234"},
+            }
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["task", "wait", "T-WJ-MALFORMED", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["task"]["terminal_receipt"] is None
+    assert payload["committed_result"] is None
+
+
 def test_task_wait_json_returns_not_found_error(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
 

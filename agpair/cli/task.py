@@ -28,6 +28,7 @@ from agpair.terminal_receipts import (
     committed_result_from_receipt,
     parse_structured_terminal_receipt,
     structured_receipt_to_dict,
+    validate_structured_receipt_dict,
 )
 from agpair.storage.db import ensure_database
 from agpair.storage.journal import JournalRepository
@@ -80,7 +81,7 @@ def _structured_receipt_payload(body: str) -> dict | None:
 def _parsed_structured_receipt(receipt_payload: dict | None):
     if receipt_payload is None:
         return None
-    return parse_structured_terminal_receipt(json.dumps(receipt_payload, ensure_ascii=False))
+    return validate_structured_receipt_dict(receipt_payload)
 
 
 def _committed_result_payload(receipt_payload: dict | None) -> dict | None:
