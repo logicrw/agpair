@@ -161,6 +161,7 @@ What already works:
 - Structured terminal receipts (v1) and JSON CLI output with A2A state hints
 - Task start idempotency keys and structured committed result/failure context
 - Internal `ExecutorAdapter` abstraction extended to expose a stable `backend_id` (`antigravity` / `codex_cli`), now visible in read-only info (e.g., `task status --json` and `doctor`) for transparency.
+- Added formal Continuation Capability Matrix to encode policy for backends (e.g., `same_session` for Antigravity vs. `fresh_resume_first` for Codex CLI), visible in `task status --json`.
 
 What is explicitly *not* in scope:
 

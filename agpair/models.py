@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import enum
+
+
+class ContinuationCapability(str, enum.Enum):
+    SAME_SESSION = "same_session"
+    FRESH_RESUME_FIRST = "fresh_resume_first"
+    UNSUPPORTED = "unsupported"
 
 
 @dataclass(frozen=True)

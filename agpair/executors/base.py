@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import typing
 
+from agpair.models import ContinuationCapability
+
 
 class ExecutorAdapter(typing.Protocol):
     """Minimal abstraction for task execution."""
@@ -9,6 +11,11 @@ class ExecutorAdapter(typing.Protocol):
     @property
     def backend_id(self) -> str:
         """Return the stable identifier for this executor backend."""
+        ...
+
+    @property
+    def continuation_capability(self) -> ContinuationCapability:
+        """Indicate how this backend handles continuation (e.g. same-session, fresh-resume-first)."""
         ...
 
     def dispatch(self, *, task_id: str, body: str, repo_path: str) -> typing.Any:

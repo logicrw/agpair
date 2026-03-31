@@ -160,11 +160,19 @@ def build_task_payload(paths: AppPaths, task) -> dict:
     committed_result = _committed_result_payload(terminal_receipt)
     failure_context = _failure_context_payload(task, terminal_receipt)
     blocker_type = failure_context["blocker_type"] if failure_context else None
-    from agpair.executors import AntigravityExecutor
+    from agpair.executors import AntigravityExecutor, CodexExecutor
+    
+    ag_exec = AntigravityExecutor("")
+    cx_exec = CodexExecutor()
 
     return {
         "task_id": task.task_id,
-        "active_executor_backend": AntigravityExecutor("").backend_id,
+        "active_executor_backend": ag_exec.backend_id,
+        "active_executor_continuation_capability": ag_exec.continuation_capability.value,
+        "supported_backends": {
+            ag_exec.backend_id: ag_exec.continuation_capability.value,
+            cx_exec.backend_id: cx_exec.continuation_capability.value,
+        },
         "phase": task.phase,
         "a2a_state_hint": a2a_state_hint_from_phase(task.phase, blocker_type=blocker_type),
         "repo_path": task.repo_path,
@@ -445,6 +453,8 @@ def task_status(
         return
     typer.echo(f"task_id: {payload['task_id']}")
     typer.echo(f"active_executor_backend: {payload['active_executor_backend']}")
+    typer.echo(f"active_executor_continuation_capability: {payload['active_executor_continuation_capability']}")
+    typer.echo(f"supported_backends: {json.dumps(payload['supported_backends'])}")
     typer.echo(f"phase: {payload['phase']}")
     typer.echo(f"a2a_state_hint: {payload['a2a_state_hint']}")
     typer.echo(f"repo_path: {payload['repo_path']}")

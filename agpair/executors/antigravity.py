@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agpair.executors.base import ExecutorAdapter
+from agpair.models import ContinuationCapability
 from agpair.transport.bus import AgentBusClient
 
 
@@ -13,6 +14,10 @@ class AntigravityExecutor(ExecutorAdapter):
     @property
     def backend_id(self) -> str:
         return "antigravity"
+
+    @property
+    def continuation_capability(self) -> ContinuationCapability:
+        return ContinuationCapability.SAME_SESSION
 
     def dispatch(self, *, task_id: str, body: str, repo_path: str) -> int:
         """Dispatch via the existing AgentBusClient semantics."""

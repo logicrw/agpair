@@ -9,6 +9,7 @@ import tempfile
 import typing
 
 from agpair.executors.base import ExecutorAdapter
+from agpair.models import ContinuationCapability
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,10 @@ class CodexExecutor(ExecutorAdapter):
     @property
     def backend_id(self) -> str:
         return "codex_cli"
+
+    @property
+    def continuation_capability(self) -> ContinuationCapability:
+        return ContinuationCapability.FRESH_RESUME_FIRST
 
     def dispatch(self, *, task_id: str, body: str, repo_path: str) -> CodexTaskRef:
         """

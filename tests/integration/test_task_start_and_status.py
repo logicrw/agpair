@@ -350,6 +350,8 @@ def test_task_status_shows_phase_and_session(tmp_path: Path, monkeypatch) -> Non
     assert result.exit_code == 0
     assert "phase: acked" in result.stdout
     assert "active_executor_backend: antigravity" in result.stdout
+    assert "active_executor_continuation_capability: same_session" in result.stdout
+    assert "codex_cli" in result.stdout
     assert "a2a_state_hint: working" in result.stdout
     assert "session_id: session-123" in result.stdout
 
@@ -367,6 +369,10 @@ def test_task_status_json_returns_structured_payload(tmp_path: Path, monkeypatch
     assert payload["ok"] is True
     assert payload["task_id"] == "TASK-JSON-1"
     assert payload["active_executor_backend"] == "antigravity"
+    assert payload["active_executor_continuation_capability"] == "same_session"
+    assert "codex_cli" in payload["supported_backends"]
+    assert payload["supported_backends"]["codex_cli"] == "fresh_resume_first"
+    assert payload["supported_backends"]["antigravity"] == "same_session"
     assert payload["phase"] == "acked"
     assert payload["a2a_state_hint"] == "working"
     assert payload["session_id"] == "session-json-1"
