@@ -2,5 +2,6 @@ from __future__ import annotations
 
 from agpair.executors.antigravity import AntigravityExecutor
 from agpair.executors.base import ExecutorAdapter
+from agpair.executors.codex import CodexExecutor
 
-__all__ = ["AntigravityExecutor", "ExecutorAdapter"]
+__all__ = ["AntigravityExecutor", "CodexExecutor", "ExecutorAdapter"]
