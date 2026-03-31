@@ -37,7 +37,6 @@ from agpair.storage.db import ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskNotFoundError, TaskRepository
 from agpair.storage.waiters import WaiterRepository
-from agpair.transport.bus import AgentBusClient
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -340,6 +339,7 @@ def start_task(
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
 ) -> None:
+    from agpair.executors import AntigravityExecutor
     from agpair.targets import resolve_repo_path
 
     paths = _paths()
@@ -347,7 +347,7 @@ def start_task(
     if not resolved_repo_path:
         raise typer.BadParameter("Either --repo-path or --target must be provided.")
 
-    bus = AgentBusClient(paths.agent_bus_bin)
+    executor = AntigravityExecutor(paths.agent_bus_bin)
     tasks = TaskRepository(paths.db_path)
     journal = JournalRepository(paths.db_path)
     final_task_id = task_id or f"TASK-{uuid4().hex[:12].upper()}"
@@ -397,7 +397,7 @@ def start_task(
         return
     journal.append(final_task_id, "cli", "created", body)
     try:
-        message_id = bus.send_task(task_id=final_task_id, body=body, repo_path=resolved_repo_path)
+        message_id = executor.dispatch(task_id=final_task_id, body=body, repo_path=resolved_repo_path)
     except (subprocess.SubprocessError, FileNotFoundError) as exc:
         reason = f"dispatch failed: {exc}"
         journal.append(final_task_id, "cli", "dispatch_failed", reason)

@@ -229,6 +229,13 @@ def test_task_start_creates_local_record_and_sends_task(tmp_path: Path, monkeypa
     assert task.phase == "new"
     recorded = read_calls(calls_path)
     assert recorded[-1]["argv"][:4] == ["agent-bus", "send", "--sender", "desktop"]
+    # Prove that the abstraction still sends the same identical parameters
+    assert "--task-id" in recorded[-1]["argv"]
+    assert "TASK-CLI-1" in recorded[-1]["argv"]
+    assert "--status" in recorded[-1]["argv"]
+    assert "TASK" in recorded[-1]["argv"]
+    assert "repo_path: /tmp/repo" in recorded[-1]["body"]
+    assert "Goal: fix it" in recorded[-1]["body"]
 
 
 def test_task_start_reuses_existing_task_for_same_repo_and_idempotency_key(tmp_path: Path, monkeypatch) -> None:
