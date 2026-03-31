@@ -1004,6 +1004,8 @@ def _prepare_fresh_resume_dispatch(
     waiter_command: str,
 ) -> None:
     from agpair.storage.db import connect
+    from agpair.executors import AntigravityExecutor, CodexExecutor
+    
     with connect(paths.db_path) as conn:
         row = conn.execute(
             "SELECT body FROM journal WHERE task_id = ? AND event = 'created' AND source = 'cli' ORDER BY id ASC LIMIT 1",
@@ -1023,9 +1025,13 @@ def _prepare_fresh_resume_dispatch(
         f"--- NEW FEEDBACK / REQUEST ---\n{feedback}"
     )
 
+    ag_exec = AntigravityExecutor(paths.agent_bus_bin)
+    cx_exec = CodexExecutor()
+    active_exec = cx_exec if task.executor_backend == cx_exec.backend_id else ag_exec
+
     try:
-        # We don't need prepare_retry, apply_retry_dispatch will do the real transition.
-        message_id = bus.send_task(task_id=task.task_id, body=resume_body, repo_path=task.repo_path)
+        # For fresh resume, we use the executor's dispatch explicitly
+        dispatch_result = active_exec.dispatch(task_id=task.task_id, body=resume_body, repo_path=task.repo_path)
     except (subprocess.SubprocessError, FileNotFoundError) as exc:
         reason = f"dispatch failed: {exc}"
         journal.append(task.task_id, "cli", "resume_failed", reason)
@@ -1033,7 +1039,14 @@ def _prepare_fresh_resume_dispatch(
         raise typer.Exit(code=1)
 
     updated = tasks.apply_retry_dispatch(task_id=task.task_id)
-    journal.append(updated.task_id, "cli", "resumed", f"id={message_id} attempt={updated.attempt_no}")
+    
+    if task.executor_backend == "codex_cli":
+        session_id = str(dispatch_result.temp_dir)
+        tasks.mark_acked(task_id=updated.task_id, session_id=session_id)
+        journal.append(updated.task_id, "cli", "resumed", f"started codex exec in {session_id} attempt={updated.attempt_no}")
+    else:
+        journal.append(updated.task_id, "cli", "resumed", f"id={dispatch_result} attempt={updated.attempt_no}")
+
     typer.echo(task.task_id)
 
     maybe_auto_wait(
@@ -1045,6 +1058,19 @@ def _prepare_fresh_resume_dispatch(
         timeout_seconds=timeout_seconds,
         waiter_command=waiter_command,
     )
+
+
+def _should_fresh_resume(paths: AppPaths, task, cli_fresh_resume: bool) -> bool:
+    if cli_fresh_resume:
+        return True
+    from agpair.executors import AntigravityExecutor, CodexExecutor
+    from agpair.models import ContinuationCapability
+
+    ag_exec = AntigravityExecutor(paths.agent_bus_bin)
+    cx_exec = CodexExecutor()
+    active_exec = cx_exec if task.executor_backend == cx_exec.backend_id else ag_exec
+
+    return active_exec.continuation_capability == ContinuationCapability.FRESH_RESUME_FIRST
 
 
 # ---------------------------------------------------------------------------
@@ -1069,8 +1095,10 @@ def continue_task(
     task = _require_task_with_session(tasks, task_id)
     _guard_active_waiter(paths, task_id, force=force, command="continue")
     _guard_live_task(task, force=force, command="continue")
+    
+    is_fresh_resume = _should_fresh_resume(paths, task, fresh_resume)
 
-    if fresh_resume:
+    if is_fresh_resume:
         _prepare_fresh_resume_dispatch(
             paths=paths,
             bus=bus,
@@ -1131,7 +1159,9 @@ def approve_task(
     _guard_active_waiter(paths, task_id, force=force, command="approve")
     _guard_live_task(task, force=force, command="approve")
 
-    if fresh_resume:
+    is_fresh_resume = _should_fresh_resume(paths, task, fresh_resume)
+
+    if is_fresh_resume:
         _prepare_fresh_resume_dispatch(
             paths=paths,
             bus=bus,
@@ -1180,6 +1210,7 @@ def reject_task(
     task_id: str,
     body: str = typer.Option(..., "--body"),
     force: bool = typer.Option(False, "--force", help="Bypass waiter guard."),
+    fresh_resume: bool = typer.Option(False, "--fresh-resume", help="Resume as a fresh execution carrying forward context."),
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
@@ -1190,6 +1221,24 @@ def reject_task(
     journal = JournalRepository(paths.db_path)
     task = _require_task_with_session(tasks, task_id)
     _guard_active_waiter(paths, task_id, force=force, command="reject")
+    
+    is_fresh_resume = _should_fresh_resume(paths, task, fresh_resume)
+
+    if is_fresh_resume:
+        _prepare_fresh_resume_dispatch(
+            paths=paths,
+            bus=bus,
+            tasks=tasks,
+            journal=journal,
+            task=task,
+            feedback=body,
+            wait=wait,
+            interval_seconds=interval_seconds,
+            timeout_seconds=timeout_seconds,
+            waiter_command="task_reject_auto_wait",
+        )
+        return
+
     # Reject is implemented as review feedback on the wire, so the extension
     # acknowledges it with REVIEW_ACK / REVIEW_NACK just like continue.
     _send_semantic_or_exit(

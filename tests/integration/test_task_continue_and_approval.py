@@ -515,3 +515,131 @@ def test_task_approve_fresh_resume_preserves_context(tmp_path: Path, monkeypatch
     assert "Original Task Body" in body
     assert "Evidence achieved!" in body
     assert "Approved it" in body
+
+def test_task_continue_codex_forces_fresh_resume(tmp_path: Path, monkeypatch) -> None:
+    import json
+    from agpair.storage.journal import JournalRepository
+
+    binary, calls_path, _pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+
+    db_path = tmp_path / ".agpair" / "agpair.db"
+    ensure_database(db_path)
+    repo = TaskRepository(db_path)
+    repo.create_task(task_id="TASK-1", repo_path="/tmp/repo", executor_backend="codex_cli")
+    repo.mark_acked(task_id="TASK-1", session_id="session-123")
+
+    class DummyDispatchResult:
+        temp_dir = tmp_path / "dummy_codex_session"
+
+    dummy_called = []
+    
+    # We must patch CodexExecutor's dispatch to avoid actually running codex.
+    from agpair.executors.codex import CodexExecutor
+    def dummy_dispatch(self, task_id, body, repo_path):
+        dummy_called.append({"task_id": task_id, "body": body})
+        return DummyDispatchResult()
+
+    monkeypatch.setattr(CodexExecutor, "dispatch", dummy_dispatch)
+
+    journal = JournalRepository(tmp_path / ".agpair" / "agpair.db")
+    journal.append("TASK-1", "cli", "created", "Original Task Body")
+
+    result = CliRunner().invoke(app, ["task", "continue", "TASK-1", "--body", "Fix stuff", "--no-wait"])
+
+    assert result.exit_code == 0
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.attempt_no == 2
+    assert task.retry_count == 1
+    assert "dummy_codex_session" in task.antigravity_session_id
+
+    assert len(dummy_called) == 1
+    assert dummy_called[0]["task_id"] == "TASK-1"
+    assert "Original Task Body" in dummy_called[0]["body"]
+    assert "Fix stuff" in dummy_called[0]["body"]
+
+
+def test_task_approve_codex_forces_fresh_resume(tmp_path: Path, monkeypatch) -> None:
+    import json
+    from agpair.storage.journal import JournalRepository
+
+    binary, calls_path, _pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+
+    db_path = tmp_path / ".agpair" / "agpair.db"
+    ensure_database(db_path)
+    repo = TaskRepository(db_path)
+    repo.create_task(task_id="TASK-1", repo_path="/tmp/repo", executor_backend="codex_cli")
+    repo.mark_acked(task_id="TASK-1", session_id="session-123")
+
+    class DummyDispatchResult:
+        temp_dir = tmp_path / "dummy_codex_session_"
+
+    dummy_called = []
+    
+    from agpair.executors.codex import CodexExecutor
+    def dummy_dispatch(self, task_id, body, repo_path):
+        dummy_called.append({"task_id": task_id, "body": body})
+        return DummyDispatchResult()
+
+    monkeypatch.setattr(CodexExecutor, "dispatch", dummy_dispatch)
+
+    journal = JournalRepository(tmp_path / ".agpair" / "agpair.db")
+    journal.append("TASK-1", "cli", "created", "Original Task Body")
+
+    result = CliRunner().invoke(app, ["task", "approve", "TASK-1", "--body", "Looks good", "--no-wait"])
+
+    assert result.exit_code == 0
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.attempt_no == 2
+    assert task.retry_count == 1
+    assert "dummy_codex_session_" in task.antigravity_session_id
+
+    assert len(dummy_called) == 1
+    assert dummy_called[0]["task_id"] == "TASK-1"
+    assert "Original Task Body" in dummy_called[0]["body"]
+    assert "Looks good" in dummy_called[0]["body"]
+
+def test_task_reject_codex_forces_fresh_resume(tmp_path: Path, monkeypatch) -> None:
+    import json
+    from agpair.storage.journal import JournalRepository
+
+    binary, calls_path, _pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+
+    db_path = tmp_path / ".agpair" / "agpair.db"
+    ensure_database(db_path)
+    repo = TaskRepository(db_path)
+    repo.create_task(task_id="TASK-1", repo_path="/tmp/repo", executor_backend="codex_cli")
+    repo.mark_acked(task_id="TASK-1", session_id="session-123")
+
+    class DummyDispatchResult:
+        temp_dir = tmp_path / "dummy_codex_session_reject"
+
+    dummy_called = []
+    
+    from agpair.executors.codex import CodexExecutor
+    def dummy_dispatch(self, task_id, body, repo_path):
+        dummy_called.append({"task_id": task_id, "body": body})
+        return DummyDispatchResult()
+
+    monkeypatch.setattr(CodexExecutor, "dispatch", dummy_dispatch)
+
+    journal = JournalRepository(tmp_path / ".agpair" / "agpair.db")
+    journal.append("TASK-1", "cli", "created", "Original Task Body")
+
+    result = CliRunner().invoke(app, ["task", "reject", "TASK-1", "--body", "Fix your errors", "--no-wait"])
+
+    assert result.exit_code == 0
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.attempt_no == 2
+    assert task.retry_count == 1
+
+    assert len(dummy_called) == 1
+    assert "Fix your errors" in dummy_called[0]["body"]

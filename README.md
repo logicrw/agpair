@@ -162,6 +162,7 @@ What already works:
 - Task start idempotency keys and structured committed result/failure context
 - Internal `ExecutorAdapter` abstraction extended to expose a stable `backend_id` (`antigravity` / `codex_cli`), now visible in read-only info (e.g., `task status --json` and `doctor`) for transparency.
 - Added formal Continuation Capability Matrix to encode policy for backends (e.g., `same_session` for Antigravity vs. `fresh_resume_first` for Codex CLI), visible in `task status --json`.
+- Implemented `fresh_resume_first` path for review/approval flows, allowing Codex-backed tasks to seamlessly carry over feedback via a fresh dispatch.
 
 What is explicitly *not* in scope:
 
