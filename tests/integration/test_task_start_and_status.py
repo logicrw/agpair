@@ -769,3 +769,94 @@ def test_inspect_human_readable_output(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert "=== Inspect: /tmp/repo ===" in result.stdout
     assert "Task ID:     TASK-HUMAN" in result.stdout
+
+
+def test_target_cli_add_resolve_list_remove(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir(parents=True, exist_ok=True)
+
+    result = CliRunner().invoke(app, ["target", "add", "--name", "my-repo", "--repo-path", str(repo_path)])
+    assert result.exit_code == 0
+    assert "my-repo" in result.stdout
+
+    result = CliRunner().invoke(app, ["target", "list", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["targets"]["my-repo"]["repo_path"] == str(repo_path.resolve())
+
+    result = CliRunner().invoke(app, ["target", "resolve", "my-repo"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(repo_path.resolve())
+
+    result = CliRunner().invoke(app, ["target", "resolve", "my-repo", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["target"] == "my-repo"
+    assert payload["repo_path"] == str(repo_path.resolve())
+
+    result = CliRunner().invoke(app, ["target", "remove", "--name", "my-repo"])
+    assert result.exit_code == 0
+
+    result = CliRunner().invoke(app, ["target", "resolve", "my-repo"])
+    assert result.exit_code != 0
+    assert "not found" in (result.stdout + result.stderr).lower()
+
+
+def test_inspect_target_substitution(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir(parents=True, exist_ok=True)
+
+    add_result = CliRunner().invoke(app, ["target", "add", "--name", "test-repo", "--repo-path", str(repo_path)])
+    assert add_result.exit_code == 0
+
+    result = CliRunner().invoke(app, ["inspect", "--target", "test-repo", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["repo_path"] == str(repo_path.resolve())
+
+
+def test_task_start_target_substitution(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir(parents=True, exist_ok=True)
+
+    add_result = CliRunner().invoke(app, ["target", "add", "--name", "app-repo", "--repo-path", str(repo_path)])
+    assert add_result.exit_code == 0
+
+    result = CliRunner().invoke(
+        app,
+        ["task", "start", "--target", "app-repo", "--body", "Goal: fix it", "--task-id", "TASK-TARGET-1", "--no-wait"],
+    )
+
+    assert result.exit_code == 0
+    assert "TASK-TARGET-1" in result.stdout
+    task = make_task_repo(tmp_path).get_task("TASK-TARGET-1")
+    assert task is not None
+    assert task.repo_path == str(repo_path.resolve())
+
+    recorded = read_calls(calls_path)
+    assert f"repo_path: {repo_path.resolve()}" in recorded[-1]["body"]
+
+
+def test_task_start_rejects_target_and_repo_path_together(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir(parents=True, exist_ok=True)
+
+    add_result = CliRunner().invoke(app, ["target", "add", "--name", "dual", "--repo-path", str(repo_path)])
+    assert add_result.exit_code == 0
+
+    result = CliRunner().invoke(
+        app,
+        ["task", "start", "--target", "dual", "--repo-path", str(repo_path), "--body", "Goal", "--no-wait"],
+    )
+    assert result.exit_code != 0
+    assert "cannot specify both" in (result.stdout + result.stderr).lower()

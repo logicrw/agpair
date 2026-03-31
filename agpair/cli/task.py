@@ -331,7 +331,8 @@ _JSON_OPTION = typer.Option(False, "--json", help="Emit machine-readable JSON.")
 
 @app.command("start")
 def start_task(
-    repo_path: str = typer.Option(..., "--repo-path"),
+    repo_path: str | None = typer.Option(None, "--repo-path"),
+    target: str | None = typer.Option(None, "--target", help="Target alias (alternative to --repo-path)."),
     body: str = typer.Option(..., "--body"),
     task_id: str | None = typer.Option(None, "--task-id"),
     idempotency_key: str | None = typer.Option(None, "--idempotency-key"),
@@ -339,7 +340,13 @@ def start_task(
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
 ) -> None:
+    from agpair.targets import resolve_repo_path
+
     paths = _paths()
+    resolved_repo_path = resolve_repo_path(repo_path, target, paths)
+    if not resolved_repo_path:
+        raise typer.BadParameter("Either --repo-path or --target must be provided.")
+
     bus = AgentBusClient(paths.agent_bus_bin)
     tasks = TaskRepository(paths.db_path)
     journal = JournalRepository(paths.db_path)
@@ -347,7 +354,7 @@ def start_task(
 
     if idempotency_key:
         existing_task = tasks.get_task_by_idempotency_key(
-            repo_path=repo_path,
+            repo_path=resolved_repo_path,
             client_idempotency_key=idempotency_key,
         )
         if existing_task is not None:
@@ -365,14 +372,14 @@ def start_task(
     try:
         tasks.create_task(
             task_id=final_task_id,
-            repo_path=repo_path,
+            repo_path=resolved_repo_path,
             client_idempotency_key=idempotency_key,
         )
     except sqlite3.IntegrityError:
         if not idempotency_key:
             raise
         existing_task = tasks.get_task_by_idempotency_key(
-            repo_path=repo_path,
+            repo_path=resolved_repo_path,
             client_idempotency_key=idempotency_key,
         )
         if existing_task is None:
@@ -390,7 +397,7 @@ def start_task(
         return
     journal.append(final_task_id, "cli", "created", body)
     try:
-        message_id = bus.send_task(task_id=final_task_id, body=body, repo_path=repo_path)
+        message_id = bus.send_task(task_id=final_task_id, body=body, repo_path=resolved_repo_path)
     except (subprocess.SubprocessError, FileNotFoundError) as exc:
         reason = f"dispatch failed: {exc}"
         journal.append(final_task_id, "cli", "dispatch_failed", reason)

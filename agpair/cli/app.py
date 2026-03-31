@@ -6,19 +6,24 @@ from agpair.cli.daemon import app as daemon_app
 from agpair.cli.doctor import emit_doctor_json
 from agpair.cli.task import app as task_app
 from agpair.config import AppPaths
+from agpair.targets import app as target_app
 
 app = typer.Typer(no_args_is_help=True)
 
 app.add_typer(task_app, name="task")
 app.add_typer(daemon_app, name="daemon")
+app.add_typer(target_app, name="target")
 
 
 @app.command("doctor")
 def doctor(
     repo_path: str | None = typer.Option(None, "--repo-path"),
+    target: str | None = typer.Option(None, "--target", help="Target alias (alternative to --repo-path)."),
     fresh: bool = typer.Option(False, "--fresh", help="Bypass cache and force a full re-probe"),
 ) -> None:
-    typer.echo(emit_doctor_json(AppPaths.default(), repo_path=repo_path, fresh=fresh))
+    from agpair.targets import resolve_repo_path
+    resolved_repo_path = resolve_repo_path(repo_path, target)
+    typer.echo(emit_doctor_json(AppPaths.default(), repo_path=resolved_repo_path, fresh=fresh))
 
 
 @app.command()
@@ -64,7 +69,8 @@ def cleanup(
 
 @app.command("inspect")
 def inspect(
-    repo_path: str = typer.Option(..., "--repo-path", help="The repository path to inspect."),
+    repo_path: str | None = typer.Option(None, "--repo-path", help="The repository path to inspect."),
+    target: str | None = typer.Option(None, "--target", help="Target alias (alternative to --repo-path)."),
     task_id: str | None = typer.Option(None, "--task-id", help="Optionally focus on a specific task ID."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
@@ -74,19 +80,24 @@ def inspect(
     from agpair.storage.db import ensure_database
     from agpair.storage.journal import JournalRepository
     from agpair.storage.tasks import TaskRepository
+    from agpair.targets import resolve_repo_path
+
+    resolved_repo_path = resolve_repo_path(repo_path, target)
+    if not resolved_repo_path:
+        raise typer.BadParameter("Either --repo-path or --target must be provided.")
 
     paths = AppPaths.default()
     ensure_database(paths.db_path)
 
-    doctor_report = build_doctor_report(paths, repo_path=repo_path, fresh=False)
+    doctor_report = build_doctor_report(paths, repo_path=resolved_repo_path, fresh=False)
     tasks = TaskRepository(paths.db_path)
 
-    task_record = tasks.get_task(task_id) if task_id else tasks.get_most_relevant_active_task(repo_path)
+    task_record = tasks.get_task(task_id) if task_id else tasks.get_most_relevant_active_task(resolved_repo_path)
     task_payload = build_task_payload(paths, task_record) if task_record else None
 
     if json_output:
         out = {
-            "repo_path": repo_path,
+            "repo_path": resolved_repo_path,
             "bridge": {
                 "reachable": doctor_report.get("repo_bridge_reachable"),
                 "session_ready": doctor_report.get("repo_bridge_session_ready"),
@@ -128,7 +139,7 @@ def inspect(
         return
 
     # Human readable text
-    typer.echo(f"=== Inspect: {repo_path} ===")
+    typer.echo(f"=== Inspect: {resolved_repo_path} ===")
 
     if doctor_report.get("repo_bridge_session_ready"):
         typer.echo("Bridge: Ready")

@@ -81,6 +81,16 @@ agpair task start --repo-path /path/to/your/project \
 
 By default, `task start` **waits** until the task reaches a terminal phase. Add `--no-wait` for fire-and-forget.
 
+If you use the same repo frequently, you can save it as a local target alias and reuse `--target`:
+
+```bash
+agpair target add --name my-project --repo-path /path/to/your/project
+agpair doctor --target my-project
+agpair inspect --target my-project --json
+agpair task start --target my-project \
+  --body "Goal: fix the failing smoke test and return EVIDENCE_PACK."
+```
+
 For the full step-by-step walkthrough, see the detailed guides below.
 
 ## Architecture
@@ -146,6 +156,7 @@ What already works:
 - Streaming `task watch` for continuous progress observation until terminal phase
 - Daemon with receipt ingestion, session continuity, and stuck detection
 - `inspect` command for unified local repo/task overview, integrating `doctor` and task context
+- Local `target` aliases so high-frequency commands can use `--target <alias>` instead of a full repo path
 - `doctor` preflight checks (local health, desktop conflicts, bridge health, concurrency policy/pending tasks)
 - Structured terminal receipts (v1) and JSON CLI output with A2A state hints
 - Task start idempotency keys and structured committed result/failure context

@@ -845,3 +845,34 @@ def test_doctor_reports_pending_tasks_and_concurrency_policy(
     policy = payload["repo_bridge_concurrency_policy"]
     assert policy["same_worktree_parallel_safe"] is False
     assert policy["safe_isolation_boundary"] == "different repo or different git worktree"
+
+
+def test_doctor_target_substitution(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    _clear_disk_cache(tmp_path)
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir(parents=True, exist_ok=True)
+
+    add_result = CliRunner().invoke(app, ["target", "add", "--name", "test-repo", "--repo-path", str(repo_path)])
+    assert add_result.exit_code == 0
+
+    result = CliRunner().invoke(app, ["doctor", "--target", "test-repo"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["repo_path"] == str(repo_path.resolve())
+
+
+def test_doctor_rejects_target_and_repo_path_together(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    _clear_disk_cache(tmp_path)
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir(parents=True, exist_ok=True)
+
+    add_result = CliRunner().invoke(app, ["target", "add", "--name", "test-repo", "--repo-path", str(repo_path)])
+    assert add_result.exit_code == 0
+
+    result = CliRunner().invoke(app, ["doctor", "--repo-path", str(repo_path), "--target", "test-repo"])
+    assert result.exit_code != 0
+    assert "cannot specify both" in (result.stdout + result.stderr).lower()
