@@ -6,6 +6,11 @@ import typing
 class ExecutorAdapter(typing.Protocol):
     """Minimal abstraction for task execution."""
 
+    @property
+    def backend_id(self) -> str:
+        """Return the stable identifier for this executor backend."""
+        ...
+
     def dispatch(self, *, task_id: str, body: str, repo_path: str) -> typing.Any:
         """
         Dispatch a task payload to the underlying executor.

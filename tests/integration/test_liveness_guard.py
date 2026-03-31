@@ -141,6 +141,9 @@ def test_continue_blocked_on_live_acked_task(tmp_path: Path, monkeypatch) -> Non
 
 
 def test_continue_allowed_with_force_on_live_acked_task(tmp_path: Path, monkeypatch) -> None:
+    def mock_send(*args, send_fn=None, **kwargs):
+        if send_fn: send_fn()
+    monkeypatch.setattr("agpair.cli.task._send_semantic_or_exit", mock_send)
     binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
@@ -158,6 +161,9 @@ def test_continue_allowed_with_force_on_live_acked_task(tmp_path: Path, monkeypa
 
 def test_continue_allowed_on_silent_acked_task(tmp_path: Path, monkeypatch) -> None:
     """No guard when task has no recent liveness signals."""
+    def mock_send(*args, send_fn=None, **kwargs):
+        if send_fn: send_fn()
+    monkeypatch.setattr("agpair.cli.task._send_semantic_or_exit", mock_send)
     binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)

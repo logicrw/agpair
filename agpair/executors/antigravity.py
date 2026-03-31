@@ -10,6 +10,10 @@ class AntigravityExecutor(ExecutorAdapter):
     def __init__(self, agent_bus_bin: str = "agent-bus") -> None:
         self.bus = AgentBusClient(executable=agent_bus_bin)
 
+    @property
+    def backend_id(self) -> str:
+        return "antigravity"
+
     def dispatch(self, *, task_id: str, body: str, repo_path: str) -> int:
         """Dispatch via the existing AgentBusClient semantics."""
         return self.bus.send_task(task_id=task_id, body=body, repo_path=repo_path)

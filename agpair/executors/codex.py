@@ -73,6 +73,10 @@ class CodexExecutor(ExecutorAdapter):
     def __init__(self, codex_bin: str = "codex") -> None:
         self.codex_bin = codex_bin
 
+    @property
+    def backend_id(self) -> str:
+        return "codex_cli"
+
     def dispatch(self, *, task_id: str, body: str, repo_path: str) -> CodexTaskRef:
         """
         Dispatch a task using codex exec.

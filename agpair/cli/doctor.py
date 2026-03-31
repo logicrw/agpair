@@ -131,6 +131,8 @@ def build_doctor_report(
         exclude_pids=exclude_pids,
     )
 
+    from agpair.executors import AntigravityExecutor, CodexExecutor
+
     report = {
         "config_root": str(paths.root),
         "db_path": str(paths.db_path),
@@ -148,6 +150,8 @@ def build_doctor_report(
         "processed_receipts": status.get("processed_receipts", 0),
         "stuck_marked": status.get("stuck_marked", 0),
         "latest_receipt_id": latest_receipt_id,
+        "active_executor_backend": AntigravityExecutor("").backend_id,
+        "supported_executor_backends": [AntigravityExecutor("").backend_id, CodexExecutor("").backend_id],
         "desktop_reader_conflict": desktop_reader_conflict is not None,
         "desktop_reader_conflict_detail": desktop_reader_conflict,
         "doctor_cache_hit": False,

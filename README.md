@@ -160,7 +160,7 @@ What already works:
 - `doctor` preflight checks (local health, desktop conflicts, bridge health, concurrency policy/pending tasks)
 - Structured terminal receipts (v1) and JSON CLI output with A2A state hints
 - Task start idempotency keys and structured committed result/failure context
-- Internal `ExecutorAdapter` abstraction extended with a Codex CLI executor adapter (groundwork for multi-executor support; no user-facing capabilities yet)
+- Internal `ExecutorAdapter` abstraction extended to expose a stable `backend_id` (`antigravity` / `codex_cli`), now visible in read-only info (e.g., `task status --json` and `doctor`) for transparency.
 
 What is explicitly *not* in scope:
 

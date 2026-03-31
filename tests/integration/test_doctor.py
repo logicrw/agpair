@@ -67,6 +67,8 @@ def test_doctor_reports_missing_bus_or_database_paths(tmp_path: Path, monkeypatc
     assert payload["config_root"].endswith(".agpair")
     assert payload["db_exists"] is False
     assert payload["agent_bus_available"] is False
+    assert payload["active_executor_backend"] == "antigravity"
+    assert "codex_cli" in payload["supported_executor_backends"]
 
 
 def test_doctor_reports_daemon_status_and_latest_receipt(tmp_path: Path, monkeypatch) -> None:
