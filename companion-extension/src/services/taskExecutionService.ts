@@ -226,6 +226,23 @@ export class TaskExecutionService {
     }
 
     const sessionId = result.session_id;
+
+    if (sessionId.startsWith("ag-cmd-")) {
+      await this.sessionCtrl.terminateSession(sessionId);
+      return {
+        ok: false,
+        status: "ERROR",
+        task_id: req.task_id,
+        attempt_no: req.attempt_no,
+        review_round: req.review_round,
+        session_id: sessionId,
+        source_event_id: "",
+        source_seq: 0,
+        emitted_at: new Date().toISOString(),
+        message: "Failed to establish a trustworthy session (phantom ID). The UI may not be able to receive prompts reliably.",
+      };
+    }
+
     const now = new Date().toISOString();
 
     // Bind session

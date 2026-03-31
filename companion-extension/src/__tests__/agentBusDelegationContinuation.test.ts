@@ -382,4 +382,40 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
     assert.match(replies[0].body, /Please use --fresh-resume instead/);
     service.dispose();
   });
+  it("emits BLOCKED (not ACK) when TASK creation returns a phantom session (ag-cmd-*)", async () => {
+    const tracker = new DelegationTaskTracker();
+    const replies: Array<{ taskId: string; status: string; body: string }> = [];
+
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async createBackgroundSession() {
+          return { ok: true, session_id: "ag-cmd-123456" };
+        },
+        async terminateSession() {
+          return true;
+        }
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      sendReply: async (reply: AgentBusDelegationReply) => {
+        replies.push(reply);
+      },
+    });
+
+    await service.handleMessages([{ id: 11, task_id: "PHANTOM-TASK-START", status: "TASK", body: "Do it." }]);
+
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].status, "BLOCKED");
+    assert.match(replies[0].body, /phantom ID/);
+    
+    // Should NOT be tracked
+    const tracked = tracker.get("PHANTOM-TASK-START");
+    assert.equal(tracked, undefined);
+
+    service.dispose();
+  });
 });

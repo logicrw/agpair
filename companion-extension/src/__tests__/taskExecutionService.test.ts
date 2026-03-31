@@ -85,4 +85,42 @@ describe("TaskExecutionService automation fallback policy", () => {
       contextLabel: "task TASK-CONT-STRICT",
     });
   });
+
+  it("runTask does not emit ACK for phantom (ag-cmd-*) sessions", async () => {
+    const sessionStore = new TaskSessionStore();
+    const eventStore = new PendingEventStore();
+    let terminatedSession = "";
+
+    const service = new TaskExecutionService(
+      {
+        async createBackgroundSession() {
+          return { ok: true, session_id: "ag-cmd-123456" };
+        },
+        async terminateSession(sessionId: string) {
+          terminatedSession = sessionId;
+          return true;
+        }
+      } as any,
+      sessionStore,
+      eventStore,
+    );
+
+    const result = await service.runTask({
+      task_id: "TASK-RUN-PHANTOM",
+      attempt_no: 1,
+      review_round: 0,
+      repo_path: "/tmp/agpair-phantom",
+      prompt: "Implement the change.",
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "ERROR");
+    assert.match(result.message, /trustworthy session/i);
+    assert.match(result.message, /phantom ID/i);
+    assert.equal(terminatedSession, "ag-cmd-123456");
+    
+    // Ensure no session was bound
+    const bound = sessionStore.get("TASK-RUN-PHANTOM", 1);
+    assert.equal(bound, undefined);
+  });
 });

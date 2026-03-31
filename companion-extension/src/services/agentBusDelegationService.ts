@@ -182,6 +182,19 @@ export class AgentBusDelegationService {
       return;
     }
 
+    if (result.session_id.startsWith("ag-cmd-")) {
+      this.outputChannel.appendLine(
+        `[companion] delegated TASK ${taskId} resulted in phantom session ${result.session_id}. Rejecting with BLOCKED.`,
+      );
+      await this.sessionCtrl.terminateSession(result.session_id);
+      await this.sendReplyFn({
+        taskId,
+        status: "BLOCKED",
+        body: `Failed to establish a trustworthy session (phantom ID). The UI may not be able to receive prompts reliably.`,
+      });
+      return;
+    }
+
     this.outputChannel.appendLine(
       `[companion] delegated TASK ${taskId} to Antigravity session ${result.session_id}`,
     );
