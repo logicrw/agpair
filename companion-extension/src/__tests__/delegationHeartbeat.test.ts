@@ -473,6 +473,88 @@ describe("Heartbeat integration scenarios", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("positively lost session triggers cleanup/recovery earlier than stale timeout", async () => {
+    const dir = makeTempDir();
+    const tracker = new DelegationTaskTracker();
+    const terminalSent: Array<{ taskId: string; status: string; body: string }> = [];
+
+    // Register task acked at T=0
+    registerPendingTask(tracker, "TASK-LOST-EARLY", { ackedAt: "2026-01-01T00:00:00Z" });
+
+    const watcher = new DelegationReceiptWatcher({
+      tracker,
+      receiptDir: dir,
+      pollIntervalMs: 60000,
+      staleAfterMs: 60000, // 60s window (would normally not trigger at 5s)
+      outputChannel: { appendLine: () => undefined },
+      sendTerminal: async (taskId, status, body) => {
+        terminalSent.push({ taskId, status, body });
+      },
+      sessionCtrl: {
+        async hasPositiveEvidenceOfLoss() {
+          return true; // Fake positive loss detection
+        }
+      } as any,
+    });
+
+    // Poll at T=5s — BEFORE the 60s stale window
+    await watcher.poll(() => Date.parse("2026-01-01T00:00:05Z"));
+
+    // Task MUST be BLOCKED early due to positive loss detection
+    assert.equal(terminalSent.length, 1, "early cleanup must fire");
+    assert.equal(terminalSent[0].taskId, "TASK-LOST-EARLY");
+    assert.equal(terminalSent[0].status, "BLOCKED");
+    assert.match(terminalSent[0].body, /positively detected as lost/i);
+    assert.ok(tracker.isTerminalSent("TASK-LOST-EARLY"));
+
+    watcher.dispose();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("synthetic or ambiguous session falls back to normal stale timeout", async () => {
+    const dir = makeTempDir();
+    const tracker = new DelegationTaskTracker();
+    const terminalSent: Array<{ taskId: string; status: string; body: string }> = [];
+
+    // Register task acked at T=0
+    registerPendingTask(tracker, "TASK-STALE-AMBIG", { ackedAt: "2026-01-01T00:00:00Z" });
+
+    const watcher = new DelegationReceiptWatcher({
+      tracker,
+      receiptDir: dir,
+      pollIntervalMs: 60000,
+      staleAfterMs: 60000, // 60s window
+      outputChannel: { appendLine: () => undefined },
+      sendTerminal: async (taskId, status, body) => {
+        terminalSent.push({ taskId, status, body });
+      },
+      sessionCtrl: {
+        async hasPositiveEvidenceOfLoss() {
+          return false; // Ambiguous or synthetic, no positive proof
+        }
+      } as any,
+    });
+
+    // Poll at T=5s — BEFORE the 60s stale window
+    await watcher.poll(() => Date.parse("2026-01-01T00:00:05Z"));
+
+    // Task must NOT be blown away yet, because we lack positive proof and it's not stale
+    assert.equal(terminalSent.length, 0, "must not cleanup early for ambiguous state");
+
+    // Poll at T=65s — AFTER the 60s stale window
+    await watcher.poll(() => Date.parse("2026-01-01T00:01:05Z"));
+
+    // Task MUST be BLOCKED now due to normal stale timeout
+    assert.equal(terminalSent.length, 1, "fallback stale timeout must fire");
+    assert.equal(terminalSent[0].taskId, "TASK-STALE-AMBIG");
+    assert.equal(terminalSent[0].status, "BLOCKED");
+    assert.match(terminalSent[0].body, /timed out/i);
+    assert.ok(tracker.isTerminalSent("TASK-STALE-AMBIG"));
+
+    watcher.dispose();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("REVIEW / APPROVED reopen still allows heartbeat before the next terminal", async () => {
     const tracker = new DelegationTaskTracker();
     const replies: Array<{ taskId: string; status: string }> = [];

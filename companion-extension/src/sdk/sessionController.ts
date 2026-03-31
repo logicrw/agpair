@@ -282,6 +282,24 @@ export class SessionController {
     }
   }
 
+  /**
+   * Returns positive evidence if a session is definitively lost.
+   * - Synthetic IDs (ag-cmd-*) are ambiguous, so this returns false.
+   * - If getSessions() throws, it's ambiguous, so this returns false.
+   * - If getSessions() succeeds and the ID is missing, we have positive evidence of loss.
+   */
+  async hasPositiveEvidenceOfLoss(sessionId: string): Promise<boolean> {
+    if (!sessionId || sessionId.startsWith("ag-cmd-")) {
+      return false;
+    }
+    try {
+      const sessions = await this.sdk.cascade.getSessions();
+      return !sessions.some((s) => s.id === sessionId);
+    } catch {
+      return false; // ambiguous
+    }
+  }
+
   private async tryRepairLsConnection(): Promise<boolean> {
     const connection = await discoverLiveLsConnection(this.workspaceHint());
     if (!connection) {

@@ -137,13 +137,34 @@ export class DelegationReceiptWatcher {
 
       try {
         if (!fs.existsSync(receiptPath)) {
-          if (this.isTaskStale(task, nowMsProvider())) {
+          let positivelyLost = false;
+          if (
+            this.sessionCtrl &&
+            typeof (this.sessionCtrl as any).hasPositiveEvidenceOfLoss === "function"
+          ) {
+            positivelyLost = await (this.sessionCtrl as any).hasPositiveEvidenceOfLoss(
+              task.sessionId,
+            );
+          }
+
+          if (positivelyLost || this.isTaskStale(task, nowMsProvider())) {
+            if (positivelyLost) {
+              this.outputChannel.appendLine(
+                `[companion] delegation-receipt-watcher: positive evidence of lost session ${task.sessionId} for task ${task.taskId}`,
+              );
+            }
             const recovered = await this.trySessionRecovery(task);
             if (!recovered) {
               await this.prepareAndSendTerminal(
                 task.taskId,
                 "BLOCKED",
-                buildTimeoutBody(task.taskId, task.sessionId, task.lastActivityAt ?? task.ackedAt, this.staleAfterMs),
+                buildTimeoutBody(
+                  task.taskId,
+                  task.sessionId,
+                  task.lastActivityAt ?? task.ackedAt,
+                  this.staleAfterMs,
+                  positivelyLost,
+                ),
                 null, // no receipt file to clean up
               );
             }
@@ -418,10 +439,14 @@ function buildTimeoutBody(
   sessionId: string,
   lastActivityAt: string,
   staleAfterMs: number,
+  positivelyLost?: boolean,
 ): string {
   const staleAfterSeconds = Math.max(Math.floor(staleAfterMs / 1000), 1);
+  const reason = positivelyLost
+    ? `Delegated task ${taskId} was positively detected as lost (session ${sessionId} no longer exists).`
+    : `Delegated task ${taskId} timed out after ${staleAfterSeconds}s without terminal progress.`;
   return [
-    `Delegated task ${taskId} timed out after ${staleAfterSeconds}s without terminal progress.`,
+    reason,
     `session_id=${sessionId}`,
     `last_activity_at=${lastActivityAt}`,
     "The workspace has been released. Re-dispatch the task to continue with a fresh executor session.",
