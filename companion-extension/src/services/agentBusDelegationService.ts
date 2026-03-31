@@ -261,6 +261,18 @@ export class AgentBusDelegationService {
       return;
     }
 
+    if (tracked.sessionId.startsWith("ag-cmd-")) {
+      this.outputChannel.appendLine(
+        `[companion] ${status} for synthetic task ${taskId} (session ${tracked.sessionId}) — sending REVIEW_NACK`,
+      );
+      await this.sendReplyFn({
+        taskId,
+        status: "REVIEW_NACK",
+        body: replyBody(`Cannot continue synthetic session ${tracked.sessionId}. Please use --fresh-resume instead.`),
+      });
+      return;
+    }
+
     const prompt = buildReviewContinuationPrompt({
       taskId,
       status,
@@ -327,6 +339,18 @@ export class AgentBusDelegationService {
         taskId,
         status: "APPROVE_NACK",
         body: replyBody(`Cannot commit: tracked task ${taskId} has no associated session.`),
+      });
+      return;
+    }
+
+    if (tracked.sessionId.startsWith("ag-cmd-")) {
+      this.outputChannel.appendLine(
+        `[companion] APPROVED for synthetic task ${taskId} (session ${tracked.sessionId}) — sending APPROVE_NACK`,
+      );
+      await this.sendReplyFn({
+        taskId,
+        status: "APPROVE_NACK",
+        body: replyBody(`Cannot commit synthetic session ${tracked.sessionId}. Please use --fresh-resume instead.`),
       });
       return;
     }

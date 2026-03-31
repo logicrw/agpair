@@ -294,4 +294,92 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
     assert.equal(replies[0].status, "APPROVE_NACK");
     service.dispose();
   });
+
+  it("emits REVIEW_NACK when session is synthetic (ag-cmd-*)", async () => {
+    const tracker = new DelegationTaskTracker();
+    tracker.register({
+      taskId: "SYNTH-TASK-REV",
+      sessionId: "ag-cmd-1234",
+      repoPath: "/tmp/repo",
+      receiptPath: `/tmp/receipts/SYNTH-TASK-REV.receipt.json`,
+      status: "ACKED",
+      ackedAt: "2026-01-01T00:00:00Z",
+      lastActivityAt: "2026-01-01T00:00:00Z",
+      terminalSentAt: null,
+      terminalStatus: null,
+      terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
+    });
+
+    const replies: Array<{ taskId: string; status: string; body: string }> = [];
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async sendPrompt() {
+          throw new Error("Should not be called");
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      sendReply: async (reply: AgentBusDelegationReply) => {
+        replies.push(reply);
+      },
+    });
+
+    await service.handleMessages([{ id: 9, task_id: "SYNTH-TASK-REV", status: "REVIEW", body: "Fix it." }]);
+
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].status, "REVIEW_NACK");
+    assert.match(replies[0].body, /Please use --fresh-resume instead/);
+    service.dispose();
+  });
+
+  it("emits APPROVE_NACK when session is synthetic (ag-cmd-*)", async () => {
+    const tracker = new DelegationTaskTracker();
+    tracker.register({
+      taskId: "SYNTH-TASK-APP",
+      sessionId: "ag-cmd-1234",
+      repoPath: "/tmp/repo",
+      receiptPath: `/tmp/receipts/SYNTH-TASK-APP.receipt.json`,
+      status: "ACKED",
+      ackedAt: "2026-01-01T00:00:00Z",
+      lastActivityAt: "2026-01-01T00:00:00Z",
+      terminalSentAt: null,
+      terminalStatus: null,
+      terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
+    });
+
+    const replies: Array<{ taskId: string; status: string; body: string }> = [];
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async sendPrompt() {
+          throw new Error("Should not be called");
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      sendReply: async (reply: AgentBusDelegationReply) => {
+        replies.push(reply);
+      },
+    });
+
+    await service.handleMessages([{ id: 10, task_id: "SYNTH-TASK-APP", status: "APPROVED", body: "LGTM." }]);
+
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].status, "APPROVE_NACK");
+    assert.match(replies[0].body, /Please use --fresh-resume instead/);
+    service.dispose();
+  });
 });

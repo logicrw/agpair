@@ -643,3 +643,31 @@ def test_task_reject_codex_forces_fresh_resume(tmp_path: Path, monkeypatch) -> N
 
     assert len(dummy_called) == 1
     assert "Fix your errors" in dummy_called[0]["body"]
+
+def test_task_continue_prints_fresh_resume_recommendation_on_synthetic_nack(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, _pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(_pull_path))
+    seed_acked_task(tmp_path)
+    append_confirmation(tmp_path, task_id="TASK-1", event="review_nack", body="Cannot continue synthetic session ag-cmd-1234. Please use --fresh-resume instead.")
+
+    result = CliRunner().invoke(app, ["task", "continue", "TASK-1", "--body", "Please fix", "--no-wait"])
+    assert result.exit_code == 1
+    assert "Cannot continue synthetic session" in result.stderr
+    assert "Recommendation: Run `agpair task continue TASK-1 --fresh-resume" in result.stderr
+
+def test_task_approve_prints_fresh_resume_recommendation_on_synthetic_nack(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, _pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(_pull_path))
+    seed_acked_task(tmp_path)
+    append_confirmation(tmp_path, task_id="TASK-1", event="approve_nack", body="Cannot commit synthetic session ag-cmd-1234. Please use --fresh-resume instead.")
+
+    result = CliRunner().invoke(app, ["task", "approve", "TASK-1", "--body", "Looks good", "--no-wait"])
+    assert result.exit_code == 1
+    assert "Cannot commit synthetic session" in result.stderr
+    assert "Recommendation: Run `agpair task approve TASK-1 --fresh-resume" in result.stderr
