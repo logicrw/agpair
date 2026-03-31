@@ -616,30 +616,48 @@ def abandon_task(
     _guard_live_task(task, force=force, command="abandon")
     bridge_cancel_attempted = False
     if task.phase == "acked" and task.antigravity_session_id:
-        bridge_cancel_attempted = True
-        bridge_cancelled, bridge_message = _cancel_bridge_task(
-            task_id=task.task_id,
-            attempt_no=task.attempt_no,
-            repo_path=task.repo_path,
-            global_root=paths.root,
-        )
-        if not bridge_cancelled and "bridge marker not found" not in bridge_message and not force:
-            typer.echo(
-                f"Refused: failed to release the Antigravity bridge task before abandon. "
-                f"{bridge_message}. Pass --force to abandon locally anyway.",
-                err=True,
+        if task.executor_backend == "codex_cli":
+            import pathlib
+            from agpair.executors import CodexExecutor
+            from agpair.executors.codex import CodexTaskRef
+            
+            exec_instance = CodexExecutor()
+            temp_dir = pathlib.Path(task.antigravity_session_id)
+            task_ref = CodexTaskRef(
+                task_id=task.task_id,
+                process=None,
+                stdout_file=temp_dir / "stdout.jsonl",
+                stderr_file=temp_dir / "stderr.log",
+                last_msg_file=temp_dir / "last_msg.txt",
+                temp_dir=temp_dir,
             )
-            raise typer.Exit(code=1)
-        event = "bridge_cancelled" if bridge_cancelled else "bridge_cancel_skipped"
-        journal.append(task_id, "cli", event, bridge_message)
-        if not bridge_cancelled and force:
-            typer.echo(
-                f"warning: bridge task release failed; abandoning locally anyway ({bridge_message})",
-                err=True,
+            exec_instance.cancel(task_ref)
+            journal.append(task_id, "cli", "executor_cancelled", "codex executor cancelled locally")
+        else:
+            bridge_cancel_attempted = True
+            bridge_cancelled, bridge_message = _cancel_bridge_task(
+                task_id=task.task_id,
+                attempt_no=task.attempt_no,
+                repo_path=task.repo_path,
+                global_root=paths.root,
             )
+            if not bridge_cancelled and "bridge marker not found" not in bridge_message and not force:
+                typer.echo(
+                    f"Refused: failed to release the Antigravity bridge task before abandon. "
+                    f"{bridge_message}. Pass --force to abandon locally anyway.",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            event = "bridge_cancelled" if bridge_cancelled else "bridge_cancel_skipped"
+            journal.append(task_id, "cli", event, bridge_message)
+            if not bridge_cancelled and force:
+                typer.echo(
+                    f"warning: bridge task release failed; abandoning locally anyway ({bridge_message})",
+                    err=True,
+                )
     tasks.mark_abandoned(task_id=task_id, reason=reason)
     journal.append(task_id, "cli", "abandoned", reason)
-    if not bridge_cancel_attempted:
+    if not bridge_cancel_attempted and task.executor_backend != "codex_cli":
         journal.append(task_id, "cli", "bridge_cancel_skipped", "task had no live bridge session to release")
     typer.echo(task_id)
 

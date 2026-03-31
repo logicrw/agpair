@@ -66,9 +66,7 @@ def test_codex_executor_poll(tmp_path: pathlib.Path):
     assert isinstance(state, CodexTaskState)
     assert state.is_done is True
     assert state.returncode == 0
-    assert len(state.events) == 2
-    assert state.events[0]["event"] == "start"
-    assert state.events[1]["event"] == "end"
+    assert state.events_count == 2
     assert state.last_message == "Hello World!"
     
     receipt = state.synthesize_receipt("task-123")

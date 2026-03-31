@@ -29,7 +29,7 @@ class CodexTaskState:
     is_done: bool
     returncode: int | None
     last_message: str | None
-    events: list[dict[str, typing.Any]]
+    events_count: int
 
     def synthesize_receipt(self, task_id: str) -> dict[str, typing.Any]:
         """Synthesize a terminal receipt dict for this task state."""
@@ -40,7 +40,7 @@ class CodexTaskState:
             status = "EVIDENCE_PACK"
             summary = self.last_message or "Task finished successfully"
             payload = {
-                "events_count": len(self.events),
+                "events_count": self.events_count,
                 "returncode": self.returncode,
             }
         else:
@@ -95,6 +95,7 @@ class CodexExecutor(ExecutorAdapter):
         stderr_file = temp_dir / "stderr.log"
         last_msg_file = temp_dir / "last_msg.txt"
         rc_file = temp_dir / "rc.txt"
+        pid_file = temp_dir / "pid.txt"
         
         cmd = [
             self.codex_bin,
@@ -108,7 +109,7 @@ class CodexExecutor(ExecutorAdapter):
         ]
 
         cmd_str = " ".join(shlex.quote(str(x)) for x in cmd)
-        wrapper_cmd = ["sh", "-c", f"{cmd_str} ; RC=$? ; echo $RC > {shlex.quote(str(rc_file))} ; exit $RC"]
+        wrapper_cmd = ["sh", "-c", f"echo $$ > {shlex.quote(str(pid_file))} ; {cmd_str} ; RC=$? ; echo $RC > {shlex.quote(str(rc_file))} ; exit $RC"]
 
         stdout_fh = stdout_file.open("w", encoding="utf-8")
         stderr_fh = stderr_file.open("w", encoding="utf-8")
@@ -161,16 +162,13 @@ class CodexExecutor(ExecutorAdapter):
             except ValueError:
                 pass
 
-        events = []
-        if task_ref.stdout_file.exists():
+        events_count = 0
+        if is_done and task_ref.stdout_file.exists():
             try:
                 with task_ref.stdout_file.open("r", encoding="utf-8") as f:
                     for line in f:
                         if line.strip():
-                            try:
-                                events.append(json.loads(line))
-                            except json.JSONDecodeError:
-                                pass
+                            events_count += 1
             except Exception:
                 pass
 
@@ -185,13 +183,16 @@ class CodexExecutor(ExecutorAdapter):
             is_done=is_done,
             returncode=retcode,
             last_message=last_message,
-            events=events,
+            events_count=events_count,
         )
 
     def cancel(self, task_ref: typing.Any) -> None:
         """
         Cancel an ongoing Codex task, best-effort.
         """
+        import os
+        import signal
+
         if not isinstance(task_ref, CodexTaskRef):
             raise TypeError(f"Expected CodexTaskRef, got {type(task_ref)}")
 
@@ -201,3 +202,11 @@ class CodexExecutor(ExecutorAdapter):
                 task_ref.process.wait(timeout=5.0)
             except subprocess.TimeoutExpired:
                 task_ref.process.kill()
+        else:
+            pid_file = task_ref.temp_dir / "pid.txt"
+            if pid_file.exists():
+                try:
+                    pid = int(pid_file.read_text(encoding="utf-8").strip())
+                    os.kill(-pid, signal.SIGTERM)
+                except Exception:
+                    pass
