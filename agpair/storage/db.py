@@ -70,6 +70,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             "WHERE client_idempotency_key IS NOT NULL"
         )
         conn.commit()
+    # Migration 7: add executor_backend
+    if "executor_backend" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN executor_backend TEXT")
+        conn.commit()
 
 
 def _configure_connection(conn: sqlite3.Connection) -> None:

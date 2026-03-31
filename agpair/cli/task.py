@@ -165,10 +165,12 @@ def build_task_payload(paths: AppPaths, task) -> dict:
     ag_exec = AntigravityExecutor("")
     cx_exec = CodexExecutor()
 
+    active_exec = cx_exec if task.executor_backend == cx_exec.backend_id else ag_exec
+
     return {
         "task_id": task.task_id,
-        "active_executor_backend": ag_exec.backend_id,
-        "active_executor_continuation_capability": ag_exec.continuation_capability.value,
+        "active_executor_backend": active_exec.backend_id,
+        "active_executor_continuation_capability": active_exec.continuation_capability.value,
         "supported_backends": {
             ag_exec.backend_id: ag_exec.continuation_capability.value,
             cx_exec.backend_id: cx_exec.continuation_capability.value,
@@ -347,11 +349,12 @@ def start_task(
     body: str = typer.Option(..., "--body"),
     task_id: str | None = typer.Option(None, "--task-id"),
     idempotency_key: str | None = typer.Option(None, "--idempotency-key"),
+    executor: str | None = typer.Option(None, "--executor", help="Executor backend to run the task (antigravity or codex)."),
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
 ) -> None:
-    from agpair.executors import AntigravityExecutor
+    from agpair.executors import AntigravityExecutor, CodexExecutor
     from agpair.targets import resolve_repo_path
 
     paths = _paths()
@@ -359,7 +362,18 @@ def start_task(
     if not resolved_repo_path:
         raise typer.BadParameter("Either --repo-path or --target must be provided.")
 
-    executor = AntigravityExecutor(paths.agent_bus_bin)
+    if executor == "codex":
+        exec_instance = CodexExecutor()
+        backend_to_store = exec_instance.backend_id
+    elif executor == "antigravity":
+        exec_instance = AntigravityExecutor(paths.agent_bus_bin)
+        backend_to_store = exec_instance.backend_id
+    elif executor is None:
+        exec_instance = AntigravityExecutor(paths.agent_bus_bin)
+        backend_to_store = None
+    else:
+        raise typer.BadParameter("Invalid --executor. Allowed values are 'antigravity' or 'codex'.")
+
     tasks = TaskRepository(paths.db_path)
     journal = JournalRepository(paths.db_path)
     final_task_id = task_id or f"TASK-{uuid4().hex[:12].upper()}"
@@ -386,6 +400,7 @@ def start_task(
             task_id=final_task_id,
             repo_path=resolved_repo_path,
             client_idempotency_key=idempotency_key,
+            executor_backend=backend_to_store,
         )
     except sqlite3.IntegrityError:
         if not idempotency_key:
@@ -409,7 +424,7 @@ def start_task(
         return
     journal.append(final_task_id, "cli", "created", body)
     try:
-        message_id = executor.dispatch(task_id=final_task_id, body=body, repo_path=resolved_repo_path)
+        message_id = exec_instance.dispatch(task_id=final_task_id, body=body, repo_path=resolved_repo_path)
     except (subprocess.SubprocessError, FileNotFoundError) as exc:
         reason = f"dispatch failed: {exc}"
         journal.append(final_task_id, "cli", "dispatch_failed", reason)

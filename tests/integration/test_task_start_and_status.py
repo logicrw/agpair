@@ -875,3 +875,71 @@ def test_task_start_rejects_target_and_repo_path_together(tmp_path: Path, monkey
     )
     assert result.exit_code != 0
     assert "cannot specify both" in (result.stdout + result.stderr).lower()
+
+def test_task_start_default_executor_is_antigravity(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: default it", "--task-id", "TASK-EXEC-DEFAULT", "--no-wait"])
+    
+    assert result.exit_code == 0
+    task = make_task_repo(tmp_path).get_task("TASK-EXEC-DEFAULT")
+    assert task is not None
+    assert task.executor_backend is None
+
+    status = runner.invoke(app, ["task", "status", "TASK-EXEC-DEFAULT", "--json"])
+    assert status.exit_code == 0
+    payload = json.loads(status.stdout)
+    assert payload["active_executor_backend"] == "antigravity"
+
+
+def test_task_start_explicit_executor_codex(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+
+    import agpair.executors.codex
+    from unittest.mock import MagicMock
+    mock_dispatch = MagicMock(return_value="mock_msg_id")
+    monkeypatch.setattr(agpair.executors.codex.CodexExecutor, "dispatch", mock_dispatch)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: run codex", "--task-id", "TASK-EXEC-CODEX", "--executor", "codex", "--no-wait"])
+    
+    assert result.exit_code == 0
+    task = make_task_repo(tmp_path).get_task("TASK-EXEC-CODEX")
+    assert task is not None
+    assert task.executor_backend == "codex_cli"
+    
+    status = runner.invoke(app, ["task", "status", "TASK-EXEC-CODEX", "--json"])
+    assert status.exit_code == 0
+    payload = json.loads(status.stdout)
+    assert payload["active_executor_backend"] == "codex_cli"
+
+
+def test_legacy_rows_without_executor_field_remain_readable(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    from agpair.storage.db import connect
+    from agpair.models import utcnow_iso
+    now = utcnow_iso()
+    with connect(paths.db_path) as conn:
+        conn.execute("INSERT INTO tasks (task_id, repo_path, phase, attempt_no, retry_count, retry_recommended, last_activity_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("TASK-LEGACY", "/tmp/repo", "new", 1, 0, 0, now, now, now))
+        conn.commit()
+
+    repo = make_task_repo(tmp_path)
+    task = repo.get_task("TASK-LEGACY")
+    assert task is not None
+    assert task.executor_backend is None
+
+    runner = CliRunner()
+    status = runner.invoke(app, ["task", "status", "TASK-LEGACY", "--json"])
+    assert status.exit_code == 0
+    payload = json.loads(status.stdout)
+    assert payload["active_executor_backend"] == "antigravity"
