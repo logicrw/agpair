@@ -134,7 +134,59 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
         return 0, set()
     all_messages: list[dict] = []
     for task in active_tasks:
-        all_messages.extend(client.pull_receipts(task_id=task.task_id))
+        if task.executor_backend == "codex_cli" and task.phase in {"acked", "evidence_ready"}:
+            if not task.antigravity_session_id:
+                continue
+
+            from agpair.executors.codex import CodexExecutor, CodexTaskRef
+            import pathlib
+
+            temp_dir = pathlib.Path(task.antigravity_session_id)
+            if not temp_dir.exists():
+                # temp_dir missing means task probably crashed or temp was cleared
+                msg = {
+                    "id": f"codex-{task.task_id}-lost",
+                    "task_id": task.task_id,
+                    "status": messages.BLOCKED,
+                    "body": "Executor temp directory missing, task is lost."
+                }
+                all_messages.append(msg)
+                continue
+
+            task_ref = CodexTaskRef(
+                task_id=task.task_id,
+                process=None,
+                stdout_file=temp_dir / "stdout.jsonl",
+                stderr_file=temp_dir / "stderr.log",
+                last_msg_file=temp_dir / "last_msg.txt",
+                temp_dir=temp_dir,
+            )
+            state = CodexExecutor().poll(task_ref)
+
+            if state.is_done:
+                # Terminal receipt
+                msg_id = f"codex-{task.task_id}-done"
+                receipt = state.synthesize_receipt(task.task_id)
+                msg = {
+                    "id": msg_id,
+                    "task_id": task.task_id,
+                    "status": receipt.get("status", messages.BLOCKED),
+                    "body": json.dumps(receipt, ensure_ascii=False)
+                }
+                all_messages.append(msg)
+            else:
+                # Heatbeat every ~10s 
+                msg_id = f"codex-{task.task_id}-running-{int(current.timestamp()) // 10}"
+                msg = {
+                    "id": msg_id,
+                    "task_id": task.task_id,
+                    "status": messages.RUNNING,
+                    "body": "local codex executor is still running"
+                }
+                all_messages.append(msg)
+        elif task.executor_backend != "codex_cli":
+            all_messages.extend(client.pull_receipts(task_id=task.task_id))
+            
     for message in all_messages:
         message_id = str(message.get("id", ""))
         task_id = str(message.get("task_id", ""))

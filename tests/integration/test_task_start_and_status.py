@@ -904,7 +904,9 @@ def test_task_start_explicit_executor_codex(tmp_path: Path, monkeypatch) -> None
 
     import agpair.executors.codex
     from unittest.mock import MagicMock
-    mock_dispatch = MagicMock(return_value="mock_msg_id")
+    mock_ref = MagicMock()
+    mock_ref.temp_dir = tmp_path / "mock_temp"
+    mock_dispatch = MagicMock(return_value=mock_ref)
     monkeypatch.setattr(agpair.executors.codex.CodexExecutor, "dispatch", mock_dispatch)
 
     runner = CliRunner()

@@ -424,14 +424,21 @@ def start_task(
         return
     journal.append(final_task_id, "cli", "created", body)
     try:
-        message_id = exec_instance.dispatch(task_id=final_task_id, body=body, repo_path=resolved_repo_path)
+        dispatch_result = exec_instance.dispatch(task_id=final_task_id, body=body, repo_path=resolved_repo_path)
     except (subprocess.SubprocessError, FileNotFoundError) as exc:
         reason = f"dispatch failed: {exc}"
         journal.append(final_task_id, "cli", "dispatch_failed", reason)
         tasks.mark_blocked(task_id=final_task_id, reason=reason)
         typer.echo(reason, err=True)
         raise typer.Exit(code=1)
-    journal.append(final_task_id, "cli", "dispatched", f"sent TASK to agent-bus id={message_id}")
+
+    if executor == "codex":
+        session_id = str(dispatch_result.temp_dir)
+        tasks.mark_acked(task_id=final_task_id, session_id=session_id)
+        journal.append(final_task_id, "cli", "dispatched", f"started codex exec in {session_id}")
+    else:
+        journal.append(final_task_id, "cli", "dispatched", f"sent TASK to agent-bus id={dispatch_result}")
+
     typer.echo(final_task_id)
 
     maybe_auto_wait(

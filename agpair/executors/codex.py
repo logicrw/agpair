@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 @dataclasses.dataclass
 class CodexTaskRef:
     task_id: str
-    process: subprocess.Popen[str]
+    process: subprocess.Popen[str] | None
     stdout_file: pathlib.Path
     stderr_file: pathlib.Path
     last_msg_file: pathlib.Path
@@ -87,11 +87,14 @@ class CodexExecutor(ExecutorAdapter):
         Dispatch a task using codex exec.
         Returns a CodexTaskRef tracking reference.
         """
+        import shlex
+        
         temp_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"agpair_codex_{task_id}_"))
         
         stdout_file = temp_dir / "stdout.jsonl"
         stderr_file = temp_dir / "stderr.log"
         last_msg_file = temp_dir / "last_msg.txt"
+        rc_file = temp_dir / "rc.txt"
         
         cmd = [
             self.codex_bin,
@@ -104,15 +107,19 @@ class CodexExecutor(ExecutorAdapter):
             str(body)
         ]
 
+        cmd_str = " ".join(shlex.quote(str(x)) for x in cmd)
+        wrapper_cmd = ["sh", "-c", f"{cmd_str} ; RC=$? ; echo $RC > {shlex.quote(str(rc_file))} ; exit $RC"]
+
         stdout_fh = stdout_file.open("w", encoding="utf-8")
         stderr_fh = stderr_file.open("w", encoding="utf-8")
 
         process = subprocess.Popen(
-            cmd,
+            wrapper_cmd,
             stdout=stdout_fh,
             stderr=stderr_fh,
             cwd=repo_path,
             text=True,
+            start_new_session=True,
         )
 
         return CodexTaskRef(
@@ -131,8 +138,28 @@ class CodexExecutor(ExecutorAdapter):
         if not isinstance(task_ref, CodexTaskRef):
             raise TypeError(f"Expected CodexTaskRef, got {type(task_ref)}")
 
-        retcode = task_ref.process.poll()
-        is_done = retcode is not None
+        rc_file = task_ref.temp_dir / "rc.txt"
+        retcode = None
+        is_done = False
+
+        if task_ref.process is not None:
+            retcode = task_ref.process.poll()
+            is_done = retcode is not None
+        else:
+            if rc_file.exists():
+                is_done = True
+                try:
+                    retcode = int(rc_file.read_text(encoding="utf-8").strip())
+                except ValueError:
+                    retcode = 1
+
+        # Prefer writing the actual RC if the process completed and created the rc_file, 
+        # in case wrapper logic wasn't fully reliable.
+        if is_done and retcode == 0 and rc_file.exists():
+            try:
+                retcode = int(rc_file.read_text(encoding="utf-8").strip())
+            except ValueError:
+                pass
 
         events = []
         if task_ref.stdout_file.exists():
@@ -168,7 +195,7 @@ class CodexExecutor(ExecutorAdapter):
         if not isinstance(task_ref, CodexTaskRef):
             raise TypeError(f"Expected CodexTaskRef, got {type(task_ref)}")
 
-        if task_ref.process.poll() is None:
+        if task_ref.process is not None and task_ref.process.poll() is None:
             task_ref.process.terminate()
             try:
                 task_ref.process.wait(timeout=5.0)

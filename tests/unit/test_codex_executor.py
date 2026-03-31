@@ -30,14 +30,15 @@ def test_codex_executor_dispatch():
         args, kwargs = mock_popen.call_args
         
         cmd = args[0]
-        assert cmd[0] == "fake-codex"
-        assert cmd[1] == "exec"
-        assert "--ephemeral" in cmd
-        assert "--json" in cmd
-        assert "--skip-git-repo-check" in cmd
-        assert "-C" in cmd
-        assert str(task_ref.last_msg_file) in cmd
-        assert cmd[-1] == "Do something"
+        assert cmd[0] == "sh"
+        assert cmd[1] == "-c"
+        assert "fake-codex exec" in cmd[2]
+        assert "--ephemeral" in cmd[2]
+        assert "--json" in cmd[2]
+        assert "--skip-git-repo-check" in cmd[2]
+        assert "-C " in cmd[2]
+        assert str(task_ref.last_msg_file) in cmd[2]
+        assert "Do something" in cmd[2]
         
         assert kwargs["cwd"] == "/fake/repo"
         assert kwargs["text"] is True
