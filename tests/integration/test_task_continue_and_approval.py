@@ -644,30 +644,87 @@ def test_task_reject_codex_forces_fresh_resume(tmp_path: Path, monkeypatch) -> N
     assert len(dummy_called) == 1
     assert "Fix your errors" in dummy_called[0]["body"]
 
-def test_task_continue_prints_fresh_resume_recommendation_on_synthetic_nack(tmp_path: Path, monkeypatch) -> None:
+def test_task_continue_auto_resumes_on_synthetic_nack(tmp_path: Path, monkeypatch) -> None:
+    import json
+    from agpair.storage.journal import JournalRepository
+    
     binary, calls_path, _pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(_pull_path))
-    seed_acked_task(tmp_path)
+    repo = seed_acked_task(tmp_path)
+    
+    journal = JournalRepository(tmp_path / ".agpair" / "agpair.db")
+    journal.append("TASK-1", "cli", "created", "Original Task Body")
+    
     append_confirmation(tmp_path, task_id="TASK-1", event="review_nack", body="Cannot continue synthetic session ag-cmd-1234. Please use --fresh-resume instead.")
 
     result = CliRunner().invoke(app, ["task", "continue", "TASK-1", "--body", "Please fix", "--no-wait"])
-    assert result.exit_code == 1
-    assert "Cannot continue synthetic session" in result.stderr
-    assert "Recommendation: Run `agpair task continue TASK-1 --fresh-resume" in result.stderr
+    assert result.exit_code == 0
+    assert "Auto-converting to fresh resume: same-session continuation is impossible for synthetic ids." in result.stdout
+    
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.attempt_no == 2
+    
+    recorded = read_calls(calls_path)
+    sent_calls = [c for c in recorded if c["argv"][1] == "send"]
+    # The first send is `review`, the second one is `task` (fresh resume)
+    # Actually wait: The `continue_task` calls `_send_semantic_or_exit`. The `_send_semantic_or_exit` calls `bus.send_review` which executes `agent-bus send ... --status REVIEW`.
+    # Then `agent-bus` returns a message_id. Then we read the journal and see `review_nack` and it raises `SyntheticSessionNackError`.
+    # Then `continue_task` catches it and calls `_prepare_fresh_resume_dispatch`. 
+    # `_prepare_fresh_resume_dispatch` then calls `active_exec.dispatch()` which does `bus.send_task(...)` (`agent-bus send ... --status TASK`).
+    assert sent_calls[-1]["argv"][:8] == [
+        "agent-bus",
+        "send",
+        "--sender",
+        "desktop",
+        "--task-id",
+        "TASK-1",
+        "--status",
+        "TASK",
+    ]
+    body = sent_calls[-1]["body"]
+    assert "Original Task Body" in body
+    assert "Please fix" in body
 
-def test_task_approve_prints_fresh_resume_recommendation_on_synthetic_nack(tmp_path: Path, monkeypatch) -> None:
+def test_task_approve_auto_resumes_on_synthetic_nack(tmp_path: Path, monkeypatch) -> None:
+    import json
+    from agpair.storage.journal import JournalRepository
+    
     binary, calls_path, _pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(_pull_path))
-    seed_acked_task(tmp_path)
+    repo = seed_acked_task(tmp_path)
+    
+    journal = JournalRepository(tmp_path / ".agpair" / "agpair.db")
+    journal.append("TASK-1", "cli", "created", "Original Task Body")
+    
     append_confirmation(tmp_path, task_id="TASK-1", event="approve_nack", body="Cannot commit synthetic session ag-cmd-1234. Please use --fresh-resume instead.")
 
     result = CliRunner().invoke(app, ["task", "approve", "TASK-1", "--body", "Looks good", "--no-wait"])
-    assert result.exit_code == 1
-    assert "Cannot commit synthetic session" in result.stderr
-    assert "Recommendation: Run `agpair task approve TASK-1 --fresh-resume" in result.stderr
+    assert result.exit_code == 0
+    assert "Auto-converting to fresh resume: same-session continuation is impossible for synthetic ids." in result.stdout
+    
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.attempt_no == 2
+    
+    recorded = read_calls(calls_path)
+    sent_calls = [c for c in recorded if c["argv"][1] == "send"]
+    assert sent_calls[-1]["argv"][:8] == [
+        "agent-bus",
+        "send",
+        "--sender",
+        "desktop",
+        "--task-id",
+        "TASK-1",
+        "--status",
+        "TASK",
+    ]
+    body = sent_calls[-1]["body"]
+    assert "Original Task Body" in body
+    assert "Looks good" in body

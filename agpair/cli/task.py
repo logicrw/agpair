@@ -920,6 +920,10 @@ def _guard_active_waiter(paths: AppPaths, task_id: str, *, force: bool, command:
         raise typer.Exit(code=1)
 
 
+class SyntheticSessionNackError(Exception):
+    pass
+
+
 def _send_semantic_or_exit(
     *,
     send_fn,
@@ -961,6 +965,10 @@ def _send_semantic_or_exit(
                 if _extract_reply_to_message_id(row.body) == message_id:
                     reason = _strip_reply_to_message_id(row.body)
                     journal.append(task_id, "cli", event_fail, f"rejected by extension: {reason}")
+                    
+                    if "synthetic session" in reason and "--fresh-resume" in reason:
+                        raise SyntheticSessionNackError(reason)
+                        
                     typer.echo(f"Command failed: {reason}", err=True)
                     if "--fresh-resume" in reason:
                         cmd = "continue"
@@ -1120,16 +1128,32 @@ def continue_task(
         )
         return
 
-    _send_semantic_or_exit(
-        send_fn=lambda: bus.send_review(task_id=task.task_id, body=body),
-        journal=journal,
-        task_id=task.task_id,
-        event_ok="continued",
-        event_fail="continue_failed",
-        body=body,
-        ack_statuses=frozenset({"review_ack"}),
-        nack_statuses=frozenset({"review_nack"}),
-    )
+    try:
+        _send_semantic_or_exit(
+            send_fn=lambda: bus.send_review(task_id=task.task_id, body=body),
+            journal=journal,
+            task_id=task.task_id,
+            event_ok="continued",
+            event_fail="continue_failed",
+            body=body,
+            ack_statuses=frozenset({"review_ack"}),
+            nack_statuses=frozenset({"review_nack"}),
+        )
+    except SyntheticSessionNackError:
+        typer.echo("Auto-converting to fresh resume: same-session continuation is impossible for synthetic ids.")
+        _prepare_fresh_resume_dispatch(
+            paths=paths,
+            bus=bus,
+            tasks=tasks,
+            journal=journal,
+            task=task,
+            feedback=body,
+            wait=wait,
+            interval_seconds=interval_seconds,
+            timeout_seconds=timeout_seconds,
+            waiter_command="task_continue_auto_wait",
+        )
+        return
     typer.echo(task.task_id)
 
     maybe_auto_wait(
@@ -1183,16 +1207,32 @@ def approve_task(
         )
         return
 
-    _send_semantic_or_exit(
-        send_fn=lambda: bus.send_approved(task_id=task.task_id, body=body),
-        journal=journal,
-        task_id=task.task_id,
-        event_ok="approved",
-        event_fail="approve_failed",
-        body=body,
-        ack_statuses=frozenset({"approve_ack"}),
-        nack_statuses=frozenset({"approve_nack"}),
-    )
+    try:
+        _send_semantic_or_exit(
+            send_fn=lambda: bus.send_approved(task_id=task.task_id, body=body),
+            journal=journal,
+            task_id=task.task_id,
+            event_ok="approved",
+            event_fail="approve_failed",
+            body=body,
+            ack_statuses=frozenset({"approve_ack"}),
+            nack_statuses=frozenset({"approve_nack"}),
+        )
+    except SyntheticSessionNackError:
+        typer.echo("Auto-converting to fresh resume: same-session continuation is impossible for synthetic ids.")
+        _prepare_fresh_resume_dispatch(
+            paths=paths,
+            bus=bus,
+            tasks=tasks,
+            journal=journal,
+            task=task,
+            feedback=body,
+            wait=wait,
+            interval_seconds=interval_seconds,
+            timeout_seconds=timeout_seconds,
+            waiter_command="task_approve_auto_wait",
+        )
+        return
     typer.echo(task.task_id)
 
     maybe_auto_wait(
@@ -1248,16 +1288,32 @@ def reject_task(
 
     # Reject is implemented as review feedback on the wire, so the extension
     # acknowledges it with REVIEW_ACK / REVIEW_NACK just like continue.
-    _send_semantic_or_exit(
-        send_fn=lambda: bus.send_review(task_id=task.task_id, body=body),
-        journal=journal,
-        task_id=task.task_id,
-        event_ok="rejected",
-        event_fail="reject_failed",
-        body=body,
-        ack_statuses=frozenset({"review_ack"}),
-        nack_statuses=frozenset({"review_nack"}),
-    )
+    try:
+        _send_semantic_or_exit(
+            send_fn=lambda: bus.send_review(task_id=task.task_id, body=body),
+            journal=journal,
+            task_id=task.task_id,
+            event_ok="rejected",
+            event_fail="reject_failed",
+            body=body,
+            ack_statuses=frozenset({"review_ack"}),
+            nack_statuses=frozenset({"review_nack"}),
+        )
+    except SyntheticSessionNackError:
+        typer.echo("Auto-converting to fresh resume: same-session continuation is impossible for synthetic ids.")
+        _prepare_fresh_resume_dispatch(
+            paths=paths,
+            bus=bus,
+            tasks=tasks,
+            journal=journal,
+            task=task,
+            feedback=body,
+            wait=wait,
+            interval_seconds=interval_seconds,
+            timeout_seconds=timeout_seconds,
+            waiter_command="task_reject_auto_wait",
+        )
+        return
     typer.echo(task.task_id)
 
     maybe_auto_wait(
