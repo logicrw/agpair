@@ -909,10 +909,10 @@ def test_task_watch_json_emits_ndjson(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = _make_repo(tmp_path)
     repo.create_task(task_id="T-WATCH-NDJSON", repo_path="/r")
-    
+
     import threading
     import time
-    
+
     def advance_state():
         time.sleep(0.02)
         repo.mark_acked(task_id="T-WATCH-NDJSON", session_id="s-2")
@@ -926,17 +926,17 @@ def test_task_watch_json_emits_ndjson(tmp_path: Path, monkeypatch):
         "--interval-seconds", "0.01",
         "--timeout-seconds", "1",
     ])
-    
+
     assert result.exit_code == 0
-    
+
     lines = [line for line in result.stdout.strip().splitlines() if line]
     assert len(lines) >= 3
     parsed = [json.loads(line) for line in lines]
-    
+
     events = [item["event_type"] for item in parsed]
     assert "status_update" in events
     assert "terminal" in events
-    
+
     phases = [item["phase"] for item in parsed]
     assert "new" in phases
     assert "acked" in phases
@@ -947,10 +947,10 @@ def test_task_watch_deduplicates_output(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = _make_repo(tmp_path)
     repo.create_task(task_id="T-WATCH-DEDUP", repo_path="/r")
-    
+
     import threading
     import time
-    
+
     def advance_state():
         time.sleep(0.05)
         # Heartbeat change
@@ -967,7 +967,7 @@ def test_task_watch_deduplicates_output(tmp_path: Path, monkeypatch):
         "--timeout-seconds", "1",
     ])
     assert result.exit_code == 0
-    
+
     # We should see the transitions and no duplicate "phase: acked" outputs
     stdout = result.stdout
     assert "Watching task T-WATCH-DEDUP" in stdout

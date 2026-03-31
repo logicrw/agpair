@@ -697,7 +697,7 @@ def watch_task(
     json_output: bool = _JSON_OPTION,
 ) -> None:
     """Stream task progress until it reaches a terminal phase or times out.
-    
+
     This command periodically outputs task updates, avoiding spam by only
     emitting when the phase, heartbeat, workspace activity, or terminal receipt changes.
     """
@@ -706,7 +706,7 @@ def watch_task(
 
     paths = _paths()
     tasks = TaskRepository(paths.db_path)
-    
+
     if tasks.get_task(task_id) is None:
         if json_output:
             _emit_json(_not_found_payload(task_id))
@@ -744,7 +744,7 @@ def watch_task(
             payload["last_workspace_activity_at"],
             json.dumps(payload.get("terminal_receipt"), sort_keys=True) if payload.get("terminal_receipt") else None,
         )
-        
+
         changed = current_state != last_emitted_state
 
         if changed or watchdog or timed_out or is_terminal:
@@ -768,15 +768,15 @@ def watch_task(
                 if changed:
                     ts = datetime.now().strftime("%H:%M:%S")
                     typer.echo(f"[{ts}] Task {task_id} phase: {current_phase}")
-                    
+
                     prev_hb = last_emitted_state[1] if last_emitted_state else None
                     if payload["last_heartbeat_at"] != prev_hb and payload["last_heartbeat_at"]:
                         typer.echo(f"  -> Heartbeat: {payload['last_heartbeat_at']}")
-                        
+
                     prev_ws = last_emitted_state[2] if last_emitted_state else None
                     if payload["last_workspace_activity_at"] != prev_ws and payload["last_workspace_activity_at"]:
                         typer.echo(f"  -> Workspace activity: {payload['last_workspace_activity_at']}")
-                    
+
                     prev_rec = last_emitted_state[3] if last_emitted_state else None
                     if current_state[3] != prev_rec and payload.get("terminal_receipt"):
                         summary = payload["terminal_receipt"].get("summary", "No summary")
@@ -796,7 +796,7 @@ def watch_task(
             if is_terminal:
                 code = exit_code_for_dispatch(WaitResult(phase=current_phase, timed_out=False))
                 raise typer.Exit(code=code)
-            
+
             if watchdog or timed_out:
                 raise typer.Exit(code=1)
 
