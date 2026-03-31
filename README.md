@@ -143,6 +143,7 @@ What already works:
 - Local SQLite-backed task / receipt / journal state
 - Continuation flow: `continue`, `approve`, `reject`, `retry`, `abandon` (with explicit ACK/NACK hardening)
 - Standalone `task wait` with configurable timeout/interval
+- Streaming `task watch` for continuous progress observation until terminal phase
 - Daemon with receipt ingestion, session continuity, and stuck detection
 - `inspect` command for unified local repo/task overview, integrating `doctor` and task context
 - `doctor` preflight checks (local health, desktop conflicts, bridge health, concurrency policy/pending tasks)
@@ -183,7 +184,7 @@ This is a **single self-contained repo**. No external checkout is needed.
 
 ### A2A State Hints
 
-The CLI JSON outputs (`task status` and `task wait`) include an `a2a_state_hint` field mapping internal phases to approximate A2A `TaskState` values (e.g., mapping blocked auth tasks to `auth-required`). This is purely a semantic hint-level alignment for AI consumers—**agpair does not implement a full A2A server or the complete A2A protocol**. Its primary goal remains to be a robust local execution bridge.
+The CLI JSON outputs (`task status`, `task wait`, and `task watch`) include an `a2a_state_hint` field mapping internal phases to approximate A2A `TaskState` values (e.g., mapping blocked auth tasks to `auth-required`). This is purely a semantic hint-level alignment for AI consumers—**agpair does not implement a full A2A server or the complete A2A protocol**. Its primary goal remains to be a robust local execution bridge.
 
 ### Concurrency rule (one task per worktree)
 

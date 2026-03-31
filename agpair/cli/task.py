@@ -16,8 +16,10 @@ from agpair.cli.wait import (
     DEFAULT_TIMEOUT_SECONDS,
     DISPATCH_SUCCESS_PHASES,
     TERMINAL_PHASES,
+    WaitResult,
     exit_code_for_approve,
     exit_code_for_dispatch,
+    is_watchdog_triggered,
     maybe_auto_wait,
     wait_for_terminal_phase,
 )
@@ -680,6 +682,125 @@ def wait_task(
     typer.echo(f"Task {task_id} reached phase: {result.phase}")
     if code != 0:
         raise typer.Exit(code=code)
+
+
+# ---------------------------------------------------------------------------
+# task watch
+# ---------------------------------------------------------------------------
+
+
+@app.command("watch")
+def watch_task(
+    task_id: str,
+    interval_seconds: float = _INTERVAL_OPTION,
+    timeout_seconds: float = _TIMEOUT_OPTION,
+    json_output: bool = _JSON_OPTION,
+) -> None:
+    """Stream task progress until it reaches a terminal phase or times out.
+    
+    This command periodically outputs task updates, avoiding spam by only
+    emitting when the phase, heartbeat, workspace activity, or terminal receipt changes.
+    """
+    import time
+    from datetime import UTC, datetime
+
+    paths = _paths()
+    tasks = TaskRepository(paths.db_path)
+    
+    if tasks.get_task(task_id) is None:
+        if json_output:
+            _emit_json(_not_found_payload(task_id))
+        else:
+            typer.echo(f"task not found: {task_id}", err=True)
+        raise typer.Exit(code=1)
+
+    start_time = time.time()
+    deadline = start_time + timeout_seconds
+    last_emitted_state = None
+
+    if not json_output:
+        typer.echo(f"Watching task {task_id} ...")
+
+    while True:
+        task = tasks.get_task(task_id)
+        if task is None:
+            # Should not happen if it existed above, but handle gracefully
+            raise typer.Exit(code=1)
+
+        current_phase = task.phase
+        watchdog = is_watchdog_triggered(task)
+        timed_out = time.time() >= deadline
+        is_terminal = current_phase in TERMINAL_PHASES
+
+        payload = build_task_payload(paths, task)
+
+        # state tuple for deduplication:
+        # (phase, heartbeat, workspace_activity, stringified_terminal_receipt)
+        # Note: terminal_receipt might not be json-serializable if not a dict,
+        # but build_task_payload ensures it is parsed dict or None.
+        current_state = (
+            payload["phase"],
+            payload["last_heartbeat_at"],
+            payload["last_workspace_activity_at"],
+            json.dumps(payload.get("terminal_receipt"), sort_keys=True) if payload.get("terminal_receipt") else None,
+        )
+        
+        changed = current_state != last_emitted_state
+
+        if changed or watchdog or timed_out or is_terminal:
+            event_type = "status_update"
+            if watchdog:
+                event_type = "watchdog"
+            elif timed_out:
+                event_type = "timeout"
+            elif is_terminal:
+                event_type = "terminal"
+
+            if json_output:
+                typer.echo(json.dumps({
+                    "event_type": event_type,
+                    "task_id": task_id,
+                    "phase": current_phase,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "payload": payload,
+                }, ensure_ascii=False))
+            else:
+                if changed:
+                    ts = datetime.now().strftime("%H:%M:%S")
+                    typer.echo(f"[{ts}] Task {task_id} phase: {current_phase}")
+                    
+                    prev_hb = last_emitted_state[1] if last_emitted_state else None
+                    if payload["last_heartbeat_at"] != prev_hb and payload["last_heartbeat_at"]:
+                        typer.echo(f"  -> Heartbeat: {payload['last_heartbeat_at']}")
+                        
+                    prev_ws = last_emitted_state[2] if last_emitted_state else None
+                    if payload["last_workspace_activity_at"] != prev_ws and payload["last_workspace_activity_at"]:
+                        typer.echo(f"  -> Workspace activity: {payload['last_workspace_activity_at']}")
+                    
+                    prev_rec = last_emitted_state[3] if last_emitted_state else None
+                    if current_state[3] != prev_rec and payload.get("terminal_receipt"):
+                        summary = payload["terminal_receipt"].get("summary", "No summary")
+                        typer.echo(f"  -> Terminal receipt received: {summary}")
+
+                if watchdog:
+                    typer.echo(
+                        f"Watchdog: task {task_id} is flagged for retry and silent.\n"
+                        f"Run: agpair task retry {task_id}",
+                        err=True,
+                    )
+                elif timed_out:
+                    typer.echo(f"Timed out after {timeout_seconds}s.", err=True)
+
+            last_emitted_state = current_state
+
+            if is_terminal:
+                code = exit_code_for_dispatch(WaitResult(phase=current_phase, timed_out=False))
+                raise typer.Exit(code=code)
+            
+            if watchdog or timed_out:
+                raise typer.Exit(code=1)
+
+        time.sleep(interval_seconds)
 
 
 # ---------------------------------------------------------------------------

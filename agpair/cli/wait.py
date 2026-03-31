@@ -69,6 +69,42 @@ class WaitResult:
 # ---------------------------------------------------------------------------
 
 
+def is_watchdog_triggered(
+    task,
+    heartbeat_silence_seconds: float = DEFAULT_HEARTBEAT_SILENCE_SECONDS,
+    _utcnow: object | None = None,
+) -> bool:
+    """Return True if tasks is acked + retry_recommended + has silent heartbeats."""
+    from datetime import UTC, datetime
+
+    if task is None or task.phase != "acked" or not task.retry_recommended:
+        return False
+
+    utcnow_fn = _utcnow or (lambda: datetime.now(UTC))
+
+    has_fresh_heartbeat = False
+    if task.last_heartbeat_at:
+        try:
+            hb_dt = datetime.fromisoformat(task.last_heartbeat_at.replace("Z", "+00:00"))
+            now_dt = utcnow_fn()  # type: ignore[operator]
+            silence = (now_dt - hb_dt).total_seconds()
+            has_fresh_heartbeat = silence < heartbeat_silence_seconds
+        except (ValueError, TypeError):
+            pass
+
+    has_fresh_workspace = False
+    if task.last_workspace_activity_at:
+        try:
+            ws_dt = datetime.fromisoformat(task.last_workspace_activity_at.replace("Z", "+00:00"))
+            now_dt = utcnow_fn()  # type: ignore[operator]
+            ws_silence = (now_dt - ws_dt).total_seconds()
+            has_fresh_workspace = ws_silence < heartbeat_silence_seconds
+        except (ValueError, TypeError):
+            pass
+
+    return not has_fresh_heartbeat and not has_fresh_workspace
+
+
 def wait_for_terminal_phase(
     db_path: Path,
     task_id: str,
@@ -140,46 +176,14 @@ def wait_for_terminal_phase(
                     waiters.finalize(waiter.waiter_id, outcome=f"phase:{current_phase}")
                 return WaitResult(phase=current_phase, timed_out=False)
 
-            # Watchdog early-exit: phase is still acked but daemon flagged
-            # retry_recommended — fail fast instead of blind-waiting until
-            # the hard timeout promotes to stuck.
-            #
-            # BUT: if we have recent heartbeats OR recent workspace activity,
-            # the task is alive — do NOT trigger watchdog. Only trigger if
-            # all liveness signals have gone silent.
-            if (
-                task is not None
-                and current_phase == "acked"
-                and task.retry_recommended
-            ):
-                has_fresh_heartbeat = False
-                if task.last_heartbeat_at:
-                    try:
-                        hb_dt = datetime.fromisoformat(task.last_heartbeat_at.replace("Z", "+00:00"))
-                        now_dt = utcnow_fn()  # type: ignore[operator]
-                        silence = (now_dt - hb_dt).total_seconds()
-                        has_fresh_heartbeat = silence < heartbeat_silence_seconds
-                    except (ValueError, TypeError):
-                        pass
-
-                has_fresh_workspace = False
-                if task.last_workspace_activity_at:
-                    try:
-                        ws_dt = datetime.fromisoformat(task.last_workspace_activity_at.replace("Z", "+00:00"))
-                        now_dt = utcnow_fn()  # type: ignore[operator]
-                        ws_silence = (now_dt - ws_dt).total_seconds()
-                        has_fresh_workspace = ws_silence < heartbeat_silence_seconds
-                    except (ValueError, TypeError):
-                        pass
-
-                if not has_fresh_heartbeat and not has_fresh_workspace:
-                    if waiter:
-                        waiters.finalize(waiter.waiter_id, outcome="watchdog")
-                    return WaitResult(
-                        phase=current_phase,
-                        timed_out=False,
-                        watchdog_triggered=True,
-                    )
+            if is_watchdog_triggered(task, heartbeat_silence_seconds, utcnow_fn):
+                if waiter:
+                    waiters.finalize(waiter.waiter_id, outcome="watchdog")
+                return WaitResult(
+                    phase=current_phase,
+                    timed_out=False,
+                    watchdog_triggered=True,
+                )
 
             if clock.time() >= deadline:  # type: ignore[union-attr]
                 if waiter:

@@ -824,3 +824,153 @@ def test_auto_wait_exits_1_on_watchdog(tmp_path: Path, monkeypatch):
     )
     assert result.exit_code == 1
     assert "watchdog" in result.stdout.lower() or "watchdog" in (result.stderr or "").lower()
+
+
+# ---------------------------------------------------------------------------
+# CLI: task watch
+# ---------------------------------------------------------------------------
+
+
+def test_task_watch_exits_1_on_missing_task(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    ensure_database(_make_paths(tmp_path).db_path)
+
+    result = CliRunner().invoke(app, [
+        "task", "watch", "T-WATCH-404",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "1",
+    ])
+    assert result.exit_code == 1
+    assert "task not found" in result.stdout or "task not found" in result.stderr
+
+
+def test_task_watch_json_not_found(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    ensure_database(_make_paths(tmp_path).db_path)
+
+    result = CliRunner().invoke(app, [
+        "task", "watch", "T-WATCH-404-JSON", "--json",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "1",
+    ])
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"] == "task_not_found"
+
+
+def test_task_watch_terminal_success(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WATCH-OK", repo_path="/r")
+    repo.mark_acked(task_id="T-WATCH-OK", session_id="s-1")
+    repo.mark_committed(task_id="T-WATCH-OK")
+
+    result = CliRunner().invoke(app, [
+        "task", "watch", "T-WATCH-OK",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "1",
+    ])
+    assert result.exit_code == 0
+    assert "Task T-WATCH-OK phase: committed" in result.stdout
+
+
+def test_task_watch_terminal_blocked(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WATCH-BL", repo_path="/r")
+    repo.mark_blocked(task_id="T-WATCH-BL", reason="locked")
+
+    result = CliRunner().invoke(app, [
+        "task", "watch", "T-WATCH-BL",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "1",
+    ])
+    assert result.exit_code == 1
+    assert "Task T-WATCH-BL phase: blocked" in result.stdout
+
+
+def test_task_watch_timeout(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WATCH-TO", repo_path="/r")
+
+    # The command uses real time.sleep, not mock. Set low timeout.
+    result = CliRunner().invoke(app, [
+        "task", "watch", "T-WATCH-TO",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "0.05",
+    ])
+    assert result.exit_code == 1
+    assert "Timed out after 0.05s" in result.stderr
+
+
+def test_task_watch_json_emits_ndjson(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WATCH-NDJSON", repo_path="/r")
+    
+    import threading
+    import time
+    
+    def advance_state():
+        time.sleep(0.02)
+        repo.mark_acked(task_id="T-WATCH-NDJSON", session_id="s-2")
+        time.sleep(0.04)
+        repo.mark_committed(task_id="T-WATCH-NDJSON")
+
+    threading.Thread(target=advance_state, daemon=True).start()
+
+    result = CliRunner().invoke(app, [
+        "task", "watch", "T-WATCH-NDJSON", "--json",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "1",
+    ])
+    
+    assert result.exit_code == 0
+    
+    lines = [line for line in result.stdout.strip().splitlines() if line]
+    assert len(lines) >= 3
+    parsed = [json.loads(line) for line in lines]
+    
+    events = [item["event_type"] for item in parsed]
+    assert "status_update" in events
+    assert "terminal" in events
+    
+    phases = [item["phase"] for item in parsed]
+    assert "new" in phases
+    assert "acked" in phases
+    assert "committed" in phases
+
+
+def test_task_watch_deduplicates_output(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WATCH-DEDUP", repo_path="/r")
+    
+    import threading
+    import time
+    
+    def advance_state():
+        time.sleep(0.05)
+        # Heartbeat change
+        repo.mark_acked(task_id="T-WATCH-DEDUP", session_id="s-del")
+        repo.record_heartbeat(task_id="T-WATCH-DEDUP")
+        time.sleep(0.05)
+        repo.mark_committed(task_id="T-WATCH-DEDUP")
+
+    threading.Thread(target=advance_state, daemon=True).start()
+
+    result = CliRunner().invoke(app, [
+        "task", "watch", "T-WATCH-DEDUP",
+        "--interval-seconds", "0.02",
+        "--timeout-seconds", "1",
+    ])
+    assert result.exit_code == 0
+    
+    # We should see the transitions and no duplicate "phase: acked" outputs
+    stdout = result.stdout
+    assert "Watching task T-WATCH-DEDUP" in stdout
+    # Ensure it only prints "phase: acked" once, even though it loops multiple times while waiting for committed
+    assert stdout.count("phase: acked") == 1
+    assert stdout.count("Heartbeat:") == 1
