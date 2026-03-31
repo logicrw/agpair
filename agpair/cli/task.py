@@ -808,6 +808,62 @@ def _strip_reply_to_message_id(body: str) -> str:
     return cleaned or body
 
 
+def _prepare_fresh_resume_dispatch(
+    paths: AppPaths,
+    bus: AgentBusClient,
+    tasks: TaskRepository,
+    journal: JournalRepository,
+    task,
+    feedback: str,
+    wait: bool,
+    interval_seconds: float,
+    timeout_seconds: float,
+    waiter_command: str,
+) -> None:
+    from agpair.storage.db import connect
+    with connect(paths.db_path) as conn:
+        row = conn.execute(
+            "SELECT body FROM journal WHERE task_id = ? AND event = 'created' AND source = 'cli' ORDER BY id ASC LIMIT 1",
+            (task.task_id,)
+        ).fetchone()
+        original_body = row["body"] if row else "<Original task body not found>"
+
+    terminal_receipt = _latest_terminal_receipt(paths, task.task_id)
+    evidence_summary = terminal_receipt.get("summary", "No prior evidence available.") if terminal_receipt else "No prior evidence available."
+
+    resume_body = (
+        f"Context-carry fresh resume for task {task.task_id}.\n\n"
+        f"--- ORIGINAL TASK ---\n{original_body}\n\n"
+        f"--- LATEST EXECUTION RESULT ---\n{evidence_summary}\n\n"
+        "Note: The previous execution ended. The code changes it made may already be "
+        "present in the repo. Evaluate the current working tree.\n\n"
+        f"--- NEW FEEDBACK / REQUEST ---\n{feedback}"
+    )
+
+    try:
+        # We don't need prepare_retry, apply_retry_dispatch will do the real transition.
+        message_id = bus.send_task(task_id=task.task_id, body=resume_body, repo_path=task.repo_path)
+    except (subprocess.SubprocessError, FileNotFoundError) as exc:
+        reason = f"dispatch failed: {exc}"
+        journal.append(task.task_id, "cli", "resume_failed", reason)
+        typer.echo(reason, err=True)
+        raise typer.Exit(code=1)
+
+    updated = tasks.apply_retry_dispatch(task_id=task.task_id)
+    journal.append(updated.task_id, "cli", "resumed", f"id={message_id} attempt={updated.attempt_no}")
+    typer.echo(task.task_id)
+
+    maybe_auto_wait(
+        paths.db_path,
+        task.task_id,
+        wait=wait,
+        success_phases=DISPATCH_SUCCESS_PHASES,
+        interval_seconds=interval_seconds,
+        timeout_seconds=timeout_seconds,
+        waiter_command=waiter_command,
+    )
+
+
 # ---------------------------------------------------------------------------
 # task continue
 # ---------------------------------------------------------------------------
@@ -818,6 +874,7 @@ def continue_task(
     task_id: str,
     body: str = typer.Option(..., "--body"),
     force: bool = typer.Option(False, "--force", help="Bypass liveness and waiter guards."),
+    fresh_resume: bool = typer.Option(False, "--fresh-resume", help="Resume as a fresh execution carrying forward context."),
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
@@ -829,6 +886,22 @@ def continue_task(
     task = _require_task_with_session(tasks, task_id)
     _guard_active_waiter(paths, task_id, force=force, command="continue")
     _guard_live_task(task, force=force, command="continue")
+    
+    if fresh_resume:
+        _prepare_fresh_resume_dispatch(
+            paths=paths,
+            bus=bus,
+            tasks=tasks,
+            journal=journal,
+            task=task,
+            feedback=body,
+            wait=wait,
+            interval_seconds=interval_seconds,
+            timeout_seconds=timeout_seconds,
+            waiter_command="task_continue_auto_wait",
+        )
+        return
+
     _send_semantic_or_exit(
         send_fn=lambda: bus.send_review(task_id=task.task_id, body=body),
         journal=journal,
@@ -862,6 +935,7 @@ def approve_task(
     task_id: str,
     body: str = typer.Option("Approved", "--body"),
     force: bool = typer.Option(False, "--force", help="Bypass waiter guard."),
+    fresh_resume: bool = typer.Option(False, "--fresh-resume", help="Resume as a fresh execution carrying forward context."),
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
@@ -872,6 +946,23 @@ def approve_task(
     journal = JournalRepository(paths.db_path)
     task = _require_task_with_session(tasks, task_id)
     _guard_active_waiter(paths, task_id, force=force, command="approve")
+    _guard_live_task(task, force=force, command="approve")
+    
+    if fresh_resume:
+        _prepare_fresh_resume_dispatch(
+            paths=paths,
+            bus=bus,
+            tasks=tasks,
+            journal=journal,
+            task=task,
+            feedback=body,
+            wait=wait,
+            interval_seconds=interval_seconds,
+            timeout_seconds=timeout_seconds,
+            waiter_command="task_approve_auto_wait",
+        )
+        return
+
     _send_semantic_or_exit(
         send_fn=lambda: bus.send_approved(task_id=task.task_id, body=body),
         journal=journal,

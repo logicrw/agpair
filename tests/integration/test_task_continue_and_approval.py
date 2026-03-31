@@ -414,3 +414,106 @@ def test_task_approve_fails_cleanly_when_dispatch_fails(tmp_path: Path, monkeypa
 
     assert result.exit_code == 1
     assert "dispatch failed:" in result.stderr
+
+
+def test_task_continue_fresh_resume_preserves_context(tmp_path: Path, monkeypatch) -> None:
+    import json
+    from agpair.storage.journal import JournalRepository
+
+    binary, calls_path, _pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(_pull_path))
+    repo = seed_acked_task(tmp_path)
+    
+    journal = JournalRepository(tmp_path / ".agpair" / "agpair.db")
+    journal.append("TASK-1", "cli", "created", "Original Task Body")
+    
+    receipt = json.dumps({
+        "schema_version": "1",
+        "task_id": "TASK-1",
+        "attempt_no": 1,
+        "review_round": 0,
+        "status": "EVIDENCE_PACK",
+        "summary": "Evidence achieved!",
+        "payload": {}
+    })
+    journal.append("TASK-1", "daemon", "evidence_ready", receipt)
+
+    result = CliRunner().invoke(app, ["task", "continue", "TASK-1", "--body", "Fix stuff", "--fresh-resume", "--no-wait"])
+    
+    assert result.exit_code == 0
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.attempt_no == 2
+    assert task.retry_count == 1
+    
+    recorded = read_calls(calls_path)
+    sent_calls = [c for c in recorded if c["argv"][1] == "send"]
+    assert sent_calls[-1]["argv"][:8] == [
+        "agent-bus",
+        "send",
+        "--sender",
+        "desktop",
+        "--task-id",
+        "TASK-1",
+        "--status",
+        "TASK",
+    ]
+    body = sent_calls[-1]["body"]
+    assert "Original Task Body" in body
+    assert "Evidence achieved!" in body
+    assert "Fix stuff" in body
+
+
+def test_task_approve_fresh_resume_preserves_context(tmp_path: Path, monkeypatch) -> None:
+    import json
+    from agpair.storage.journal import JournalRepository
+
+    binary, calls_path, _pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(_pull_path))
+    repo = seed_acked_task(tmp_path)
+    
+    journal = JournalRepository(tmp_path / ".agpair" / "agpair.db")
+    journal.append("TASK-1", "cli", "created", "Original Task Body")
+    
+    receipt = json.dumps({
+        "schema_version": "1",
+        "task_id": "TASK-1",
+        "attempt_no": 1,
+        "review_round": 0,
+        "status": "EVIDENCE_PACK",
+        "summary": "Evidence achieved!",
+        "payload": {}
+    })
+    journal.append("TASK-1", "daemon", "evidence_ready", receipt)
+
+    result = CliRunner().invoke(app, ["task", "approve", "TASK-1", "--body", "Approved it", "--fresh-resume", "--no-wait"])
+    
+    assert result.exit_code == 0
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.attempt_no == 2
+    assert task.retry_count == 1
+    
+    recorded = read_calls(calls_path)
+    sent_calls = [c for c in recorded if c["argv"][1] == "send"]
+    assert sent_calls[-1]["argv"][:8] == [
+        "agent-bus",
+        "send",
+        "--sender",
+        "desktop",
+        "--task-id",
+        "TASK-1",
+        "--status",
+        "TASK",
+    ]
+    body = sent_calls[-1]["body"]
+    assert "Original Task Body" in body
+    assert "Evidence achieved!" in body
+    assert "Approved it" in body
+
