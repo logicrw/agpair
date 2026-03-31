@@ -77,6 +77,11 @@ Every task body sent to Antigravity **must** begin with the following execution 
 3. Do not run integration tests or start services
 4. If timeout fires (exit code 124), skip that step and continue — do not retry
 5. After all work is done, git commit directly — no external approval needed
+6. Do NOT use shell/terminal for read-only operations (grep, find, cat, ls, mkdir).
+   Use the IDE's built-in tools instead (grep_search, file_search, view_file,
+   create_file, edit_file). Shell commands may trigger approval prompts that
+   block automated execution indefinitely. Only use shell for: syntax checks
+   (Rule 2), git operations, and explicitly required build commands.
 ```
 
 **Why this matters:**
