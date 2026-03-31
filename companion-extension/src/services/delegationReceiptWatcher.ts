@@ -61,7 +61,14 @@ export class DelegationReceiptWatcher {
     this.tracker = options.tracker;
     this.receiptDir = options.receiptDir;
     this.pollIntervalMs = Math.max(options.pollIntervalMs, 500);
-    this.staleAfterMs = Math.max(options.staleAfterMs ?? 0, 0);
+    const rawStale = options.staleAfterMs ?? 0;
+    this.staleAfterMs = Number.isFinite(rawStale) && rawStale > 0 ? rawStale : 0;
+
+    if (this.staleAfterMs === 0) {
+      options.outputChannel.appendLine(
+        "[companion] ⚠ DEGRADED: Delegation stale timeout configuration is disabled or invalid. Task watchdog recovery is offline.",
+      );
+    }
     this.outputChannel = options.outputChannel;
     this.sendTerminal = options.sendTerminal;
     this.sessionCtrl = options.sessionCtrl ?? null;

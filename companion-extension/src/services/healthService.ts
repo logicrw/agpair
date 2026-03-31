@@ -58,6 +58,8 @@ export interface HealthResponse {
   agent_bus_watch_mode: string;
   agent_bus_watch_pid: number | null;
   agent_bus_delegation_enabled: boolean;
+  delegation_stale_timeout_ms: number;
+  delegation_stale_guard_degraded: boolean;
   delegation_auto_return: DelegationAutoReturnStatus;
   version: string;
   timestamp: string;
@@ -90,6 +92,7 @@ export class HealthService {
       receipt_dir: "",
       tracker_summary: { total: 0, pending: 0, completed: 0, tasks: [] },
     }),
+    private readonly delegationTimeoutMsProvider: () => number = () => 0,
   ) {}
 
   /** Set the actual bridge port after listen succeeds. */
@@ -105,6 +108,10 @@ export class HealthService {
   getHealth(): HealthResponse {
     const watchStatus = this.agentBusWatchStatusProvider();
     const delegationStatus = this.agentBusDelegationStatusProvider();
+    const rawStaleTimeout = this.delegationTimeoutMsProvider();
+    const isStaleGuardDegraded = !Number.isFinite(rawStaleTimeout) || rawStaleTimeout <= 0;
+    const actualStaleTimeoutMs = isStaleGuardDegraded ? 0 : rawStaleTimeout;
+
     return {
       ok: true,
       extension_loaded: true,
@@ -123,6 +130,8 @@ export class HealthService {
       agent_bus_watch_mode: watchStatus.mode,
       agent_bus_watch_pid: watchStatus.pid,
       agent_bus_delegation_enabled: delegationStatus.enabled,
+      delegation_stale_timeout_ms: actualStaleTimeoutMs,
+      delegation_stale_guard_degraded: isStaleGuardDegraded,
       delegation_auto_return: delegationStatus,
       version: this.version,
       timestamp: new Date().toISOString(),
