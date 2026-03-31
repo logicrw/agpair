@@ -720,7 +720,7 @@ def test_task_abandon_fails_when_task_is_missing(tmp_path: Path, monkeypatch) ->
 
 def test_inspect_json_with_no_active_task(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    
+
     result = CliRunner().invoke(app, ["inspect", "--repo-path", "/tmp/repo", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -734,7 +734,7 @@ def test_inspect_json_with_specific_task_id(tmp_path: Path, monkeypatch) -> None
     repo = make_task_repo(tmp_path)
     repo.create_task(task_id="TASK-INSPECT-JSON-1", repo_path="/tmp/repo")
     repo.mark_acked(task_id="TASK-INSPECT-JSON-1", session_id="sesh-1")
-    
+
     result = CliRunner().invoke(app, ["inspect", "--repo-path", "/tmp/repo", "--task-id", "TASK-INSPECT-JSON-1", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -745,13 +745,13 @@ def test_inspect_json_with_specific_task_id(tmp_path: Path, monkeypatch) -> None
 def test_inspect_chooses_relevant_active_task(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = make_task_repo(tmp_path)
-    
+
     repo.create_task(task_id="TASK-TERM", repo_path="/tmp/repo")
     repo.mark_abandoned(task_id="TASK-TERM", reason="test")
 
     repo.create_task(task_id="TASK-ACTIVE", repo_path="/tmp/repo")
     repo.mark_acked(task_id="TASK-ACTIVE", session_id="sesh-active")
-    
+
     result = CliRunner().invoke(app, ["inspect", "--repo-path", "/tmp/repo", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -764,9 +764,8 @@ def test_inspect_human_readable_output(tmp_path: Path, monkeypatch) -> None:
     repo = make_task_repo(tmp_path)
     repo.create_task(task_id="TASK-HUMAN", repo_path="/tmp/repo")
     repo.mark_acked(task_id="TASK-HUMAN", session_id="sesh-2")
-    
+
     result = CliRunner().invoke(app, ["inspect", "--repo-path", "/tmp/repo"])
     assert result.exit_code == 0
     assert "=== Inspect: /tmp/repo ===" in result.stdout
     assert "Task ID:     TASK-HUMAN" in result.stdout
-

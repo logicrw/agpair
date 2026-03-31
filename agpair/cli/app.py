@@ -80,7 +80,7 @@ def inspect(
 
     doctor_report = build_doctor_report(paths, repo_path=repo_path, fresh=False)
     tasks = TaskRepository(paths.db_path)
-    
+
     task_record = tasks.get_task(task_id) if task_id else tasks.get_most_relevant_active_task(repo_path)
     task_payload = build_task_payload(paths, task_record) if task_record else None
 
@@ -111,7 +111,7 @@ def inspect(
                 task_dict["committed_result"] = task_payload["committed_result"]
             if task_payload.get("failure_context"):
                 task_dict["failure_context"] = task_payload["failure_context"]
-                
+
             if not task_payload.get("terminal_receipt"):
                 j = JournalRepository(paths.db_path)
                 rows = j.tail(task_payload["task_id"], limit=1)
@@ -129,13 +129,13 @@ def inspect(
 
     # Human readable text
     typer.echo(f"=== Inspect: {repo_path} ===")
-    
+
     if doctor_report.get("repo_bridge_session_ready"):
         typer.echo("Bridge: Ready")
     else:
         err = doctor_report.get("repo_bridge_warning") or doctor_report.get("repo_bridge_error") or "Not Responding"
         typer.echo(f"Bridge: {err}")
-    
+
     typer.echo(f"Pending Bridge Tasks: {doctor_report.get('repo_bridge_pending_task_count')}")
 
     if not task_record:

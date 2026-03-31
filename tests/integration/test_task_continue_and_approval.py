@@ -426,10 +426,10 @@ def test_task_continue_fresh_resume_preserves_context(tmp_path: Path, monkeypatc
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(_pull_path))
     repo = seed_acked_task(tmp_path)
-    
+
     journal = JournalRepository(tmp_path / ".agpair" / "agpair.db")
     journal.append("TASK-1", "cli", "created", "Original Task Body")
-    
+
     receipt = json.dumps({
         "schema_version": "1",
         "task_id": "TASK-1",
@@ -442,13 +442,13 @@ def test_task_continue_fresh_resume_preserves_context(tmp_path: Path, monkeypatc
     journal.append("TASK-1", "daemon", "evidence_ready", receipt)
 
     result = CliRunner().invoke(app, ["task", "continue", "TASK-1", "--body", "Fix stuff", "--fresh-resume", "--no-wait"])
-    
+
     assert result.exit_code == 0
     task = repo.get_task("TASK-1")
     assert task is not None
     assert task.attempt_no == 2
     assert task.retry_count == 1
-    
+
     recorded = read_calls(calls_path)
     sent_calls = [c for c in recorded if c["argv"][1] == "send"]
     assert sent_calls[-1]["argv"][:8] == [
@@ -477,10 +477,10 @@ def test_task_approve_fresh_resume_preserves_context(tmp_path: Path, monkeypatch
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(_pull_path))
     repo = seed_acked_task(tmp_path)
-    
+
     journal = JournalRepository(tmp_path / ".agpair" / "agpair.db")
     journal.append("TASK-1", "cli", "created", "Original Task Body")
-    
+
     receipt = json.dumps({
         "schema_version": "1",
         "task_id": "TASK-1",
@@ -493,13 +493,12 @@ def test_task_approve_fresh_resume_preserves_context(tmp_path: Path, monkeypatch
     journal.append("TASK-1", "daemon", "evidence_ready", receipt)
 
     result = CliRunner().invoke(app, ["task", "approve", "TASK-1", "--body", "Approved it", "--fresh-resume", "--no-wait"])
-    
+
     assert result.exit_code == 0
     task = repo.get_task("TASK-1")
     assert task is not None
     assert task.attempt_no == 2
     assert task.retry_count == 1
-    
     recorded = read_calls(calls_path)
     sent_calls = [c for c in recorded if c["argv"][1] == "send"]
     assert sent_calls[-1]["argv"][:8] == [
@@ -516,4 +515,3 @@ def test_task_approve_fresh_resume_preserves_context(tmp_path: Path, monkeypatch
     assert "Original Task Body" in body
     assert "Evidence achieved!" in body
     assert "Approved it" in body
-

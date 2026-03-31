@@ -886,7 +886,7 @@ def continue_task(
     task = _require_task_with_session(tasks, task_id)
     _guard_active_waiter(paths, task_id, force=force, command="continue")
     _guard_live_task(task, force=force, command="continue")
-    
+
     if fresh_resume:
         _prepare_fresh_resume_dispatch(
             paths=paths,
@@ -947,7 +947,7 @@ def approve_task(
     task = _require_task_with_session(tasks, task_id)
     _guard_active_waiter(paths, task_id, force=force, command="approve")
     _guard_live_task(task, force=force, command="approve")
-    
+
     if fresh_resume:
         _prepare_fresh_resume_dispatch(
             paths=paths,
