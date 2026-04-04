@@ -16,7 +16,7 @@ This guide walks you through going from zero to your first successful task dispa
 
 ### What is `agent-bus`?
 
-`agent-bus` is the shared local message bus that agpair uses for its Antigravity-backed execution path. It is distributed as part of the Antigravity tooling environment. If you are using Antigravity as the executor, it must be available on your `PATH`. If you are using an Antigravity-managed setup, it should already be available. Otherwise, install the `agent-bus` binary provided by your Antigravity distribution and ensure it is on your `PATH`. There is currently no standalone public package for `agent-bus`.
+`agent-bus` is the local message bus that agpair uses for its Antigravity-backed execution path. It is distributed as part of the Antigravity tooling environment. If you are using Antigravity as the executor, it must be available on your `PATH`. If you are using an Antigravity-managed setup, it should already be available. Otherwise, install the `agent-bus` binary provided by your Antigravity distribution and ensure it is on your `PATH`. There is currently no standalone public package for `agent-bus`.
 
 If you use `--executor codex` or `--executor gemini`, the same agpair lifecycle still applies, but the executor process is local CLI-based rather than Antigravity-session-based. This guide continues to use Antigravity examples because that path has the richest runtime surface.
 

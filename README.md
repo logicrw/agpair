@@ -96,9 +96,9 @@ This is a usage recommendation, not a product limitation: `agpair` itself stays 
 
 ### `agent-bus`
 
-`agent-bus` is the shared local message bus that agpair uses to dispatch tasks and receive receipts between your AI agent (desktop side) and Antigravity (code executor). It must be available on your `PATH`.
+`agent-bus` is the local message bus agpair uses for its Antigravity-backed execution path. If you use Antigravity as an executor, it must be available on your `PATH`.
 
-> **Note:** `agent-bus` is a local CLI tool distributed as part of the Antigravity tooling environment. If you are using an Antigravity-managed setup, it should already be available. If not, install the `agent-bus` binary provided by your Antigravity distribution and ensure it is on your `PATH`. There is currently no standalone public package for `agent-bus` — it is expected to be present in environments where Antigravity is installed.
+> **Note:** `agent-bus` is distributed as part of the Antigravity tooling environment. If you are only using `codex` / `gemini` executors, agpair's lifecycle still works, but the Antigravity-specific transport path is unused. If you want Antigravity available as an executor, ensure the `agent-bus` binary is on your `PATH`.
 
 ### Antigravity IDE
 
@@ -164,7 +164,7 @@ For the full step-by-step walkthrough, see the detailed guides below.
                                        journals)
 ```
 
-**Data flow:** AI Agent → `agpair task start` → daemon dispatches via `agent-bus` → Antigravity executes → companion extension writes receipts → daemon ingests receipts → AI Agent reads status.
+**Data flow:** Controller agent → `agpair task start` → agpair dispatches to the selected executor → executor returns structured progress / terminal state → agpair ingests and persists state → controller reads status/watch/inspect.
 
 ## How it Works in Practice
 
