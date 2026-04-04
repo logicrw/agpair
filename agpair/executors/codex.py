@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import typing
 
-from agpair.executors.base import ExecutorAdapter
+from agpair.executors.base import DispatchResult, ExecutorAdapter, TaskState
 from agpair.models import ContinuationCapability
 
 logger = logging.getLogger(__name__)
@@ -22,48 +22,6 @@ class CodexTaskRef:
     stderr_file: pathlib.Path
     last_msg_file: pathlib.Path
     temp_dir: pathlib.Path
-
-
-@dataclasses.dataclass
-class CodexTaskState:
-    is_done: bool
-    returncode: int | None
-    last_message: str | None
-    events_count: int
-
-    def synthesize_receipt(self, task_id: str, *, attempt_no: int = 1) -> dict[str, typing.Any]:
-        """Synthesize a terminal receipt dict for this task state."""
-        if not self.is_done:
-            return {}
-
-        if self.returncode == 0:
-            status = "EVIDENCE_PACK"
-            summary = self.last_message or "Task finished successfully"
-            payload = {
-                "events_count": self.events_count,
-                "returncode": self.returncode,
-            }
-        else:
-            status = "BLOCKED"
-            summary = self.last_message or "Task failed"
-            payload = {
-                "blocker_type": "execution_error",
-                "message": summary,
-                "recoverable": False,
-                "suggested_action": "Inspect stderr logs",
-                "last_error_excerpt": summary[:200] if summary else "",
-                "returncode": self.returncode,
-            }
-
-        return {
-            "schema_version": "1",
-            "task_id": task_id,
-            "attempt_no": attempt_no,
-            "review_round": 0,
-            "status": status,
-            "summary": summary,
-            "payload": payload,
-        }
 
 
 class CodexExecutor(ExecutorAdapter):
@@ -82,7 +40,7 @@ class CodexExecutor(ExecutorAdapter):
     def continuation_capability(self) -> ContinuationCapability:
         return ContinuationCapability.FRESH_RESUME_FIRST
 
-    def dispatch(self, *, task_id: str, body: str, repo_path: str) -> CodexTaskRef:
+    def dispatch(self, *, task_id: str, body: str, repo_path: str) -> DispatchResult:
         """
         Dispatch a task using codex exec.
         Returns a CodexTaskRef tracking reference.
@@ -132,44 +90,52 @@ class CodexExecutor(ExecutorAdapter):
         stdout_fh.close()
         stderr_fh.close()
 
-        return CodexTaskRef(
-            task_id=task_id,
-            process=process,
-            stdout_file=stdout_file,
-            stderr_file=stderr_file,
-            last_msg_file=last_msg_file,
-            temp_dir=temp_dir,
-        )
+        return DispatchResult(session_id=str(temp_dir))
 
-    def poll(self, task_ref: typing.Any) -> CodexTaskState:
+    def poll(self, task_id: str, session_id: str, attempt_no: int = 1) -> TaskState | None:
         """
         Poll the status of an ongoing Codex task.
         """
-        if not isinstance(task_ref, CodexTaskRef):
-            raise TypeError(f"Expected CodexTaskRef, got {type(task_ref)}")
+        temp_dir = pathlib.Path(session_id)
+        if not temp_dir.exists():
+            return TaskState(
+                is_done=True,
+                receipt={
+                    "schema_version": "1",
+                    "task_id": task_id,
+                    "attempt_no": attempt_no,
+                    "review_round": 0,
+                    "status": "BLOCKED",
+                    "summary": "Executor temp directory missing, task is lost.",
+                    "payload": {
+                        "blocker_type": "execution_error",
+                        "message": "Executor temp directory missing, task is lost.",
+                        "recoverable": False,
+                        "suggested_action": "Retry",
+                        "last_error_excerpt": "",
+                    }
+                }
+            )
+
+        task_ref = CodexTaskRef(
+            task_id=task_id,
+            process=None,
+            stdout_file=temp_dir / "stdout.jsonl",
+            stderr_file=temp_dir / "stderr.log",
+            last_msg_file=temp_dir / "last_msg.txt",
+            temp_dir=temp_dir,
+        )
 
         rc_file = task_ref.temp_dir / "rc.txt"
         retcode = None
         is_done = False
 
-        if task_ref.process is not None:
-            retcode = task_ref.process.poll()
-            is_done = retcode is not None
-        else:
-            if rc_file.exists():
-                is_done = True
-                try:
-                    retcode = int(rc_file.read_text(encoding="utf-8").strip())
-                except ValueError:
-                    retcode = 1
-
-        # Prefer writing the actual RC if the process completed and created the rc_file, 
-        # in case wrapper logic wasn't fully reliable.
-        if is_done and retcode == 0 and rc_file.exists():
+        if rc_file.exists():
+            is_done = True
             try:
                 retcode = int(rc_file.read_text(encoding="utf-8").strip())
             except ValueError:
-                pass
+                retcode = 1
 
         events_count = 0
         if is_done and task_ref.stdout_file.exists():
@@ -188,37 +154,56 @@ class CodexExecutor(ExecutorAdapter):
             except Exception:
                 pass
 
-        return CodexTaskState(
-            is_done=is_done,
-            returncode=retcode,
-            last_message=last_message,
-            events_count=events_count,
-        )
+        receipt = None
+        if is_done:
+            if retcode == 0:
+                status = "EVIDENCE_PACK"
+                summary = last_message or "Task finished successfully"
+                payload = {
+                    "events_count": events_count,
+                    "returncode": retcode,
+                }
+            else:
+                status = "BLOCKED"
+                summary = last_message or "Task failed"
+                payload = {
+                    "blocker_type": "execution_error",
+                    "message": summary,
+                    "recoverable": False,
+                    "suggested_action": "Inspect stderr logs",
+                    "last_error_excerpt": summary[:200] if summary else "",
+                    "returncode": retcode,
+                }
+            receipt = {
+                "schema_version": "1",
+                "task_id": task_id,
+                "attempt_no": attempt_no,
+                "review_round": 0,
+                "status": status,
+                "summary": summary,
+                "payload": payload,
+            }
 
-    def cancel(self, task_ref: typing.Any) -> None:
+        return TaskState(is_done=is_done, receipt=receipt)
+
+    def cancel(self, task_id: str, session_id: str) -> None:
         """
         Cancel an ongoing Codex task, best-effort.
         """
         import os
         import signal
 
-        if not isinstance(task_ref, CodexTaskRef):
-            raise TypeError(f"Expected CodexTaskRef, got {type(task_ref)}")
-
-        if task_ref.process is not None and task_ref.process.poll() is None:
-            task_ref.process.terminate()
+        temp_dir = pathlib.Path(session_id)
+        if not temp_dir.exists():
+            return
+            
+        pid_file = temp_dir / "pid.txt"
+        if pid_file.exists():
             try:
-                task_ref.process.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                task_ref.process.kill()
-        else:
-            pid_file = task_ref.temp_dir / "pid.txt"
-            if pid_file.exists():
-                try:
-                    pid = int(pid_file.read_text(encoding="utf-8").strip())
-                    os.kill(-pid, signal.SIGTERM)
-                except Exception:
-                    pass
+                pid = int(pid_file.read_text(encoding="utf-8").strip())
+                os.kill(-pid, signal.SIGTERM)
+            except Exception:
+                pass
 
     def cleanup(self, session_id: str) -> None:
         """

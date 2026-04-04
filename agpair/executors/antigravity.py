@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from agpair.executors.base import ExecutorAdapter
+import typing
+
+from agpair.executors.base import DispatchResult, ExecutorAdapter, TaskState
 from agpair.models import ContinuationCapability
 from agpair.transport.bus import AgentBusClient
 
@@ -19,14 +21,19 @@ class AntigravityExecutor(ExecutorAdapter):
     def continuation_capability(self) -> ContinuationCapability:
         return ContinuationCapability.SAME_SESSION
 
-    def dispatch(self, *, task_id: str, body: str, repo_path: str) -> int:
+    def dispatch(self, *, task_id: str, body: str, repo_path: str) -> DispatchResult:
         """Dispatch via the existing AgentBusClient semantics."""
-        return self.bus.send_task(task_id=task_id, body=body, repo_path=repo_path)
+        msg_id = self.bus.send_task(task_id=task_id, body=body, repo_path=repo_path)
+        return DispatchResult(message_id=str(msg_id))
 
-    def poll(self, task_ref: int) -> None:
+    def poll(self, task_id: str, session_id: str, attempt_no: int = 1) -> TaskState | None:
         """Not yet needed or implemented for Antigravity (handled by external daemon poll)."""
+        return None
+
+    def cancel(self, task_id: str, session_id: str) -> None:
+        """Best-effort cancellation not supported yet via agent-bus directly."""
         pass
 
-    def cancel(self, task_ref: int) -> None:
-        """Best-effort cancellation not supported yet via agent-bus directly."""
+    def cleanup(self, session_id: str) -> None:
+        """Nothing to clean up for Antigravity here."""
         pass

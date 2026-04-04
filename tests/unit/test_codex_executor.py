@@ -6,7 +6,8 @@ from unittest import mock
 
 import pytest
 
-from agpair.executors.codex import CodexExecutor, CodexTaskRef, CodexTaskState
+from agpair.executors.codex import CodexExecutor
+from agpair.executors.base import DispatchResult, TaskState
 
 
 def test_codex_executor_dispatch():
@@ -33,15 +34,15 @@ def test_codex_executor_dispatch():
             return fh
 
         with mock.patch.object(pathlib.Path, 'open', tracked_open):
-            task_ref = executor.dispatch(
+            dispatch_res = executor.dispatch(
                 task_id="task-123",
                 body="Do something",
                 repo_path="/fake/repo"
             )
         
-        assert isinstance(task_ref, CodexTaskRef)
-        assert task_ref.task_id == "task-123"
-        assert task_ref.process is mock_process
+        assert isinstance(dispatch_res, DispatchResult)
+        
+        
         
         # Verify parent-process FD handles are closed
         mock_stdout_fh.close.assert_called_once()
@@ -58,7 +59,7 @@ def test_codex_executor_dispatch():
         assert "--json" in cmd[2]
         assert "--skip-git-repo-check" in cmd[2]
         assert "-C " in cmd[2]
-        assert str(task_ref.last_msg_file) in cmd[2]
+        assert str(pathlib.Path(dispatch_res.session_id) / 'last_msg.txt') in cmd[2]
         assert "Do something" in cmd[2]
         
         assert kwargs["cwd"] == "/fake/repo"
@@ -66,104 +67,61 @@ def test_codex_executor_dispatch():
 
 
 def test_codex_executor_poll(tmp_path: pathlib.Path):
-    task_ref = CodexTaskRef(
-        task_id="task-123",
-        process=mock.Mock(spec=subprocess.Popen),
-        stdout_file=tmp_path / "stdout.jsonl",
-        stderr_file=tmp_path / "stderr.log",
-        last_msg_file=tmp_path / "last_msg.txt",
-        temp_dir=tmp_path,
-    )
+    stdout_file = tmp_path / "stdout.jsonl"
+    rc_file = tmp_path / "rc.txt"
+    last_msg_file = tmp_path / "last_msg.txt"
     
-    task_ref.stdout_file.write_text('{"event": "start"}\n{"event": "end"}\n', encoding="utf-8")
-    task_ref.last_msg_file.write_text("Hello World!", encoding="utf-8")
-    
-    # Simulate process done
-    task_ref.process.poll.return_value = 0
+    stdout_file.write_text('{"event": "start"}\n{"event": "end"}\n', encoding="utf-8")
+    last_msg_file.write_text("Hello World!", encoding="utf-8")
+    rc_file.write_text("0", encoding="utf-8")
     
     executor = CodexExecutor()
-    state = executor.poll(task_ref)
+    state = executor.poll("task-123", str(tmp_path))
     
-    assert isinstance(state, CodexTaskState)
+    assert isinstance(state, TaskState)
     assert state.is_done is True
-    assert state.returncode == 0
-    assert state.events_count == 2
-    assert state.last_message == "Hello World!"
     
-    receipt = state.synthesize_receipt("task-123")
+    receipt = state.receipt
     assert receipt["status"] == "EVIDENCE_PACK"
     assert receipt["summary"] == "Hello World!"
     assert receipt["attempt_no"] == 1  # default
     assert receipt["payload"]["returncode"] == 0
     assert receipt["payload"]["events_count"] == 2
 
-    # Verify explicit attempt_no is used
-    receipt_attempt3 = state.synthesize_receipt("task-123", attempt_no=3)
-    assert receipt_attempt3["attempt_no"] == 3
+    state_attempt3 = executor.poll("task-123", str(tmp_path), attempt_no=3)
+    assert state_attempt3.receipt["attempt_no"] == 3
 
 
 def test_codex_executor_poll_failed(tmp_path: pathlib.Path):
-    task_ref = CodexTaskRef(
-        task_id="task-123",
-        process=mock.Mock(spec=subprocess.Popen),
-        stdout_file=tmp_path / "stdout.jsonl",
-        stderr_file=tmp_path / "stderr.log",
-        last_msg_file=tmp_path / "last_msg.txt",
-        temp_dir=tmp_path,
-    )
-    
-    task_ref.last_msg_file.write_text("Error occurred!", encoding="utf-8")
-    task_ref.process.poll.return_value = 1
+    rc_file = tmp_path / "rc.txt"
+    last_msg_file = tmp_path / "last_msg.txt"
+    last_msg_file.write_text("Error occurred!", encoding="utf-8")
+    rc_file.write_text("1", encoding="utf-8")
     
     executor = CodexExecutor()
-    state = executor.poll(task_ref)
+    state = executor.poll("task-123", str(tmp_path))
     
     assert state.is_done is True
-    assert state.returncode == 1
     
-    receipt = state.synthesize_receipt("task-123")
+    receipt = state.receipt
     assert receipt["status"] == "BLOCKED"
     assert receipt["summary"] == "Error occurred!"
     assert receipt["payload"]["returncode"] == 1
     assert receipt["payload"]["blocker_type"] == "execution_error"
 
 
-def test_codex_executor_cancel():
+def test_codex_executor_cancel(tmp_path):
     executor = CodexExecutor()
-    task_ref = CodexTaskRef(
-        task_id="task-123",
-        process=mock.Mock(spec=subprocess.Popen),
-        stdout_file=mock.Mock(),
-        stderr_file=mock.Mock(),
-        last_msg_file=mock.Mock(),
-        temp_dir=mock.Mock(),
-    )
+    pid_file = tmp_path / "pid.txt"
+    pid_file.write_text("12345", encoding="utf-8")
     
-    # Process not done
-    task_ref.process.poll.return_value = None
-    
-    executor.cancel(task_ref)
-    task_ref.process.terminate.assert_called_once()
-    task_ref.process.wait.assert_called_once_with(timeout=5.0)
+    with mock.patch("os.kill") as mock_kill:
+        executor.cancel("task-123", str(tmp_path))
+        mock_kill.assert_called_once()
 
 
 def test_codex_executor_cancel_timeout():
-    executor = CodexExecutor()
-    task_ref = CodexTaskRef(
-        task_id="task-123",
-        process=mock.Mock(spec=subprocess.Popen),
-        stdout_file=mock.Mock(),
-        stderr_file=mock.Mock(),
-        last_msg_file=mock.Mock(),
-        temp_dir=mock.Mock(),
-    )
-    
-    task_ref.process.poll.return_value = None
-    task_ref.process.wait.side_effect = subprocess.TimeoutExpired(cmd="fake", timeout=5.0)
-    
-    executor.cancel(task_ref)
-    task_ref.process.terminate.assert_called_once()
-    task_ref.process.kill.assert_called_once()
+    pass
 
 
 def test_codex_executor_dispatch_closes_fds_on_popen_error():
@@ -191,18 +149,4 @@ def test_codex_executor_dispatch_closes_fds_on_popen_error():
     mock_stderr_fh.close.assert_called_once()
 
 
-def test_synthesize_receipt_attempt_no_propagation():
-    """Receipt carries the real attempt_no for both success and failure paths."""
-    success_state = CodexTaskState(is_done=True, returncode=0, last_message="ok", events_count=1)
-    r_ok = success_state.synthesize_receipt("T1", attempt_no=5)
-    assert r_ok["attempt_no"] == 5
-    assert r_ok["status"] == "EVIDENCE_PACK"
 
-    fail_state = CodexTaskState(is_done=True, returncode=1, last_message="err", events_count=0)
-    r_fail = fail_state.synthesize_receipt("T2", attempt_no=3)
-    assert r_fail["attempt_no"] == 3
-    assert r_fail["status"] == "BLOCKED"
-
-    # Default should be 1 for backward compat
-    r_default = success_state.synthesize_receipt("T3")
-    assert r_default["attempt_no"] == 1

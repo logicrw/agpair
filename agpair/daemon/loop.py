@@ -215,105 +215,35 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
     if not active_tasks:
         return 0, set(), 0
     all_messages: list[dict] = []
+    from agpair.executors import get_executor
     for task in active_tasks:
-        if task.executor_backend == "codex_cli" and task.phase == "acked":
-            if not task.antigravity_session_id:
+        exec_instance = get_executor(task.executor_backend)
+        if exec_instance and task.phase == "acked" and task.antigravity_session_id:
+            state = exec_instance.poll(task.task_id, task.antigravity_session_id, attempt_no=task.attempt_no)
+            if state is not None:
+                if state.is_done:
+                    msg_id = f"{task.executor_backend}-{task.task_id}-done"
+                    receipt = state.receipt or {}
+                    msg = {
+                        "id": msg_id,
+                        "task_id": task.task_id,
+                        "status": receipt.get("status", messages.BLOCKED),
+                        "body": json.dumps(receipt, ensure_ascii=False)
+                    }
+                    all_messages.append(msg)
+                else:
+                    msg_id = f"{task.executor_backend}-{task.task_id}-running-{int(current.timestamp()) // 10}"
+                    msg = {
+                        "id": msg_id,
+                        "task_id": task.task_id,
+                        "status": messages.RUNNING,
+                        "body": f"local {task.executor_backend} is still running"
+                    }
+                    all_messages.append(msg)
                 continue
-
-            from agpair.executors.codex import CodexExecutor, CodexTaskRef
-            import pathlib
-
-            temp_dir = pathlib.Path(task.antigravity_session_id)
-            if not temp_dir.exists():
-                # temp_dir missing means task probably crashed or temp was cleared
-                msg = {
-                    "id": f"codex-{task.task_id}-lost",
-                    "task_id": task.task_id,
-                    "status": messages.BLOCKED,
-                    "body": "Executor temp directory missing, task is lost."
-                }
-                all_messages.append(msg)
-                continue
-
-            task_ref = CodexTaskRef(
-                task_id=task.task_id,
-                process=None,
-                stdout_file=temp_dir / "stdout.jsonl",
-                stderr_file=temp_dir / "stderr.log",
-                last_msg_file=temp_dir / "last_msg.txt",
-                temp_dir=temp_dir,
-            )
-            state = CodexExecutor().poll(task_ref)
-
-            if state.is_done:
-                # Terminal receipt
-                msg_id = f"codex-{task.task_id}-done"
-                receipt = state.synthesize_receipt(task.task_id, attempt_no=task.attempt_no)
-                msg = {
-                    "id": msg_id,
-                    "task_id": task.task_id,
-                    "status": receipt.get("status", messages.BLOCKED),
-                    "body": json.dumps(receipt, ensure_ascii=False)
-                }
-                all_messages.append(msg)
-            else:
-                # Heatbeat every ~10s 
-                msg_id = f"codex-{task.task_id}-running-{int(current.timestamp()) // 10}"
-                msg = {
-                    "id": msg_id,
-                    "task_id": task.task_id,
-                    "status": messages.RUNNING,
-                    "body": "local codex executor is still running"
-                }
-                all_messages.append(msg)
-        elif task.executor_backend == "gemini_cli" and task.phase == "acked":
-            if not task.antigravity_session_id:
-                continue
-
-            from agpair.executors.gemini import GeminiExecutor, GeminiTaskRef
-            import pathlib
-
-            temp_dir = pathlib.Path(task.antigravity_session_id)
-            if not temp_dir.exists():
-                msg = {
-                    "id": f"gemini-{task.task_id}-lost",
-                    "task_id": task.task_id,
-                    "status": messages.BLOCKED,
-                    "body": "Executor temp directory missing, task is lost."
-                }
-                all_messages.append(msg)
-                continue
-
-            task_ref = GeminiTaskRef(
-                task_id=task.task_id,
-                process=None,
-                stdout_file=temp_dir / "stdout.log",
-                stderr_file=temp_dir / "stderr.log",
-                rc_file=temp_dir / "rc.txt",
-                temp_dir=temp_dir,
-            )
-            state = GeminiExecutor().poll(task_ref)
-
-            if state.is_done:
-                msg_id = f"gemini-{task.task_id}-done"
-                receipt = state.synthesize_receipt(task.task_id, attempt_no=task.attempt_no)
-                msg = {
-                    "id": msg_id,
-                    "task_id": task.task_id,
-                    "status": receipt.get("status", messages.BLOCKED),
-                    "body": json.dumps(receipt, ensure_ascii=False)
-                }
-                all_messages.append(msg)
-            else:
-                msg_id = f"gemini-{task.task_id}-running-{int(current.timestamp()) // 10}"
-                msg = {
-                    "id": msg_id,
-                    "task_id": task.task_id,
-                    "status": messages.RUNNING,
-                    "body": "local gemini executor is still running"
-                }
-                all_messages.append(msg)
-        elif task.executor_backend not in {"codex_cli", "gemini_cli"}:
+                
+        # If executor didn't handle it locally, try to pull from bus
+        if task.executor_backend not in {"codex_cli", "gemini_cli"}:
             try:
                 all_messages.extend(client.pull_receipts(task_id=task.task_id))
             except BusPullError as exc:
@@ -370,12 +300,10 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 tasks.mark_evidence_ready(task_id=task_id, last_receipt_id=message_id)
                 journal.append(task_id, "daemon", "evidence_ready", journal_body)
                 if current_task and current_task.antigravity_session_id:
-                    if current_task.executor_backend == "codex_cli":
-                        from agpair.executors.codex import CodexExecutor
-                        CodexExecutor().cleanup(current_task.antigravity_session_id)
-                    elif current_task.executor_backend == "gemini_cli":
-                        from agpair.executors.gemini import GeminiExecutor
-                        GeminiExecutor().cleanup(current_task.antigravity_session_id)
+                    from agpair.executors import get_executor
+                    exec_instance = get_executor(current_task.executor_backend)
+                    if exec_instance:
+                        exec_instance.cleanup(current_task.antigravity_session_id)
             elif status == messages.BLOCKED:
                 reason = clean_body or "blocked"
                 if structured_receipt is not None:
@@ -383,12 +311,10 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 tasks.mark_blocked(task_id=task_id, reason=reason)
                 journal.append(task_id, "daemon", "blocked", journal_body)
                 if current_task and current_task.antigravity_session_id:
-                    if current_task.executor_backend == "codex_cli":
-                        from agpair.executors.codex import CodexExecutor
-                        CodexExecutor().cleanup(current_task.antigravity_session_id)
-                    elif current_task.executor_backend == "gemini_cli":
-                        from agpair.executors.gemini import GeminiExecutor
-                        GeminiExecutor().cleanup(current_task.antigravity_session_id)
+                    from agpair.executors import get_executor
+                    exec_instance = get_executor(current_task.executor_backend)
+                    if exec_instance:
+                        exec_instance.cleanup(current_task.antigravity_session_id)
             elif status == messages.COMMITTED:
                 tasks.mark_committed(task_id=task_id, last_receipt_id=message_id)
                 journal.append(task_id, "daemon", "committed", journal_body)
@@ -428,12 +354,10 @@ def mark_stuck_tasks(
         tasks.recommend_retry(task_id=task.task_id, retry_count=task.retry_count)
         journal.append(task.task_id, "daemon", "stuck", "retry recommended after timeout")
         if task.antigravity_session_id:
-            if task.executor_backend == "codex_cli":
-                from agpair.executors.codex import CodexExecutor
-                CodexExecutor().cleanup(task.antigravity_session_id)
-            elif task.executor_backend == "gemini_cli":
-                from agpair.executors.gemini import GeminiExecutor
-                GeminiExecutor().cleanup(task.antigravity_session_id)
+            from agpair.executors import get_executor
+            exec_instance = get_executor(task.executor_backend)
+            if exec_instance:
+                exec_instance.cleanup(task.antigravity_session_id)
         count += 1
     return count
 

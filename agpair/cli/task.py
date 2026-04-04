@@ -448,12 +448,13 @@ def start_task(
         typer.echo(reason, err=True)
         raise typer.Exit(code=1)
 
-    if executor in {"codex", "gemini"}:
-        session_id = str(dispatch_result.temp_dir)
-        tasks.mark_acked(task_id=final_task_id, session_id=session_id)
-        journal.append(final_task_id, "cli", "dispatched", f"started {executor} exec in {session_id}")
+    if dispatch_result.session_id:
+        tasks.mark_acked(task_id=final_task_id, session_id=dispatch_result.session_id)
+        journal.append(final_task_id, "cli", "dispatched", f"started {executor} exec in {dispatch_result.session_id}")
+    elif dispatch_result.message_id:
+        journal.append(final_task_id, "cli", "dispatched", f"sent TASK to provider msg={dispatch_result.message_id}")
     else:
-        journal.append(final_task_id, "cli", "dispatched", f"sent TASK to agent-bus id={dispatch_result}")
+        journal.append(final_task_id, "cli", "dispatched", f"dispatched {executor} task")
 
     typer.echo(final_task_id)
 
@@ -634,40 +635,11 @@ def abandon_task(
     _guard_live_task(task, force=force, command="abandon")
     bridge_cancel_attempted = False
     if task.phase == "acked" and task.antigravity_session_id:
-        if task.executor_backend == "codex_cli":
-            import pathlib
-            from agpair.executors import CodexExecutor
-            from agpair.executors.codex import CodexTaskRef
-            
-            exec_instance = CodexExecutor()
-            temp_dir = pathlib.Path(task.antigravity_session_id)
-            task_ref = CodexTaskRef(
-                task_id=task.task_id,
-                process=None,
-                stdout_file=temp_dir / "stdout.jsonl",
-                stderr_file=temp_dir / "stderr.log",
-                last_msg_file=temp_dir / "last_msg.txt",
-                temp_dir=temp_dir,
-            )
-            exec_instance.cancel(task_ref)
-            journal.append(task_id, "cli", "executor_cancelled", "codex executor cancelled locally")
-        elif task.executor_backend == "gemini_cli":
-            import pathlib
-            from agpair.executors import GeminiExecutor
-            from agpair.executors.gemini import GeminiTaskRef
-            
-            exec_instance = GeminiExecutor()
-            temp_dir = pathlib.Path(task.antigravity_session_id)
-            task_ref = GeminiTaskRef(
-                task_id=task.task_id,
-                process=None,
-                stdout_file=temp_dir / "stdout.log",
-                stderr_file=temp_dir / "stderr.log",
-                rc_file=temp_dir / "rc.txt",
-                temp_dir=temp_dir,
-            )
-            exec_instance.cancel(task_ref)
-            journal.append(task_id, "cli", "executor_cancelled", "gemini executor cancelled locally")
+        from agpair.executors import get_executor
+        exec_instance = get_executor(task.executor_backend)
+        if exec_instance and task.executor_backend in {"codex_cli", "gemini_cli"}:
+            exec_instance.cancel(task_id=task.task_id, session_id=task.antigravity_session_id)
+            journal.append(task_id, "cli", "executor_cancelled", f"{task.executor_backend} cancelled locally")
         else:
             bridge_cancel_attempted = True
             bridge_cancelled, bridge_message = _cancel_bridge_task(
