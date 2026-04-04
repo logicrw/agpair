@@ -43,3 +43,35 @@ def test_pull_receipts_shells_out_to_agent_bus_cli(tmp_path: Path, monkeypatch) 
     assert receipts[0]["status"] == "ACK"
     recorded = read_calls(calls_path)
     assert recorded[-1]["argv"][:6] == ["agent-bus", "pull", "--sender", "code", "--reader", "desktop"]
+
+
+def test_pull_receipts_raises_bus_pull_error_on_subprocess_failure(tmp_path: Path, monkeypatch) -> None:
+    """A failing agent-bus process should raise BusPullError, not CalledProcessError."""
+    from agpair.transport.bus import BusPullError
+
+    # Write a script that always exits 1
+    failing_script = tmp_path / "agent-bus-fail"
+    failing_script.write_text("#!/bin/sh\nexit 1\n")
+    failing_script.chmod(0o755)
+
+    bus = AgentBusClient(str(failing_script))
+    import pytest
+
+    with pytest.raises(BusPullError, match="agent-bus pull failed"):
+        bus.pull_receipts()
+
+
+def test_pull_receipts_raises_bus_pull_error_on_invalid_json(tmp_path: Path, monkeypatch) -> None:
+    """Garbage stdout from agent-bus should raise BusPullError, not JSONDecodeError."""
+    from agpair.transport.bus import BusPullError
+
+    # Write a script that outputs invalid JSON
+    garbage_script = tmp_path / "agent-bus-garbage"
+    garbage_script.write_text('#!/bin/sh\necho "NOT-JSON{{{"\n')
+    garbage_script.chmod(0o755)
+
+    bus = AgentBusClient(str(garbage_script))
+    import pytest
+
+    with pytest.raises(BusPullError, match="invalid JSON"):
+        bus.pull_receipts()

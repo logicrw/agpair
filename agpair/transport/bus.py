@@ -8,6 +8,14 @@ import tempfile
 from agpair.transport import messages
 
 
+class BusPullError(RuntimeError):
+    """Raised when an ``agent-bus pull`` invocation fails transiently.
+
+    Wraps subprocess failures and JSON-decode errors so callers only need
+    to catch a single, domain-specific exception type.
+    """
+
+
 class AgentBusClient:
     def __init__(self, executable: str = "agent-bus") -> None:
         self.executable = executable
@@ -36,8 +44,15 @@ class AgentBusClient:
         ]
         if task_id:
             argv.extend(["--task-id", task_id])
-        proc = subprocess.run(argv, capture_output=True, text=True, check=True)
-        payload = json.loads(proc.stdout or "{}")
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, check=True)
+            payload = json.loads(proc.stdout or "{}")
+        except subprocess.CalledProcessError as exc:
+            raise BusPullError(
+                f"agent-bus pull failed (rc={exc.returncode}): {exc.stderr or exc.stdout}"
+            ) from exc
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise BusPullError(f"agent-bus pull returned invalid JSON: {exc}") from exc
         return list(payload.get("messages", []))
 
     def _send(self, *, task_id: str, status: str, body: str) -> int:

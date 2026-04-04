@@ -68,3 +68,73 @@ def test_daemon_does_not_create_fresh_retry_attempt(tmp_path: Path) -> None:
     task = repo.get_task("TASK-1")
     assert task is not None
     assert task.attempt_no == 1
+
+
+class FailingBus(FakeBus):
+    """A bus stub that raises BusPullError on pull_receipts."""
+
+    def __init__(self, fail_count: int = 1) -> None:
+        super().__init__()
+        self._fail_count = fail_count
+        self._call_count = 0
+
+    def pull_receipts(self, *, task_id: str | None = None, limit: int = 20) -> list[dict]:
+        self._call_count += 1
+        if self._call_count <= self._fail_count:
+            from agpair.transport.bus import BusPullError
+            raise BusPullError("simulated transient failure")
+        return []
+
+
+def test_run_once_survives_transient_bus_pull_error(tmp_path: Path) -> None:
+    """A BusPullError during receipt pull must not crash run_once."""
+    from agpair.daemon.loop import run_once
+
+    paths, _repo = seed_stale_task(tmp_path)
+    failing_bus = FailingBus(fail_count=999)
+
+    # Must not raise — the error should be caught and journaled
+    run_once(paths, now=datetime(2026, 3, 21, 12, 0, tzinfo=UTC), bus=failing_bus, timeout_seconds=1800)
+
+    # Health file should still be written and show running=True
+    from agpair.daemon.loop import read_daemon_status
+    status = read_daemon_status(paths)
+    assert status["running"] is True
+    assert status.get("bus_errors", 0) > 0
+
+
+def test_bus_error_surfaces_in_journal(tmp_path: Path) -> None:
+    """A transient bus pull error should be recorded in the journal."""
+    from agpair.daemon.loop import run_once
+    from agpair.storage.journal import JournalRepository
+
+    paths, _repo = seed_stale_task(tmp_path)
+    failing_bus = FailingBus(fail_count=999)
+
+    run_once(paths, now=datetime(2026, 3, 21, 12, 0, tzinfo=UTC), bus=failing_bus, timeout_seconds=1800)
+
+    journal = JournalRepository(paths.db_path)
+    entries = journal.tail("TASK-1", limit=100)
+    bus_error_entries = [e for e in entries if e.event == "bus_pull_error"]
+    assert len(bus_error_entries) >= 1
+    assert "transient bus pull failure" in bus_error_entries[0].body
+
+
+def test_daemon_recovers_after_transient_bus_failure(tmp_path: Path) -> None:
+    """After a failed tick, a subsequent healthy tick should produce clean health."""
+    from agpair.daemon.loop import run_once, read_daemon_status
+
+    paths, _repo = seed_stale_task(tmp_path)
+
+    # First tick: bus fails
+    failing_bus = FailingBus(fail_count=999)
+    run_once(paths, now=datetime(2026, 3, 21, 12, 0, tzinfo=UTC), bus=failing_bus, timeout_seconds=1800)
+    status1 = read_daemon_status(paths)
+    assert status1.get("bus_errors", 0) > 0
+
+    # Second tick: bus is healthy
+    healthy_bus = FakeBus()
+    run_once(paths, now=datetime(2026, 3, 21, 12, 1, tzinfo=UTC), bus=healthy_bus, timeout_seconds=1800)
+    status2 = read_daemon_status(paths)
+    assert status2["running"] is True
+    assert "bus_errors" not in status2  # No bus errors in healthy tick

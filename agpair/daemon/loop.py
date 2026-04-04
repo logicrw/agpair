@@ -14,7 +14,7 @@ from agpair.storage.db import connect, ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.receipts import ReceiptRepository
 from agpair.storage.tasks import IllegalTransitionError, TaskNotFoundError, TaskRepository
-from agpair.transport.bus import AgentBusClient
+from agpair.transport.bus import AgentBusClient, BusPullError
 from agpair.transport import messages
 
 SESSION_ID_RE = re.compile(r"session_id\s*[:=]\s*(?P<session>[^\s]+)")
@@ -75,7 +75,7 @@ def run_once(
     ensure_database(paths.db_path)
     current = now or datetime.now(UTC)
     client = bus or AgentBusClient(paths.agent_bus_bin)
-    processed, touched_task_ids = ingest_new_receipts(paths, client, current=current)
+    processed, touched_task_ids, bus_errors = ingest_new_receipts(paths, client, current=current)
     scan_workspace_activity(paths, current=current)
     watchdog_count, watchdog_task_ids = mark_watchdog_tasks(
         paths,
@@ -90,16 +90,16 @@ def run_once(
         timeout_seconds=timeout_seconds,
         skip_task_ids=touched_task_ids | watchdog_task_ids,
     )
-    write_daemon_health(
-        paths,
-        {
-            "running": True,
-            "last_tick_at": to_iso(current),
-            "processed_receipts": processed,
-            "watchdog_recommended": watchdog_count,
-            "stuck_marked": stuck,
-        },
-    )
+    health: dict = {
+        "running": True,
+        "last_tick_at": to_iso(current),
+        "processed_receipts": processed,
+        "watchdog_recommended": watchdog_count,
+        "stuck_marked": stuck,
+    }
+    if bus_errors:
+        health["bus_errors"] = bus_errors
+    write_daemon_health(paths, health)
 
 
 def scan_workspace_activity(paths: AppPaths, *, current: datetime) -> None:
@@ -116,11 +116,18 @@ def scan_workspace_activity(paths: AppPaths, *, current: datetime) -> None:
                 pass
 
 
-def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[int, set[str]]:
+def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[int, set[str], int]:
+    """Pull receipts from agent-bus and process them.
+
+    Returns ``(processed_count, touched_task_ids, bus_error_count)``.
+    A non-zero *bus_error_count* means some per-task pulls failed transiently;
+    the daemon tick should continue regardless.
+    """
     tasks = TaskRepository(paths.db_path)
     receipts = ReceiptRepository(paths.db_path)
     journal = JournalRepository(paths.db_path)
     count = 0
+    bus_errors = 0
     touched_task_ids: set[str] = set()
     # Pull receipts only for tasks this daemon owns (by task_id).
     # Uses per-task --task-id filter so agent-bus only consumes matching
@@ -131,7 +138,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
         + tasks.list_tasks(phase="evidence_ready", limit=100)
     )
     if not active_tasks:
-        return 0, set()
+        return 0, set(), 0
     all_messages: list[dict] = []
     for task in active_tasks:
         if task.executor_backend == "codex_cli" and task.phase == "acked":
@@ -185,7 +192,14 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 }
                 all_messages.append(msg)
         elif task.executor_backend != "codex_cli":
-            all_messages.extend(client.pull_receipts(task_id=task.task_id))
+            try:
+                all_messages.extend(client.pull_receipts(task_id=task.task_id))
+            except BusPullError as exc:
+                bus_errors += 1
+                journal.append(
+                    task.task_id, "daemon", "bus_pull_error",
+                    f"transient bus pull failure: {exc}", "warning",
+                )
             
     for message in all_messages:
         message_id = str(message.get("id", ""))
@@ -256,7 +270,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
             continue
         count += 1
         touched_task_ids.add(task_id)
-    return count, touched_task_ids
+    return count, touched_task_ids, bus_errors
 
 
 def mark_stuck_tasks(
