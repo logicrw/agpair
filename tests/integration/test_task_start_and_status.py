@@ -371,8 +371,9 @@ def test_task_status_json_returns_structured_payload(tmp_path: Path, monkeypatch
     assert payload["active_executor_backend"] == "antigravity"
     assert payload["active_executor_continuation_capability"] == "same_session"
     assert "codex_cli" in payload["supported_backends"]
-    assert payload["supported_backends"]["codex_cli"] == "fresh_resume_first"
-    assert payload["supported_backends"]["antigravity"] == "same_session"
+    assert payload["supported_backends"]["codex_cli"]["continuation_capability"] == "fresh_resume_first"
+    assert payload["supported_backends"]["antigravity"]["continuation_capability"] == "same_session"
+    assert payload["active_executor_safety_metadata"]["is_mutating"] is True
     assert payload["phase"] == "acked"
     assert payload["a2a_state_hint"] == "working"
     assert payload["session_id"] == "session-json-1"
@@ -903,10 +904,9 @@ def test_task_start_explicit_executor_codex(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
 
     import agpair.executors.codex
+    from agpair.executors.base import DispatchResult
     from unittest.mock import MagicMock
-    mock_ref = MagicMock()
-    mock_ref.temp_dir = tmp_path / "mock_temp"
-    mock_dispatch = MagicMock(return_value=mock_ref)
+    mock_dispatch = MagicMock(return_value=DispatchResult(session_id="mock_session"))
     monkeypatch.setattr(agpair.executors.codex.CodexExecutor, "dispatch", mock_dispatch)
 
     runner = CliRunner()
@@ -929,10 +929,9 @@ def test_task_start_explicit_executor_gemini(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
 
     import agpair.executors.gemini
+    from agpair.executors.base import DispatchResult
     from unittest.mock import MagicMock
-    mock_ref = MagicMock()
-    mock_ref.temp_dir = tmp_path / "mock_temp"
-    mock_dispatch = MagicMock(return_value=mock_ref)
+    mock_dispatch = MagicMock(return_value=DispatchResult(session_id="mock_session"))
     monkeypatch.setattr(agpair.executors.gemini.GeminiExecutor, "dispatch", mock_dispatch)
 
     runner = CliRunner()

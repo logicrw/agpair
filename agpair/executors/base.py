@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import typing
 
-from agpair.models import ContinuationCapability
+from agpair.models import ContinuationCapability, ExecutorSafetyMetadata
 
 
 @dataclasses.dataclass
@@ -29,6 +29,11 @@ class ExecutorAdapter(typing.Protocol):
     @property
     def continuation_capability(self) -> ContinuationCapability:
         """Indicate how this backend handles continuation (e.g. same-session, fresh-resume-first)."""
+        ...
+
+    @property
+    def safety_metadata(self) -> ExecutorSafetyMetadata:
+        """Return static safety properties of this executor backend."""
         ...
 
     def dispatch(self, *, task_id: str, body: str, repo_path: str) -> DispatchResult:

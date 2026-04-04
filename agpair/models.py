@@ -12,6 +12,13 @@ class ContinuationCapability(str, enum.Enum):
 
 
 @dataclass(frozen=True)
+class ExecutorSafetyMetadata:
+    is_mutating: bool
+    is_concurrency_safe: bool
+    requires_human_interaction: bool
+
+
+@dataclass(frozen=True)
 class TaskRecord:
     task_id: str
     repo_path: str

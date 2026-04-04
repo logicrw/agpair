@@ -9,7 +9,7 @@ import tempfile
 import typing
 
 from agpair.executors.base import DispatchResult, ExecutorAdapter, TaskState
-from agpair.models import ContinuationCapability
+from agpair.models import ContinuationCapability, ExecutorSafetyMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,14 @@ class CodexExecutor(ExecutorAdapter):
     @property
     def continuation_capability(self) -> ContinuationCapability:
         return ContinuationCapability.FRESH_RESUME_FIRST
+
+    @property
+    def safety_metadata(self) -> ExecutorSafetyMetadata:
+        return ExecutorSafetyMetadata(
+            is_mutating=True,
+            is_concurrency_safe=False,
+            requires_human_interaction=False,
+        )
 
     def dispatch(self, *, task_id: str, body: str, repo_path: str) -> DispatchResult:
         """

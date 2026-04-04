@@ -10,6 +10,8 @@ from urllib import error, request
 import typer
 from agpair.transport.bus import AgentBusClient, BusSendError
 
+import dataclasses
+
 from agpair.cli.wait import (
     APPROVE_SUCCESS_PHASES,
     APPROVE_TERMINAL_PHASES,
@@ -177,10 +179,20 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "task_id": task.task_id,
         "active_executor_backend": active_exec.backend_id,
         "active_executor_continuation_capability": active_exec.continuation_capability.value,
+        "active_executor_safety_metadata": dataclasses.asdict(active_exec.safety_metadata),
         "supported_backends": {
-            ag_exec.backend_id: ag_exec.continuation_capability.value,
-            cx_exec.backend_id: cx_exec.continuation_capability.value,
-            gm_exec.backend_id: gm_exec.continuation_capability.value,
+            ag_exec.backend_id: {
+                "continuation_capability": ag_exec.continuation_capability.value,
+                "safety_metadata": dataclasses.asdict(ag_exec.safety_metadata),
+            },
+            cx_exec.backend_id: {
+                "continuation_capability": cx_exec.continuation_capability.value,
+                "safety_metadata": dataclasses.asdict(cx_exec.safety_metadata),
+            },
+            gm_exec.backend_id: {
+                "continuation_capability": gm_exec.continuation_capability.value,
+                "safety_metadata": dataclasses.asdict(gm_exec.safety_metadata),
+            },
         },
         "phase": task.phase,
         "a2a_state_hint": a2a_state_hint_from_phase(task.phase, blocker_type=blocker_type),
@@ -493,6 +505,7 @@ def task_status(
     typer.echo(f"task_id: {payload['task_id']}")
     typer.echo(f"active_executor_backend: {payload['active_executor_backend']}")
     typer.echo(f"active_executor_continuation_capability: {payload['active_executor_continuation_capability']}")
+    typer.echo(f"active_executor_safety_metadata: {json.dumps(payload['active_executor_safety_metadata'])}")
     typer.echo(f"supported_backends: {json.dumps(payload['supported_backends'])}")
     typer.echo(f"phase: {payload['phase']}")
     typer.echo(f"a2a_state_hint: {payload['a2a_state_hint']}")

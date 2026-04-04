@@ -220,6 +220,7 @@ What already works:
 - Internal `ExecutorAdapter` abstraction extended to expose a stable `backend_id` (`antigravity` / `codex_cli` / `gemini_cli`), now visible in read-only info (e.g., `task status --json` and `doctor`) for transparency.
 - `task start --executor codex` and `task start --executor gemini` as first-class entry points, with both CLI-backed executors now flowing through dispatch / poll / canonical terminal receipt synthesis
 - Added formal Continuation Capability Matrix to encode policy for backends (e.g., `same_session` for Antigravity, `fresh_resume_first` for Codex CLI, and conservative/limited continuation for Gemini), visible in `task status --json`.
+- Added formal Executor Safety Metadata to encode fail-closed execution postures (e.g., `is_mutating`, `is_concurrency_safe`, `requires_human_interaction`), enforcing explicit capability signals from backend adapters.
 - Implemented `fresh_resume_first` path for review/approval flows, allowing Codex-backed tasks to seamlessly carry over feedback via a fresh dispatch.
 - Automatic closeout for eligible `evidence_ready` tasks when strong repo-side commit evidence exists but a final terminal receipt never arrived
 - Background daemon stdout/stderr now persist to `~/.agpair/daemon.stdout.log` and `~/.agpair/daemon.stderr.log`

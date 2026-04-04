@@ -8,7 +8,7 @@ import tempfile
 import typing
 
 from agpair.executors.base import DispatchResult, ExecutorAdapter, TaskState
-from agpair.models import ContinuationCapability
+from agpair.models import ContinuationCapability, ExecutorSafetyMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,14 @@ class GeminiExecutor(ExecutorAdapter):
         # Set explicitly to UNSUPPORTED for now until continuation semantics
         # are fully wired for Gemini.
         return ContinuationCapability.UNSUPPORTED
+
+    @property
+    def safety_metadata(self) -> ExecutorSafetyMetadata:
+        return ExecutorSafetyMetadata(
+            is_mutating=True,
+            is_concurrency_safe=False,
+            requires_human_interaction=False,
+        )
 
     def dispatch(self, *, task_id: str, body: str, repo_path: str) -> DispatchResult:
         """
