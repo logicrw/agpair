@@ -965,18 +965,11 @@ def _send_semantic_or_exit(
                 if _extract_reply_to_message_id(row.body) == message_id:
                     reason = _strip_reply_to_message_id(row.body)
                     journal.append(task_id, "cli", event_fail, f"rejected by extension: {reason}")
-                    
+
                     if "synthetic session" in reason and "--fresh-resume" in reason:
                         raise SyntheticSessionNackError(reason)
-                        
+
                     typer.echo(f"Command failed: {reason}", err=True)
-                    if "--fresh-resume" in reason:
-                        cmd = "continue"
-                        if event_fail == "approve_failed":
-                            cmd = "approve"
-                        elif event_fail == "reject_failed":
-                            cmd = "reject"
-                        typer.echo(f"\nRecommendation: Run `agpair task {cmd} {task_id} --fresh-resume ...` to start a new tracking session.", err=True)
                     raise typer.Exit(code=1)
 
         time.sleep(0.5)

@@ -31,7 +31,7 @@ class CodexTaskState:
     last_message: str | None
     events_count: int
 
-    def synthesize_receipt(self, task_id: str) -> dict[str, typing.Any]:
+    def synthesize_receipt(self, task_id: str, *, attempt_no: int = 1) -> dict[str, typing.Any]:
         """Synthesize a terminal receipt dict for this task state."""
         if not self.is_done:
             return {}
@@ -58,7 +58,7 @@ class CodexTaskState:
         return {
             "schema_version": "1",
             "task_id": task_id,
-            "attempt_no": 1,
+            "attempt_no": attempt_no,
             "review_round": 0,
             "status": status,
             "summary": summary,
@@ -114,14 +114,23 @@ class CodexExecutor(ExecutorAdapter):
         stdout_fh = stdout_file.open("w", encoding="utf-8")
         stderr_fh = stderr_file.open("w", encoding="utf-8")
 
-        process = subprocess.Popen(
-            wrapper_cmd,
-            stdout=stdout_fh,
-            stderr=stderr_fh,
-            cwd=repo_path,
-            text=True,
-            start_new_session=True,
-        )
+        try:
+            process = subprocess.Popen(
+                wrapper_cmd,
+                stdout=stdout_fh,
+                stderr=stderr_fh,
+                cwd=repo_path,
+                text=True,
+                start_new_session=True,
+            )
+        except Exception:
+            stdout_fh.close()
+            stderr_fh.close()
+            raise
+
+        # Close parent's copies – the child has inherited them.
+        stdout_fh.close()
+        stderr_fh.close()
 
         return CodexTaskRef(
             task_id=task_id,

@@ -134,7 +134,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
         return 0, set()
     all_messages: list[dict] = []
     for task in active_tasks:
-        if task.executor_backend == "codex_cli" and task.phase in {"acked", "evidence_ready"}:
+        if task.executor_backend == "codex_cli" and task.phase == "acked":
             if not task.antigravity_session_id:
                 continue
 
@@ -166,7 +166,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
             if state.is_done:
                 # Terminal receipt
                 msg_id = f"codex-{task.task_id}-done"
-                receipt = state.synthesize_receipt(task.task_id)
+                receipt = state.synthesize_receipt(task.task_id, attempt_no=task.attempt_no)
                 msg = {
                     "id": msg_id,
                     "task_id": task.task_id,

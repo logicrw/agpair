@@ -204,3 +204,105 @@ def test_codex_lifecycle_failure(tmp_path: pathlib.Path, monkeypatch) -> None:
     assert receipt["payload"]["returncode"] == 1
     assert receipt["payload"]["blocker_type"] == "execution_error"
 
+
+def test_codex_evidence_ready_not_repolled(tmp_path: pathlib.Path, monkeypatch) -> None:
+    """After a Codex task reaches evidence_ready, the daemon must NOT re-poll it."""
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    from agpair.config import AppPaths
+    paths = AppPaths.default()
+    ensure_database(paths.db_path)
+
+    fake_codex = write_fake_codex_bin(tmp_path)
+    import agpair.executors.codex
+    original_init = agpair.executors.codex.CodexExecutor.__init__
+
+    def mocked_init(self, codex_bin="codex"):
+        original_init(self, str(fake_codex))
+
+    monkeypatch.setattr(agpair.executors.codex.CodexExecutor, "__init__", mocked_init)
+
+    runner = CliRunner()
+    result = runner.invoke(app, [
+        "start", "--repo-path", str(tmp_path), "--task-id", "TASK-CODEX-NR",
+        "--executor", "codex", "--body", "test no-repoll", "--no-wait",
+    ])
+    assert result.exit_code == 0
+
+    tasks = TaskRepository(paths.db_path)
+    task = tasks.get_task("TASK-CODEX-NR")
+    session_id = task.antigravity_session_id
+    rc_file = pathlib.Path(session_id) / "rc.txt"
+
+    import time
+    for _ in range(50):
+        if rc_file.exists():
+            break
+        time.sleep(0.1)
+
+    mock_bus = mock.MagicMock()
+    run_once(paths, now=datetime.now(UTC), bus=mock_bus)
+    task = tasks.get_task("TASK-CODEX-NR")
+    assert task.phase == "evidence_ready"
+
+    from agpair.storage.journal import JournalRepository
+    journal = JournalRepository(paths.db_path)
+
+    # Second tick should NOT produce new evidence_ready entries
+    run_once(paths, now=datetime.now(UTC), bus=mock_bus)
+    task = tasks.get_task("TASK-CODEX-NR")
+    assert task.phase == "evidence_ready"
+
+    rows_after = journal.tail("TASK-CODEX-NR", limit=100)
+    evidence_events = [r for r in rows_after if r.event == "evidence_ready"]
+    assert len(evidence_events) == 1, "evidence_ready must not be emitted twice"
+
+
+def test_codex_receipt_carries_real_attempt_no(tmp_path: pathlib.Path, monkeypatch) -> None:
+    """Synthesized receipt must carry the real task attempt_no."""
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    from agpair.config import AppPaths
+    paths = AppPaths.default()
+    ensure_database(paths.db_path)
+
+    fake_codex = write_fake_codex_bin(tmp_path)
+    import agpair.executors.codex
+    original_init = agpair.executors.codex.CodexExecutor.__init__
+
+    def mocked_init(self, codex_bin="codex"):
+        original_init(self, str(fake_codex))
+
+    monkeypatch.setattr(agpair.executors.codex.CodexExecutor, "__init__", mocked_init)
+
+    runner = CliRunner()
+    result = runner.invoke(app, [
+        "start", "--repo-path", str(tmp_path), "--task-id", "TASK-CODEX-ATT",
+        "--executor", "codex", "--body", "test attempt", "--no-wait",
+    ])
+    assert result.exit_code == 0
+
+    tasks = TaskRepository(paths.db_path)
+    task = tasks.get_task("TASK-CODEX-ATT")
+    assert task.attempt_no == 1
+
+    rc_file = pathlib.Path(task.antigravity_session_id) / "rc.txt"
+    import time
+    for _ in range(50):
+        if rc_file.exists():
+            break
+        time.sleep(0.1)
+
+    mock_bus = mock.MagicMock()
+    run_once(paths, now=datetime.now(UTC), bus=mock_bus)
+    task = tasks.get_task("TASK-CODEX-ATT")
+    assert task.phase == "evidence_ready"
+
+    from agpair.storage.journal import JournalRepository
+    journal = JournalRepository(paths.db_path)
+    for row in journal.tail("TASK-CODEX-ATT", limit=10):
+        if row.event == "evidence_ready":
+            receipt = json.loads(row.body)
+            assert receipt["attempt_no"] == 1
+            break
+    else:
+        raise AssertionError("evidence_ready journal entry not found")
+
