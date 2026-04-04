@@ -12,3 +12,4 @@ companion-extension/dist/
 companion-extension/*.vsix
 
 .omx/
+.firecrawl/
