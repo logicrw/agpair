@@ -57,7 +57,9 @@ type WatchBatchEvent = {
 export class AgentBusWatchService {
   private readonly outputChannel: { appendLine(message: string): void };
   private readonly notify: (message: string) => void;
-  private readonly onMessages?: (messages: AgentBusMessage[]) => void | Promise<void>;
+  private readonly onMessages?: (
+    messages: AgentBusMessage[],
+  ) => void | Promise<void>;
   private readonly spawnFn: typeof childProcess.spawn;
   private readonly isPidAlive: (pid: number) => boolean;
   private readonly workspacePathsProvider: () => string[];
@@ -68,7 +70,11 @@ export class AgentBusWatchService {
   private readonly inboxPath: string;
   private static readonly RETRY_INTERVAL_MS = 5_000;
   private static readonly MAX_RETRIES = 30; // give up after ~2.5 min
-  private child: childProcess.ChildProcessByStdio<null, Readable, Readable> | null = null;
+  private child: childProcess.ChildProcessByStdio<
+    null,
+    Readable,
+    Readable
+  > | null = null;
   private ownPid: number | null = null;
   private retryTimer: ReturnType<typeof setInterval> | null = null;
   private retryCount = 0;
@@ -87,9 +93,11 @@ export class AgentBusWatchService {
     this.intervalMs = Math.max(options.intervalMs, 100);
     this.requestedCommand = options.command.trim() || "agent-bus";
     this.lockPath =
-      options.lockPath ?? path.join(os.homedir(), ".agpair", "agent_bus_watch_code.lock.json");
+      options.lockPath ??
+      path.join(os.homedir(), ".agpair", "agent_bus_watch_code.lock.json");
     this.inboxPath =
-      options.inboxPath ?? path.join(os.homedir(), ".agpair", "agent_bus_inbox_code.jsonl");
+      options.inboxPath ??
+      path.join(os.homedir(), ".agpair", "agent_bus_inbox_code.jsonl");
     this.status = {
       enabled: this.enabled,
       running: false,
@@ -104,8 +112,15 @@ export class AgentBusWatchService {
 
   start(): boolean {
     if (!this.enabled) {
-      this.status = { ...this.status, enabled: false, running: false, mode: "disabled" };
-      this.outputChannel.appendLine("[companion] agent-bus watch disabled by configuration.");
+      this.status = {
+        ...this.status,
+        enabled: false,
+        running: false,
+        mode: "disabled",
+      };
+      this.outputChannel.appendLine(
+        "[companion] agent-bus watch disabled by configuration.",
+      );
       return false;
     }
 
@@ -132,24 +147,27 @@ export class AgentBusWatchService {
     this.ensureParentDir(this.inboxPath);
 
     try {
-      const child = this.spawnFn(
-        command,
-        [
-          "watch",
-          "--sender",
-          "desktop",
-          "--reader",
-          "code",
-          "--full",
-          "--interval-ms",
-          String(this.intervalMs),
-        ],
-        {
-          cwd: this.workspacePathsProvider()[0] || os.homedir(),
-          env: process.env,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
+      const args = [
+        "watch",
+        "--sender",
+        "desktop",
+        "--reader",
+        "code",
+        "--full",
+        "--interval-ms",
+        String(this.intervalMs),
+      ];
+
+      const repoPath = this.workspacePathsProvider()[0];
+      if (repoPath) {
+        args.push("--repo-path", repoPath);
+      }
+
+      const child = this.spawnFn(command, args, {
+        cwd: this.workspacePathsProvider()[0] || os.homedir(),
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
 
       this.child = child;
       this.ownPid = child.pid ?? null;
@@ -178,7 +196,9 @@ export class AgentBusWatchService {
           last_error: err.message,
         };
         this.cleanupOwnedLock();
-        this.outputChannel.appendLine(`[companion] agent-bus watch failed to start: ${err.message}`);
+        this.outputChannel.appendLine(
+          `[companion] agent-bus watch failed to start: ${err.message}`,
+        );
         this.scheduleRetry();
       });
       child.on("exit", (code, signal) => {
@@ -192,7 +212,9 @@ export class AgentBusWatchService {
         this.cleanupOwnedLock();
         this.child = null;
         this.ownPid = null;
-        this.outputChannel.appendLine(`[companion] agent-bus watch exited (${detail}).`);
+        this.outputChannel.appendLine(
+          `[companion] agent-bus watch exited (${detail}).`,
+        );
         this.scheduleRetry();
       });
 
@@ -277,7 +299,10 @@ export class AgentBusWatchService {
   }
 
   private resolveCommand(): string {
-    if (path.isAbsolute(this.requestedCommand) && fs.existsSync(this.requestedCommand)) {
+    if (
+      path.isAbsolute(this.requestedCommand) &&
+      fs.existsSync(this.requestedCommand)
+    ) {
       return this.requestedCommand;
     }
     if (this.requestedCommand === "agent-bus") {
@@ -319,7 +344,12 @@ export class AgentBusWatchService {
     try {
       const event = JSON.parse(line) as WatchBatchEvent;
       this.appendInboxLine(line);
-      if (!event.ok || event.mode !== "watch" || !Array.isArray(event.messages) || event.messages.length === 0) {
+      if (
+        !event.ok ||
+        event.mode !== "watch" ||
+        !Array.isArray(event.messages) ||
+        event.messages.length === 0
+      ) {
         this.outputChannel.appendLine(`[companion] agent-bus: ${line}`);
         return;
       }
@@ -328,12 +358,17 @@ export class AgentBusWatchService {
         new Set(
           event.messages
             .map((message) => message.task_id)
-            .filter((taskId): taskId is string => typeof taskId === "string" && taskId.length > 0),
+            .filter(
+              (taskId): taskId is string =>
+                typeof taskId === "string" && taskId.length > 0,
+            ),
         ),
       );
       const summary = `[companion] agent-bus claimed ${event.claimed ?? event.messages.length} message(s) for task(s): ${taskIds.join(", ")}`;
       this.outputChannel.appendLine(summary);
-      this.notify(`Antigravity inbox received ${event.messages.length} message(s): ${taskIds.join(", ")}`);
+      this.notify(
+        `Antigravity inbox received ${event.messages.length} message(s): ${taskIds.join(", ")}`,
+      );
       if (this.onMessages) {
         void Promise.resolve(this.onMessages(event.messages)).catch((err) => {
           this.outputChannel.appendLine(
@@ -369,11 +404,17 @@ export class AgentBusWatchService {
       }
       return {
         pid: parsed.pid,
-        command: typeof parsed.command === "string" ? parsed.command : this.resolveCommand(),
+        command:
+          typeof parsed.command === "string"
+            ? parsed.command
+            : this.resolveCommand(),
         workspace_paths: Array.isArray(parsed.workspace_paths)
-          ? parsed.workspace_paths.filter((value): value is string => typeof value === "string")
+          ? parsed.workspace_paths.filter(
+              (value): value is string => typeof value === "string",
+            )
           : [],
-        started_at: typeof parsed.started_at === "string" ? parsed.started_at : "",
+        started_at:
+          typeof parsed.started_at === "string" ? parsed.started_at : "",
       };
     } catch {
       return null;
