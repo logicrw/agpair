@@ -148,6 +148,21 @@ agpair task start \
   --body "Goal: ..."
 ```
 
+如果要显式使用 Gemini backend：
+
+```bash
+agpair task start \
+  --executor gemini \
+  --repo-path /absolute/path/to/repo \
+  --body "Goal: ..."
+```
+
+当前后端策略摘要：
+
+- `antigravity`：交互式 IDE executor，same-session 语义最强
+- `codex`：CLI executor，采用 `fresh_resume_first`
+- `gemini`：CLI executor，目前对 continuation 采取更保守策略
+
 默认情况下，`task start` **会阻塞**直到任务进入终态。
 要立即返回：
 

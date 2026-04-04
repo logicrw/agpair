@@ -6,7 +6,7 @@
 
 [中文说明](README.zh-CN.md) | [新手教程](docs/getting-started-zh.md) | [中文命令参考](docs/usage.zh-CN.md)
 
-**agpair** is a durable task-lifecycle layer for AI coding workflows that need to run for minutes or hours, not just one quick handoff. It lets a controller agent (for example Claude Code or Codex Desktop) break work into tasks, dispatch those tasks to supported executors — currently [Antigravity](https://antigravity.google/) and the local Codex CLI — and keep making structured decisions as results come back.
+**agpair** is a durable task-lifecycle layer for AI coding workflows that need to run for minutes or hours, not just one quick handoff. It lets a controller agent (for example Claude Code, Codex, or another coding agent) break work into tasks, dispatch those tasks to supported executors — currently [Antigravity](https://antigravity.google/), the local Codex CLI, and the local Gemini CLI — and keep making structured decisions as results come back.
 
 Works with [Codex](https://openai.com/codex) (CLI & Desktop), [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and any tool that can run shell commands.
 
@@ -35,7 +35,7 @@ That is the gap `agpair` fills.
 - **structured receipts** (`ACK`, `EVIDENCE_PACK`, `BLOCKED`, `COMMITTED`) instead of guessing from free text
 - **controller semantics** like `continue / approve / reject / retry`
 - **watchdog and health checks** for long-running work
-- **executor flexibility** so the same control plane can drive Antigravity today and Codex CLI tomorrow
+- **executor flexibility** so the same control plane can drive Antigravity, Codex CLI, and Gemini CLI without rewriting the workflow
 - **lower token burn** in long workflows because state lives in SQLite/journal/receipts instead of being re-explained in every chat turn
 
 ### Why this matters in real usage
@@ -204,13 +204,13 @@ What already works:
 - `doctor` preflight checks (local health, desktop conflicts, bridge health, concurrency policy/pending tasks)
 - Structured terminal receipts (v1) and JSON CLI output with A2A state hints
 - Task start idempotency keys and structured committed result/failure context
-- Internal `ExecutorAdapter` abstraction extended to expose a stable `backend_id` (`antigravity` / `codex_cli`), now visible in read-only info (e.g., `task status --json` and `doctor`) for transparency.
-- `task start --executor codex` as a first-class entry point, with Codex tasks now flowing through dispatch / poll / canonical terminal receipt synthesis
-- Added formal Continuation Capability Matrix to encode policy for backends (e.g., `same_session` for Antigravity vs. `fresh_resume_first` for Codex CLI), visible in `task status --json`.
+- Internal `ExecutorAdapter` abstraction extended to expose a stable `backend_id` (`antigravity` / `codex_cli` / `gemini_cli`), now visible in read-only info (e.g., `task status --json` and `doctor`) for transparency.
+- `task start --executor codex` and `task start --executor gemini` as first-class entry points, with both CLI-backed executors now flowing through dispatch / poll / canonical terminal receipt synthesis
+- Added formal Continuation Capability Matrix to encode policy for backends (e.g., `same_session` for Antigravity, `fresh_resume_first` for Codex CLI, and conservative/limited continuation for Gemini), visible in `task status --json`.
 - Implemented `fresh_resume_first` path for review/approval flows, allowing Codex-backed tasks to seamlessly carry over feedback via a fresh dispatch.
 - Automatic closeout for eligible `evidence_ready` tasks when strong repo-side commit evidence exists but a final terminal receipt never arrived
 - Background daemon stdout/stderr now persist to `~/.agpair/daemon.stdout.log` and `~/.agpair/daemon.stderr.log`
-- Groundwork added for Gemini CLI executor (internal use only, not yet wired to `--executor gemini` switch).
+- Gemini CLI executor support is now wired into the lifecycle, while continuation remains conservative by design.
 
 ### Why teams end up liking it
 

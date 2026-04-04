@@ -1,6 +1,6 @@
 ---
 name: agpair
-description: "Use agpair as the unified task lifecycle/control plane for delegating coding work to supported executors (currently Antigravity and Codex), checking health/status/watch, and handling continue/approve/retry flows. Trigger when the user asks to send work out, use agpair, inspect doctor/task state, or when a mechanical, well-specified task should be delegated proactively."
+description: "Use agpair as the unified task lifecycle/control plane for delegating coding work to supported executors (currently Antigravity, Codex, and Gemini), checking health/status/watch, and handling continue/approve/retry flows. Trigger when the user asks to send work out, use agpair, inspect doctor/task state, or when a mechanical, well-specified task should be delegated proactively."
 ---
 
 # agpair
@@ -23,11 +23,13 @@ Current executor policy:
 
 - `antigravity`: primary interactive IDE executor, `same_session`
 - `codex`: CLI executor, `fresh_resume_first`
+- `gemini`: CLI executor, continuation support is conservative/limited
 
 Important distinction:
 
 - `antigravity` currently has real session semantics
 - `codex` in the current agpair implementation is **process-based** (`codex exec` per task), not a manually reused interactive terminal session
+- `gemini` in the current agpair implementation is also **process-based** (`gemini -p ...` per task), and current continuation support is intentionally conservative
 
 ## Default Flow
 
@@ -105,6 +107,7 @@ Executor-specific continuation policy:
 
 - `antigravity`: try same-session continuation first
 - `codex`: treat continuation as `fresh_resume_first`; current agpair integration is process-based (`codex exec` per task), not a long-lived interactive session
+- `gemini`: treat continuation conservatively; do not assume same-session continuation unless runtime behavior clearly supports it
 
 If continuation fails and the product automatically switches to fresh resume, accept that path. Do not force same-session continuation just to preserve conversation continuity.
 
@@ -118,6 +121,7 @@ Allowed:
 - task B in worktree B
 - different executors on different worktrees
 - multiple Codex-backed tasks in separate worktrees
+- multiple Gemini-backed tasks in separate worktrees
 
 Avoid:
 

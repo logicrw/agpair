@@ -127,6 +127,21 @@ agpair task start \
   --body "Goal: ..."
 ```
 
+To explicitly use the Gemini backend:
+
+```bash
+agpair task start \
+  --executor gemini \
+  --repo-path /absolute/path/to/repo \
+  --body "Goal: ..."
+```
+
+Current backend policy summary:
+
+- `antigravity`: interactive IDE executor, strongest same-session semantics
+- `codex`: CLI executor, `fresh_resume_first`
+- `gemini`: CLI executor, currently more conservative about continuation
+
 By default, `task start` blocks until the task reaches a terminal phase.
 To return immediately after dispatch:
 

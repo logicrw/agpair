@@ -16,7 +16,15 @@
 
 ### 什么是 `agent-bus`？
 
-`agent-bus` 是 agpair 在 AI 编程工具（desktop 端）和 Antigravity（executor 端）之间发送任务和接收回执所使用的本地共享消息总线。它是 Antigravity 工具链的一部分。如果你使用的是 Antigravity 管理的环境，它应该已经可用。否则，请安装 Antigravity 发行版提供的 `agent-bus` 二进制文件并确保它在 `PATH` 中。目前没有独立的公开包发布。
+`agent-bus` 是 agpair 在 Antigravity 执行路径中用来发送任务和接收回执的本地共享消息总线。如果你使用 Antigravity 作为 executor，它必须在 `PATH` 中可用。它是 Antigravity 工具链的一部分。如果你使用的是 Antigravity 管理的环境，它应该已经可用。否则，请安装 Antigravity 发行版提供的 `agent-bus` 二进制文件并确保它在 `PATH` 中。目前没有独立的公开包发布。
+
+如果你使用的是 `--executor codex` 或 `--executor gemini`，agpair 的生命周期控制仍然一样，只是底层 executor 变成了本地 CLI 进程，而不是 Antigravity session。本教程后续仍以 Antigravity 示例为主，因为它的运行时表面最完整。
+
+当前可选的 executor 包括：
+
+- `antigravity`
+- `codex`
+- `gemini`
 
 ### 什么是 Antigravity IDE？
 
