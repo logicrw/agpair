@@ -6,7 +6,7 @@
 
 [中文说明](README.zh-CN.md) | [新手教程](docs/getting-started-zh.md) | [中文命令参考](docs/usage.zh-CN.md)
 
-**agpair** is a durable task-lifecycle layer for AI coding workflows that need to run for minutes or hours, not just one quick handoff. It lets a controller agent (for example Claude Code, Codex, or another coding agent) break work into tasks, dispatch those tasks to supported executors — currently [Antigravity](https://antigravity.google/), the local Codex CLI, and the local Gemini CLI — and keep making structured decisions as results come back.
+**agpair** is a durable orchestration layer for AI coding workflows: break work into tasks, dispatch them to supported executors, track structured results, recover from failures, and keep long-running projects moving without stuffing everything into chat context. It currently supports [Antigravity](https://antigravity.google/), the local Codex CLI, and the local Gemini CLI.
 
 Works with [Codex](https://openai.com/codex) (CLI & Desktop), [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and any tool that can run shell commands.
 

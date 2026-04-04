@@ -6,7 +6,7 @@
 
 [English](README.md) | 中文
 
-**agpair** 是一个面向 AI 编程工作流的持久化任务生命周期控制层，适合那种会持续运行几分钟到几小时、需要反复决策推进的工程任务。它让主控 AI（比如 Claude Code、Codex，或其他编码代理）先拆任务，再把任务派给受支持的 executor——目前包括 [Antigravity](https://antigravity.google/)、本地 Codex CLI 和本地 Gemini CLI——并在结果回来后继续做结构化决策。
+**agpair** 是一个面向 AI 编程工作流的持久化编排层：把工作拆成任务，派给受支持的 executor，追踪结构化结果，从失败中恢复，并让长时间项目推进时不必把所有状态都塞进聊天上下文。当前支持 [Antigravity](https://antigravity.google/)、本地 Codex CLI 和本地 Gemini CLI。
 
 支持 [Codex](https://openai.com/codex)（CLI 和 Desktop）、[Claude Code](https://docs.anthropic.com/en/docs/claude-code)，以及任何能跑终端命令的工具。
 
