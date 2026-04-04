@@ -66,6 +66,18 @@ In other words:
 
 **agpair does not replace your AI agent.** It gives your AI agent a durable control plane.
 
+### Current best-practice controller role
+
+`agpair` is controller-agnostic, but current practical experience suggests:
+
+- **Claude Code** is often the best fit for long-running orchestration
+  - split a large plan into tasks
+  - keep dispatching / watching / deciding over time
+  - manage parallel work across isolated worktrees
+- **Codex** is extremely strong as an executor and short-chain reviewer, but is less natural as the long-running controller in the same workflow
+
+This is a usage recommendation, not a product limitation: `agpair` itself stays neutral and works as the lifecycle layer either way.
+
 ### What agpair is *not*
 
 - Not a semantic controller — your AI agent stays in charge of planning and decisions.

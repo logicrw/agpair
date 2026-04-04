@@ -70,6 +70,18 @@
 **agpair 不是替代你的 AI。**  
 它是给你的 AI 一个可持续运行的控制面。
 
+### 当前最佳实践：谁来当主控
+
+`agpair` 本身不绑定某个 controller，但按当前实际使用体验来看：
+
+- **Claude Code** 更适合当长流程主控
+  - 拆大任务
+  - 持续派发 / 观察 / 决策
+  - 在不同 worktree 上管理并行任务
+- **Codex** 很适合当 executor，或者做短链路 reviewer / implementation worker，但不如 Claude Code 那样自然地长期盯整条流程
+
+这只是使用建议，不是产品限制：`agpair` 本身仍然保持 controller-agnostic。
+
 ### agpair *不是*什么
 
 - 不是语义控制器——语义规划和决策仍由你的 AI 工具负责。

@@ -19,6 +19,12 @@ Use this skill when your agent is the controller/reviewer and `agpair` is the li
 
 It is **not** the executor itself. Executors are pluggable.
 
+Recommended controller stance:
+
+- use `agpair` naturally from Claude Code for long-running orchestration
+- use Codex more often as an executor or short-chain reviewer than as the primary long-running controller
+- keep the product/controller distinction clear: `agpair` is the lifecycle layer, not the planner
+
 Current executor policy:
 
 - `antigravity`: primary interactive IDE executor, `same_session`
