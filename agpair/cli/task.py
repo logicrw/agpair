@@ -8,7 +8,7 @@ import subprocess
 from urllib import error, request
 
 import typer
-from agpair.transport.bus import AgentBusClient
+from agpair.transport.bus import AgentBusClient, BusSendError
 
 from agpair.cli.wait import (
     APPROVE_SUCCESS_PHASES,
@@ -425,7 +425,7 @@ def start_task(
     journal.append(final_task_id, "cli", "created", body)
     try:
         dispatch_result = exec_instance.dispatch(task_id=final_task_id, body=body, repo_path=resolved_repo_path)
-    except (subprocess.SubprocessError, FileNotFoundError) as exc:
+    except (subprocess.SubprocessError, FileNotFoundError, BusSendError) as exc:
         reason = f"dispatch failed: {exc}"
         journal.append(final_task_id, "cli", "dispatch_failed", reason)
         tasks.mark_blocked(task_id=final_task_id, reason=reason)
@@ -939,7 +939,7 @@ def _send_semantic_or_exit(
 
     try:
         message_id = send_fn()
-    except (subprocess.SubprocessError, FileNotFoundError) as exc:
+    except (subprocess.SubprocessError, FileNotFoundError, BusSendError) as exc:
         reason = f"dispatch failed: {exc}"
         journal.append(task_id, "cli", event_fail, reason)
         typer.echo(reason, err=True)
@@ -1040,7 +1040,7 @@ def _prepare_fresh_resume_dispatch(
     try:
         # For fresh resume, we use the executor's dispatch explicitly
         dispatch_result = active_exec.dispatch(task_id=task.task_id, body=resume_body, repo_path=task.repo_path)
-    except (subprocess.SubprocessError, FileNotFoundError) as exc:
+    except (subprocess.SubprocessError, FileNotFoundError, BusSendError) as exc:
         reason = f"dispatch failed: {exc}"
         journal.append(task.task_id, "cli", "resume_failed", reason)
         typer.echo(reason, err=True)
@@ -1348,7 +1348,7 @@ def retry_task(
     retry_body = body or f"Fresh retry requested for {task.task_id} attempt {next_attempt}"
     try:
         message_id = bus.send_task(task_id=task.task_id, body=retry_body, repo_path=task.repo_path)
-    except (subprocess.SubprocessError, FileNotFoundError) as exc:
+    except (subprocess.SubprocessError, FileNotFoundError, BusSendError) as exc:
         reason = f"dispatch failed: {exc}"
         journal.append(task.task_id, "cli", "retry_failed", reason)
         typer.echo(reason, err=True)

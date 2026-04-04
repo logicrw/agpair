@@ -16,6 +16,14 @@ class BusPullError(RuntimeError):
     """
 
 
+class BusSendError(RuntimeError):
+    """Raised when an ``agent-bus send`` invocation fails.
+
+    Wraps subprocess failures and JSON-decode errors so callers only need
+    to catch a single, domain-specific exception type.
+    """
+
+
 class AgentBusClient:
     def __init__(self, executable: str = "agent-bus") -> None:
         self.executable = executable
@@ -78,8 +86,14 @@ class AgentBusClient:
                 text=True,
                 check=True,
             )
+            payload = json.loads(proc.stdout or "{}")
+        except subprocess.CalledProcessError as exc:
+            raise BusSendError(
+                f"agent-bus send failed (rc={exc.returncode}): {exc.stderr or exc.stdout}"
+            ) from exc
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise BusSendError(f"agent-bus send returned invalid JSON: {exc}") from exc
         finally:
             if tmp_path:
                 tmp_path.unlink(missing_ok=True)
-        payload = json.loads(proc.stdout or "{}")
         return int(payload.get("id", 0))

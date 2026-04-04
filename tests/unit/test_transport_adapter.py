@@ -75,3 +75,31 @@ def test_pull_receipts_raises_bus_pull_error_on_invalid_json(tmp_path: Path, mon
 
     with pytest.raises(BusPullError, match="invalid JSON"):
         bus.pull_receipts()
+
+
+def test_send_raises_bus_send_error_on_subprocess_failure(tmp_path: Path, monkeypatch) -> None:
+    from agpair.transport.bus import BusSendError
+
+    failing_script = tmp_path / "agent-bus-fail"
+    failing_script.write_text("#!/bin/sh\nexit 1\n")
+    failing_script.chmod(0o755)
+
+    bus = AgentBusClient(str(failing_script))
+    import pytest
+
+    with pytest.raises(BusSendError, match="agent-bus send failed"):
+        bus.send_task(task_id="TASK-1", body="test", repo_path="/tmp/repo")
+
+
+def test_send_raises_bus_send_error_on_invalid_json(tmp_path: Path, monkeypatch) -> None:
+    from agpair.transport.bus import BusSendError
+
+    garbage_script = tmp_path / "agent-bus-garbage"
+    garbage_script.write_text('#!/bin/sh\necho "NOT-JSON{{{"\n')
+    garbage_script.chmod(0o755)
+
+    bus = AgentBusClient(str(garbage_script))
+    import pytest
+
+    with pytest.raises(BusSendError, match="invalid JSON"):
+        bus.send_task(task_id="TASK-1", body="test", repo_path="/tmp/repo")
