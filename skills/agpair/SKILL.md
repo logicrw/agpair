@@ -85,28 +85,51 @@ If the task reaches `evidence_ready`:
 
 ## Session Reuse Policy
 
-Default rule: **prefer reuse before opening a fresh task**.
+Default rule: **open a fresh task for new work; reuse only for follow-up on the same task**.
 
-Reuse the current execution chain when:
+Reuse the current execution chain only when:
 
-- same topic
-- same executor
-- same code slice
-- no strong signal that the session is dead or degraded
+- the current task is already in a review/follow-up stage (`evidence_ready`, `continue`, `approve`, `reject`)
+- the follow-up is still about the same code slice and same acceptance target
+- the executor/session still looks healthy
 
-Prefer fresh resume or a new task when:
+Prefer a fresh task or fresh resume when:
 
+- this is a new independent unit of work
+- the next step is a different concern, layer, or language
 - CLI explicitly suggests `--fresh-resume`
 - the task has gone through several review rounds and context is bloated
-- the next step is a different concern, layer, or language
 - the session is stale, dead, or clearly unreliable
 
 Executor-specific continuation policy:
 
 - `antigravity`: try same-session continuation first
-- `codex`: treat continuation as `fresh_resume_first`; do not reason about manual terminal reuse or long-lived Codex TUI sessions
+- `codex`: treat continuation as `fresh_resume_first`; current agpair integration is process-based (`codex exec` per task), not a long-lived interactive session
 
 If continuation fails and the product automatically switches to fresh resume, accept that path. Do not force same-session continuation just to preserve conversation continuity.
+
+## Parallelism Boundary
+
+Default rule: **parallelize across worktrees, not inside one worktree**.
+
+Allowed:
+
+- task A in worktree A
+- task B in worktree B
+- different executors on different worktrees
+- multiple Codex-backed tasks in separate worktrees
+
+Avoid:
+
+- multiple active tasks in the same repo worktree
+- multiple controllers issuing semantic actions against the same task/worktree
+- overlapping write scopes across parallel tasks unless the merge plan is explicit
+
+Operational guidance:
+
+- use one main controller per worktree
+- start with 2-way parallelism, then increase only after the flow is stable
+- prefer Codex for larger fan-out parallel worker sets; use Antigravity more conservatively when opening many concurrent sessions
 
 ## Antigravity Task Body Rules
 
@@ -156,7 +179,8 @@ Do **not** dispatch proactively when:
 ## Anti-Patterns
 
 - Do not use `--wait` as the default control path
-- Do not assume a new session is safer than reusing a healthy one
+- Do not treat every follow-up as a reason to open a fresh task
+- Do not force reuse for a new independent task just to save explanation tokens
 - Do not keep long historical failure playbooks in your head; follow current CLI/runtime signals
 - Do not send multiple semantic actions while an active wait is in progress
 - Do not over-split simple work into tiny cards
