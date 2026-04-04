@@ -182,6 +182,21 @@ agpair task start \
   --body "Goal: ..."
 ```
 
+### 任务元数据（编排提示）
+
+你可以为任务附加编排元数据，帮助主控器计划并行与隔离执行。
+**注意：** 这些字段当前**仅作为元数据**存在。它们会落盘保存并在 `status` 与 `inspect` 输出中可见，但 `agpair` daemon 目前**不会**在运行时强制执行它们（例如自动运行 setup 脚本）。
+
+- `depends_on`: 在此任务开始前必须完成的前置任务 ID 列表。
+- `isolated_worktree`: 布尔值，表示意图在一个独立的 git worktree 中执行此任务。
+- `worktree_boundary`: 预期任务运行的工作区根目录边界。
+- `setup_commands`: 执行前置脚本（例如创建 worktree 或启动依赖）。
+- `teardown_commands`: 执行后置脚本（例如清理 worktree）。
+- `env_vars`: 单任务环境变量隔离（例如 `PORT`, `AGPAIR_PORT_OFFSET`）。
+- `spotlight_testing`: 布尔值，表示优先运行局部焦点测试而非全量测试的意图。
+
+**并发建议：** 永远在跨 worktree 间做并发，不能在同一个 worktree 内并发任务。
+
 ---
 
 ## 5. `task status`

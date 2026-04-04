@@ -274,9 +274,14 @@ This is a **single self-contained repo**. No external checkout is needed.
 
 The CLI JSON outputs (`task status`, `task wait`, and `task watch`) include an `a2a_state_hint` field mapping internal phases to approximate A2A `TaskState` values (e.g., mapping blocked auth tasks to `auth-required`). This is purely a semantic hint-level alignment for AI consumers—**agpair does not implement a full A2A server or the complete A2A protocol**. Its primary goal remains to be a robust local execution bridge.
 
-### Concurrency rule (one task per worktree)
+### Concurrency and Parallelism
 
-Same-repo, same-worktree concurrent editing is not supported. You must limit execution to **one active delegated task per repo worktree**. For parallel work, use a separate `git worktree` or clone a separate repo. `agpair doctor` now explicitly exposes this policy and shows the current pending task count and IDs so tooling can isolate tasks correctly.
+Same-repo, same-worktree concurrent editing is not supported. You must limit execution to **one active delegated task per repo worktree**.
+
+**Parallelism recommendation:** Always parallelize across worktrees, not inside one worktree. 
+
+You can orchestrate parallel execution using task metadata fields: `depends_on`, `isolated_worktree`, `worktree_boundary`, `setup_commands`, `teardown_commands`, `env_vars`, and `spotlight_testing`.
+*Note: These are currently metadata-only hints for the controller. They persist in the DB and surface in `status`/`inspect`, but are not runtime-enforced by the agpair executor yet.*
 
 ### Desktop receipt exclusivity
 

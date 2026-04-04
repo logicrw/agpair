@@ -258,3 +258,11 @@ python3 -m agpair.tools.install_agpair_daemon_launchd uninstall
 - **复杂判断留在 AI 工具的聊天窗口里做**
 
 不要把它想成"全自动平台"，而是：**一个让 AI 编程工具更稳定地驱动 Antigravity 的轻量控制台。**
+
+## 任务元数据与并发
+
+`agpair` 支持并发任务执行，但你必须遵守**并发建议：永远在跨 worktree 间做并发，不要在同一个 worktree 内并发**。
+
+为了更好地编排并行工作，AI 主控可以在任务中记录执行元数据：包括 `depends_on`、`isolated_worktree`、`worktree_boundary`、`setup_commands`、`teardown_commands`、`env_vars` 以及 `spotlight_testing`。
+
+*注意：这些字段当前仅为供主控器阅读的元数据（metadata-only）。它们持久化存储，帮助 AI 安全地计划并发任务路线，但 agpair daemon 目前不会在底层运行时自动强制执行这些字段（比如自动运行 setup 脚本）。*

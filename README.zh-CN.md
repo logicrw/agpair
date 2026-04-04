@@ -288,9 +288,14 @@ agpair/
 
 CLI 的 JSON 输出（`task status`、`task wait` 和 `task watch`）包含一个 `a2a_state_hint` 字段，将内部 phase 近似映射到 A2A 的 `TaskState`（例如将 blocked auth 任务映射为 `auth-required`）。这仅仅是一个供 AI 消费端参考的语义提示对齐——**agpair 并没有实现完整的 A2A 服务端或协议**。它的主要目标依然是做健壮的本地执行桥接层。
 
-### 并行控制规则（单工作区单任务）
+### 并行与并发控制
 
-不支持在同一代码库的同一工作区中进行并发编辑。你必须保持**每个工作区只能存在一个活跃的受托任务**。若需并行处理任务，请使用单独的 `git worktree` 或克隆一份独立的仓库。现在，`agpair doctor` 会显式公开此并发策略，并展示当前挂起任务的数量与 ID，以便自动化工具正确隔离任务。
+不支持在同一代码库的同一工作区中进行并发编辑。你必须保持**每个工作区只能存在一个活跃的受托任务**。
+
+**并发建议：** 永远在跨 worktree 间做并发，不要在同一个 worktree 内并发。
+
+你可以使用任务元数据来辅助编排并行执行：`depends_on`、`isolated_worktree`、`worktree_boundary`、`setup_commands`、`teardown_commands`、`env_vars` 以及 `spotlight_testing`。
+*注意：这些当前仅为供主控器识别的元数据。它们会持久化并在 `status`/`inspect` 中显示，但 agpair 不会在运行时强制执行这些逻辑。*
 
 ### Desktop 回执独占
 

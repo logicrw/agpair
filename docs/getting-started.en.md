@@ -249,3 +249,11 @@ python3 -m agpair.tools.install_agpair_daemon_launchd uninstall
 ```
 
 This is entirely optional — start with manual `agpair daemon start` until you are comfortable with the workflow.
+
+## Task Metadata and Parallelism
+
+`agpair` supports parallel task execution, but you must adhere to the **parallelism rule: parallelize across worktrees, not inside one worktree**.
+
+To orchestrate parallel work, the AI controller can add execution metadata to tasks. These fields include `depends_on`, `isolated_worktree`, `worktree_boundary`, `setup_commands`, `teardown_commands`, `env_vars`, and `spotlight_testing`.
+
+*Note: These features are currently metadata-only. They persist and are surfaced to help the AI controller plan execution safely, but are not runtime-enforced by the `agpair` daemon itself.*

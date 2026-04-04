@@ -161,6 +161,21 @@ agpair task start \
   --body "Goal: ..."
 ```
 
+### Task Metadata (Orchestration Hints)
+
+You can attach orchestration metadata to a task to help the controller plan parallel and isolated execution.
+**Note:** These fields are currently **metadata-only**. They are persisted in the database and surfaced in `status` and `inspect` outputs, but they are *not* runtime-enforced or automatically executed by the `agpair` daemon.
+
+- `depends_on`: List of previous task IDs that must complete before this one.
+- `isolated_worktree`: Boolean indicating intent to execute the task in a separate git worktree.
+- `worktree_boundary`: The intended root directory path for the task's execution boundary.
+- `setup_commands`: Pre-run shell steps (e.g., creating a worktree or starting a service).
+- `teardown_commands`: Post-run shell steps (e.g., cleaning up the worktree).
+- `env_vars`: Per-task environment overrides (e.g., `PORT`, `AGPAIR_PORT_OFFSET`).
+- `spotlight_testing`: Boolean intent to prioritize localized test runs over full-suite execution.
+
+**Parallelism recommendation:** Always parallelize across worktrees, not inside one worktree.
+
 All task-changing commands support the same wait controls:
 
 | Option | Default | Meaning |

@@ -105,6 +105,19 @@ Avoid:
 - multiple controllers acting on the same task/worktree
 - overlapping write scopes unless the merge plan is explicit
 
+## Orchestration Metadata
+
+Controllers can define planning metadata. These are **metadata-only** hints (persisted and readable via `status`/`inspect`), not runtime-enforced behaviors:
+
+- `depends_on`: prior task IDs required
+- `isolated_worktree`: execution in a separate git worktree
+- `worktree_boundary`: targeted directory scope
+- `setup_commands` / `teardown_commands`: workspace preparation/cleanup hooks
+- `env_vars`: config overrides (e.g., `PORT`) for isolation
+- `spotlight_testing`: intent to run focused, localized tests
+
+Always respect the Parallelism Rule when planning metadata.
+
 ## Antigravity Brief Header
 
 When the executor is Antigravity, prepend this block:
