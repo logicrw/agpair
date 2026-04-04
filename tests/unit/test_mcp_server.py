@@ -716,3 +716,54 @@ class TestRunCliJsonEdgeCases:
         )
         with pytest.raises(RuntimeError, match="non-object JSON payload"):
             mcp_server._run_cli_json(["task", "status", "T-1"])
+
+# ===================================================================
+# ProtectedFastMCP and Precedence Rules
+# ===================================================================
+
+class TestProtectedFastMCP:
+    def test_allows_unsealed_registration(self) -> None:
+        server = mcp_server.ProtectedFastMCP("test")
+        
+        @server.tool()
+        def tool_one(): pass
+        
+        assert "tool_one" in server._builtin_tools
+
+    def test_allows_unconflicting_sealed_registration(self) -> None:
+        server = mcp_server.ProtectedFastMCP("test")
+        
+        @server.tool()
+        def tool_one(): pass
+        
+        server.seal_builtins()
+        
+        @server.tool()
+        def tool_two(): pass
+        
+        assert "tool_one" in server._builtin_tools
+        assert "tool_two" not in server._builtin_tools
+
+    def test_rejects_shadowing_after_sealed(self) -> None:
+        server = mcp_server.ProtectedFastMCP("test")
+        
+        @server.tool()
+        def tool_one(): pass
+        
+        server.seal_builtins()
+        
+        with pytest.raises(ValueError, match="Cannot override built-in MCP tool: tool_one"):
+            @server.tool()
+            def tool_one(): pass
+            
+        with pytest.raises(ValueError, match="Cannot override built-in MCP tool: tool_one"):
+            @server.tool(name="tool_one")
+            def another_name(): pass
+
+    def test_global_mcp_is_sealed_and_protected(self) -> None:
+        assert mcp_server.mcp._sealed is True
+        assert "agpair_start_task" in mcp_server.mcp._builtin_tools
+        
+        with pytest.raises(ValueError, match="Cannot override built-in MCP tool: agpair_start_task"):
+            @mcp_server.mcp.tool()
+            def agpair_start_task(): pass

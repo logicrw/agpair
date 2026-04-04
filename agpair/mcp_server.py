@@ -9,7 +9,29 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 
-mcp = FastMCP("agpair", json_response=True)
+class ProtectedFastMCP(FastMCP):
+    """An MCP server that protects its built-in tools from being silently overridden."""
+    
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._builtin_tools: set[str] = set()
+        self._sealed: bool = False
+
+    def add_tool(self, fn: Any, name: str | None = None, **kwargs: Any) -> None:
+        tool_name = name or getattr(fn, "__name__", str(fn))
+        if self._sealed:
+            if tool_name in self._builtin_tools:
+                raise ValueError(f"Cannot override built-in MCP tool: {tool_name}")
+        else:
+            self._builtin_tools.add(tool_name)
+        return super().add_tool(fn, name=name, **kwargs)
+
+    def seal_builtins(self) -> None:
+        """Lock the built-in tool registry. Subsequent registrations cannot shadow these."""
+        self._sealed = True
+
+
+mcp = ProtectedFastMCP("agpair", json_response=True)
 
 
 def _base_command() -> list[str]:
@@ -228,6 +250,11 @@ def agpair_retry_task(
         interval_seconds=interval_seconds,
         timeout_seconds=timeout_seconds,
     )
+
+
+# Seal the built-in registry so any external extensions or dynamic loads
+# cannot shadow these tools.
+mcp.seal_builtins()
 
 
 def main() -> None:
