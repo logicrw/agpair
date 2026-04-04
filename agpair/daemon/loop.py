@@ -77,6 +77,7 @@ def run_once(
     client = bus or AgentBusClient(paths.agent_bus_bin)
     processed, touched_task_ids, bus_errors = ingest_new_receipts(paths, client, current=current)
     scan_workspace_activity(paths, current=current)
+    auto_closed = auto_close_evidence_ready_tasks(paths, skip_task_ids=touched_task_ids)
     watchdog_count, watchdog_task_ids = mark_watchdog_tasks(
         paths,
         current=current,
@@ -94,6 +95,7 @@ def run_once(
         "running": True,
         "last_tick_at": to_iso(current),
         "processed_receipts": processed,
+        "auto_closed_from_repo": auto_closed,
         "watchdog_recommended": watchdog_count,
         "stuck_marked": stuck,
     }
@@ -114,6 +116,79 @@ def scan_workspace_activity(paths: AppPaths, *, current: datetime) -> None:
                 tasks.update_workspace_activity(task_id=task.task_id, activity_at=activity_at)
             except TaskNotFoundError:
                 pass
+
+
+def detect_committed_task_in_repo(repo_path: str, task_id: str) -> str | None:
+    """Check if a git commit containing *task_id* exists in *repo_path*.
+
+    Uses ``git log --all --grep=<task_id> --format=%H -1`` to find a commit
+    whose message contains the task_id.  This is strong repo-side evidence
+    that the delegated work already landed as a commit.
+
+    Returns the full commit SHA if found, or ``None`` if not found or if the
+    directory is not a valid git repository.
+    """
+    import subprocess as _subprocess
+
+    try:
+        result = _subprocess.run(
+            ["git", "log", "--all", f"--grep={task_id}", "--format=%H", "-1"],
+            capture_output=True,
+            text=True,
+            cwd=repo_path,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+    except (_subprocess.SubprocessError, FileNotFoundError, OSError):
+        return None
+
+    sha = result.stdout.strip()
+    return sha if sha else None
+
+
+def auto_close_evidence_ready_tasks(
+    paths: AppPaths,
+    *,
+    skip_task_ids: set[str] | None = None,
+) -> int:
+    """Auto-close evidence_ready tasks whose delegated commit already landed.
+
+    For each evidence_ready task that was NOT just touched by receipt ingestion,
+    check if a git commit containing the task_id exists in the task's repo.
+    If so, transition the task to ``committed`` and record a journal entry
+    explaining the auto-close.
+
+    Returns the number of tasks auto-closed.
+    """
+    tasks = TaskRepository(paths.db_path)
+    journal = JournalRepository(paths.db_path)
+    excluded = skip_task_ids or set()
+    count = 0
+
+    for task in tasks.list_tasks(phase="evidence_ready", limit=100):
+        if task.task_id in excluded:
+            continue
+
+        commit_sha = detect_committed_task_in_repo(task.repo_path, task.task_id)
+        if commit_sha is None:
+            continue
+
+        try:
+            tasks.mark_committed(task_id=task.task_id)
+            journal.append(
+                task.task_id,
+                "daemon",
+                "auto_committed_from_repo_evidence",
+                f"Auto-closed: git commit {commit_sha} in {task.repo_path} "
+                f"contains task_id {task.task_id}. "
+                f"Terminal receipt was never received but repo evidence confirms commit landed.",
+            )
+            count += 1
+        except (TaskNotFoundError, IllegalTransitionError):
+            continue
+
+    return count
 
 
 def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[int, set[str], int]:
