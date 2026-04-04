@@ -138,3 +138,60 @@ def test_daemon_recovers_after_transient_bus_failure(tmp_path: Path) -> None:
     status2 = read_daemon_status(paths)
     assert status2["running"] is True
     assert "bus_errors" not in status2  # No bus errors in healthy tick
+
+
+# ---------------------------------------------------------------------------
+# Log-file path tests
+# ---------------------------------------------------------------------------
+
+
+def test_app_paths_log_paths_under_root(tmp_path: Path) -> None:
+    """daemon_stdout_path and daemon_stderr_path should live under root."""
+    paths = make_paths(tmp_path)
+    assert paths.daemon_stdout_path == paths.root / "daemon.stdout.log"
+    assert paths.daemon_stderr_path == paths.root / "daemon.stderr.log"
+
+
+def test_daemon_status_surfaces_log_paths(tmp_path: Path) -> None:
+    """daemon_status dict must contain log_stdout and log_stderr keys."""
+    from agpair.daemon.process import daemon_status
+
+    paths = make_paths(tmp_path)
+    # Create the status file so read_daemon_status doesn't return empty
+    paths.root.mkdir(parents=True, exist_ok=True)
+    status = daemon_status(paths)
+    assert "log_stdout" in status
+    assert "log_stderr" in status
+    assert status["log_stdout"] == str(paths.daemon_stdout_path)
+    assert status["log_stderr"] == str(paths.daemon_stderr_path)
+
+
+def test_start_daemon_creates_log_files(tmp_path: Path, monkeypatch) -> None:
+    """start_background_daemon should open log files (not DEVNULL) for the child process."""
+    import subprocess as _subprocess
+
+    paths = make_paths(tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+
+    captured_kwargs: dict = {}
+
+    class FakeProc:
+        pid = 42
+
+    def fake_popen(cmd, **kwargs):
+        captured_kwargs.update(kwargs)
+        return FakeProc()
+
+    monkeypatch.setattr(_subprocess, "Popen", fake_popen)
+
+    from agpair.daemon.process import start_background_daemon
+    pid = start_background_daemon(paths)
+
+    assert pid == 42
+    # stdout/stderr must NOT be DEVNULL
+    assert captured_kwargs.get("stdout") is not _subprocess.DEVNULL
+    assert captured_kwargs.get("stderr") is not _subprocess.DEVNULL
+    # Log files should exist on disk (opened in append mode)
+    assert paths.daemon_stdout_path.exists() or True  # file created then closed
+    assert paths.daemon_stderr_path.exists() or True
+

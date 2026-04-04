@@ -16,6 +16,8 @@ def start_background_daemon(paths: AppPaths, *, interval_ms: int = 1000, timeout
     existing = _read_pid(paths.pid_path)
     if existing and _is_process_alive(existing):
         return existing
+    stdout_log = open(paths.daemon_stdout_path, "a", encoding="utf-8")  # noqa: SIM115
+    stderr_log = open(paths.daemon_stderr_path, "a", encoding="utf-8")  # noqa: SIM115
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -28,11 +30,14 @@ def start_background_daemon(paths: AppPaths, *, interval_ms: int = 1000, timeout
             "--timeout-seconds",
             str(timeout_seconds),
         ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=stdout_log,
+        stderr=stderr_log,
         start_new_session=True,
         cwd=str(Path.cwd()),
     )
+    # Close the parent-side file handles — the child has inherited them.
+    stdout_log.close()
+    stderr_log.close()
     # Atomic write: write to temp file, then rename to avoid partial reads
     import tempfile
     tmp = tempfile.NamedTemporaryFile(
@@ -63,7 +68,13 @@ def daemon_status(paths: AppPaths) -> dict:
     status = read_daemon_status(paths)
     pid = _read_pid(paths.pid_path)
     running = bool(pid and _is_process_alive(pid))
-    return {**status, "pid": pid, "running": running}
+    return {
+        **status,
+        "pid": pid,
+        "running": running,
+        "log_stdout": str(paths.daemon_stdout_path),
+        "log_stderr": str(paths.daemon_stderr_path),
+    }
 
 
 def _read_pid(path: Path) -> int | None:

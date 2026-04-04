@@ -14,6 +14,8 @@ class AppPaths:
     agent_bus_bin: str
     shared_desktop_lock_path: Path
     targets_path: Path
+    daemon_stdout_path: Path
+    daemon_stderr_path: Path
 
     @classmethod
     def from_root(cls, root: Path) -> "AppPaths":
@@ -26,6 +28,8 @@ class AppPaths:
             agent_bus_bin=os.environ.get("AGPAIR_AGENT_BUS_BIN", "agent-bus"),
             shared_desktop_lock_path=base / "agent_bus_watch_desktop.lock",
             targets_path=base / "targets.json",
+            daemon_stdout_path=base / "daemon.stdout.log",
+            daemon_stderr_path=base / "daemon.stderr.log",
         )
 
     @classmethod
