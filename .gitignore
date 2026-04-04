@@ -10,3 +10,5 @@ __pycache__/
 companion-extension/node_modules/
 companion-extension/dist/
 companion-extension/*.vsix
+
+.omx/
