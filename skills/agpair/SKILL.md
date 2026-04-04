@@ -24,6 +24,11 @@ Current executor policy:
 - `antigravity`: primary interactive IDE executor, `same_session`
 - `codex`: CLI executor, `fresh_resume_first`
 
+Important distinction:
+
+- `antigravity` currently has real session semantics
+- `codex` in the current agpair implementation is **process-based** (`codex exec` per task), not a manually reused interactive terminal session
+
 ## Default Flow
 
 ### 1. Preflight first
@@ -99,7 +104,7 @@ Prefer fresh resume or a new task when:
 Executor-specific continuation policy:
 
 - `antigravity`: try same-session continuation first
-- `codex`: treat continuation as `fresh_resume_first`
+- `codex`: treat continuation as `fresh_resume_first`; do not reason about manual terminal reuse or long-lived Codex TUI sessions
 
 If continuation fails and the product automatically switches to fresh resume, accept that path. Do not force same-session continuation just to preserve conversation continuity.
 
