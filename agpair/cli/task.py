@@ -856,7 +856,9 @@ def watch_task(
             else:
                 if changed:
                     ts = datetime.now().strftime("%H:%M:%S")
-                    typer.echo(f"[{ts}] Task {task_id} phase: {current_phase}")
+                    prev_phase = last_emitted_state[0] if last_emitted_state else None
+                    if current_phase != prev_phase:
+                        typer.echo(f"[{ts}] Task {task_id} phase: {current_phase}")
 
                     prev_hb = last_emitted_state[1] if last_emitted_state else None
                     if payload["last_heartbeat_at"] != prev_hb and payload["last_heartbeat_at"]:
