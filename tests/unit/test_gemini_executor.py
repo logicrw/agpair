@@ -33,7 +33,7 @@ def test_gemini_executor_dispatch_command_construction(tmp_path):
         
         wrapper_script = args[2]
         # Check flags we pulled from gemini --help
-        assert "gemini -y --output-format json -w " in wrapper_script
+        assert "gemini -y --output-format json -p " in wrapper_script
         
         # Check that prompt (-p) is included
         assert "-p 'do some work'" in wrapper_script

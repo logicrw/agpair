@@ -97,16 +97,13 @@ class GeminiExecutor(ExecutorAdapter):
         rc_file = temp_dir / "rc.txt"
         pid_file = temp_dir / "pid.txt"
         
-        # We use explicit flags found in `gemini --help`:
         # -y / --yolo : auto approve actions
         # --output-format json : to parse events potentially
-        # -w : worktree (which we alias conceptually to run in repo_path)
         # -p : prompt (headless mode)
         cmd = [
             self.gemini_bin,
             "-y",
             "--output-format", "json",
-            "-w", str(repo_path),
             "-p", str(body)
         ]
 
