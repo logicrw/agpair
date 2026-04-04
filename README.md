@@ -210,6 +210,7 @@ What already works:
 - Implemented `fresh_resume_first` path for review/approval flows, allowing Codex-backed tasks to seamlessly carry over feedback via a fresh dispatch.
 - Automatic closeout for eligible `evidence_ready` tasks when strong repo-side commit evidence exists but a final terminal receipt never arrived
 - Background daemon stdout/stderr now persist to `~/.agpair/daemon.stdout.log` and `~/.agpair/daemon.stderr.log`
+- Groundwork added for Gemini CLI executor (internal use only, not yet wired to `--executor gemini` switch).
 
 ### Why teams end up liking it
 
