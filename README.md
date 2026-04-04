@@ -6,7 +6,7 @@
 
 [中文说明](README.zh-CN.md) | [新手教程](docs/getting-started-zh.md) | [中文命令参考](docs/usage.zh-CN.md)
 
-**agpair** is a lightweight task-lifecycle layer for AI coding workflows that need to run for minutes or hours, not just one quick handoff. It lets a controller agent (for example Claude Code or Codex Desktop) break work into tasks, send those tasks to supported executors — currently [Antigravity](https://antigravity.google/) and the local Codex CLI — and keep making structured decisions as results come back.
+**agpair** is a durable task-lifecycle layer for AI coding workflows that need to run for minutes or hours, not just one quick handoff. It lets a controller agent (for example Claude Code or Codex Desktop) break work into tasks, dispatch those tasks to supported executors — currently [Antigravity](https://antigravity.google/) and the local Codex CLI — and keep making structured decisions as results come back.
 
 Works with [Codex](https://openai.com/codex) (CLI & Desktop), [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and any tool that can run shell commands.
 
@@ -36,6 +36,28 @@ That is the gap `agpair` fills.
 - **controller semantics** like `continue / approve / reject / retry`
 - **watchdog and health checks** for long-running work
 - **executor flexibility** so the same control plane can drive Antigravity today and Codex CLI tomorrow
+- **lower token burn** in long workflows because state lives in SQLite/journal/receipts instead of being re-explained in every chat turn
+
+### Why this matters in real usage
+
+Without `agpair`, a controller agent has to keep a growing amount of workflow state in context:
+
+- which task is currently active
+- which tasks are already complete
+- what the previous executor returned
+- which tasks need retry / continue / approval
+- whether the latest result was a true success, a block, or just partial evidence
+
+That gets expensive and brittle fast.
+
+`agpair` externalizes that state into:
+
+- SQLite task records
+- journals
+- structured receipts
+- `doctor` / `inspect` / `watch`
+
+So the controller can query the current truth instead of carrying the whole project history inside the prompt window.
 
 In other words:
 
@@ -188,6 +210,18 @@ What already works:
 - Implemented `fresh_resume_first` path for review/approval flows, allowing Codex-backed tasks to seamlessly carry over feedback via a fresh dispatch.
 - Automatic closeout for eligible `evidence_ready` tasks when strong repo-side commit evidence exists but a final terminal receipt never arrived
 - Background daemon stdout/stderr now persist to `~/.agpair/daemon.stdout.log` and `~/.agpair/daemon.stderr.log`
+
+### Why teams end up liking it
+
+The practical value of `agpair` is not just “delegation”.
+
+It gives you:
+
+- a **durable control plane** instead of a one-shot bridge
+- **machine-readable results** instead of free-form completion prose
+- **recovery paths** when sessions die or tasks block
+- **multi-executor flexibility** without rebuilding your workflow around each tool
+- a way to keep long-running work moving **without stuffing every intermediate state into token context**
 
 What is explicitly *not* in scope:
 
