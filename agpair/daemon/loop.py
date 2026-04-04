@@ -295,7 +295,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 # Non-terminal liveness heartbeat — record timestamp only,
                 # do NOT change phase or last_activity_at.
                 tasks.record_heartbeat(task_id=task_id, heartbeat_at=to_iso(current))
-                journal.append(task_id, "daemon", "heartbeat", body or "RUNNING")
+                journal.append(task_id, "daemon", "heartbeat", body or "RUNNING", classification="transient")
             elif status == messages.EVIDENCE_PACK:
                 tasks.mark_evidence_ready(task_id=task_id, last_receipt_id=message_id)
                 journal.append(task_id, "daemon", "evidence_ready", journal_body)

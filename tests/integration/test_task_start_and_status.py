@@ -1006,3 +1006,30 @@ def test_task_start_persists_dependencies_and_isolation(tmp_path: Path, monkeypa
     payload = json.loads(status.stdout)
     assert payload["depends_on"] == ["TASK-0"]
     assert payload["isolated_worktree"] is True
+
+def test_task_logs_filters_noise_by_default(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-NOISE", repo_path="/tmp/repo")
+    journal = make_journal_repo(tmp_path)
+    journal.append("TASK-NOISE", "cli", "created", "Goal: test")
+    journal.append("TASK-NOISE", "daemon", "heartbeat", "RUNNING", classification="transient")
+    journal.append("TASK-NOISE", "daemon", "receipt_stale", "timeout", classification="stale")
+
+    runner = CliRunner()
+    res_default = runner.invoke(app, ["task", "logs", "TASK-NOISE", "--json"])
+    assert res_default.exit_code == 0
+    payload = json.loads(res_default.stdout)
+    events = [log["event"] for log in payload["logs"]]
+    assert "heartbeat" not in events
+    assert "receipt_stale" not in events
+    assert "created" in events
+
+    res_all = runner.invoke(app, ["task", "logs", "TASK-NOISE", "--all", "--json"])
+    assert res_all.exit_code == 0
+    payload_all = json.loads(res_all.stdout)
+    events_all = [log["event"] for log in payload_all["logs"]]
+    assert "heartbeat" in events_all
+    assert "receipt_stale" in events_all
+    assert "created" in events_all
+

@@ -339,7 +339,7 @@ python3 -m agpair.tools.install_agpair_daemon_launchd uninstall
 
 ### `BLOCKED`
 
-这轮执行没有成功。跑 `agpair task logs <TASK_ID>` 查看原因，然后决定是 `continue` 同一 session 还是 `retry` 换新的。
+这轮执行没有成功。跑 `agpair task logs <TASK_ID>` 查看原因，然后决定是 `continue` 同一 session 还是 `retry` 换新的。默认情况下 `logs` 会过滤掉高频的过渡性日志，如需查看完整记录可添加 `--all` 参数。
 
 ## License
 

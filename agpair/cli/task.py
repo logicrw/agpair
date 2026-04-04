@@ -587,6 +587,7 @@ def active_waits() -> None:
 def task_logs(
     task_id: str,
     limit: int = typer.Option(20, "--limit"),
+    all_events: bool = typer.Option(False, "--all", help="Include transient operational noise."),
     json_output: bool = _JSON_OPTION,
 ) -> None:
     paths = _paths()
@@ -596,7 +597,7 @@ def task_logs(
         if json_output:
             _emit_json(_not_found_payload(task_id))
         raise typer.Exit(code=1)
-    rows = journal.tail(task_id, limit=limit)
+    rows = journal.tail(task_id, limit=limit, exclude_noise=not all_events)
     if json_output:
         _emit_json(
             {

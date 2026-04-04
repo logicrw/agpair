@@ -325,7 +325,7 @@ The Antigravity window for this repo is not ready. Confirm the correct repo is o
 
 ### `BLOCKED`
 
-The current attempt did not complete. Run `agpair task logs <TASK_ID>` to inspect, then decide whether to `continue` the same session or `retry` with a fresh one.
+The current attempt did not complete. Run `agpair task logs <TASK_ID>` to inspect, then decide whether to `continue` the same session or `retry` with a fresh one. By default, logs filter out transient operational chatter; use `--all` to view the full history.
 
 ## License
 

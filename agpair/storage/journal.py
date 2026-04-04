@@ -35,13 +35,14 @@ class JournalRepository:
             ).fetchone()
             return row[0]
 
-    def tail(self, task_id: str, limit: int = 20) -> list[JournalRecord]:
+    def tail(self, task_id: str, limit: int = 20, exclude_noise: bool = False) -> list[JournalRecord]:
         with connect(self.db_path) as conn:
+            exclude_clause = " AND classification NOT IN ('transient', 'stale')" if exclude_noise else ""
             rows = conn.execute(
-                """
+                f"""
                 SELECT task_id, source, event, body, classification, created_at
                 FROM journal
-                WHERE task_id = ?
+                WHERE task_id = ?{exclude_clause}
                 ORDER BY id DESC
                 LIMIT ?
                 """,
