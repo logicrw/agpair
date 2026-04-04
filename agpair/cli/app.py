@@ -117,6 +117,7 @@ def inspect(
                 "last_workspace_activity_at": task_payload["last_workspace_activity_at"],
                 "setup_commands": task_payload["setup_commands"],
                 "teardown_commands": task_payload["teardown_commands"],
+                "worktree_boundary": task_payload["worktree_boundary"],
             }
             if task_payload.get("terminal_receipt"):
                 task_dict["latest_receipt_summary"] = task_payload["terminal_receipt"].get("summary")

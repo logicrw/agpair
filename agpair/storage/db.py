@@ -92,6 +92,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "env_vars" not in task_cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN env_vars TEXT")
         conn.commit()
+    # Migration 11: add worktree_boundary
+    if "worktree_boundary" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN worktree_boundary TEXT")
+        conn.commit()
 
 
 def _configure_connection(conn: sqlite3.Connection) -> None:
