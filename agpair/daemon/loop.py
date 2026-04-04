@@ -322,12 +322,18 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
             elif status == messages.EVIDENCE_PACK:
                 tasks.mark_evidence_ready(task_id=task_id, last_receipt_id=message_id)
                 journal.append(task_id, "daemon", "evidence_ready", journal_body)
+                if current_task and current_task.executor_backend == "codex_cli" and current_task.antigravity_session_id:
+                    from agpair.executors.codex import CodexExecutor
+                    CodexExecutor().cleanup(current_task.antigravity_session_id)
             elif status == messages.BLOCKED:
                 reason = clean_body or "blocked"
                 if structured_receipt is not None:
                     reason = blocked_reason_from_receipt(structured_receipt, reason)
                 tasks.mark_blocked(task_id=task_id, reason=reason)
                 journal.append(task_id, "daemon", "blocked", journal_body)
+                if current_task and current_task.executor_backend == "codex_cli" and current_task.antigravity_session_id:
+                    from agpair.executors.codex import CodexExecutor
+                    CodexExecutor().cleanup(current_task.antigravity_session_id)
             elif status == messages.COMMITTED:
                 tasks.mark_committed(task_id=task_id, last_receipt_id=message_id)
                 journal.append(task_id, "daemon", "committed", journal_body)
@@ -366,6 +372,9 @@ def mark_stuck_tasks(
         tasks.mark_stuck(task_id=task.task_id, reason="no progress before timeout")
         tasks.recommend_retry(task_id=task.task_id, retry_count=task.retry_count)
         journal.append(task.task_id, "daemon", "stuck", "retry recommended after timeout")
+        if task.executor_backend == "codex_cli" and task.antigravity_session_id:
+            from agpair.executors.codex import CodexExecutor
+            CodexExecutor().cleanup(task.antigravity_session_id)
         count += 1
     return count
 

@@ -100,6 +100,8 @@ def test_codex_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
     assert rc_file.exists(), "fake codex wrapper should have created rc.txt"
     with open(rc_file) as f:
         assert f.read().strip() == "0"
+    
+    assert temp_dir.exists(), "temp_dir must exist before daemon cleanup"
         
     # 3. Run daemon run_once (mocking the bus client as it shouldn't be used for codex polling)
     # The daemon should poll the local temp_dir, find it done, and synthesize receipt
@@ -109,6 +111,8 @@ def test_codex_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
     # 4. Check the task phase is now 'evidence_ready' and receipt matches
     task = tasks.get_task("TASK-CODEX-TEST")
     assert task.phase == "evidence_ready"
+    
+    assert not temp_dir.exists(), "temp_dir must be cleaned up after terminal transition"
     
     # Verify the terminal receipt synthesis
     from agpair.storage.journal import JournalRepository
@@ -176,18 +180,23 @@ def test_codex_lifecycle_failure(tmp_path: pathlib.Path, monkeypatch) -> None:
     assert task.phase == "acked"
     
     session_id = task.antigravity_session_id
-    rc_file = pathlib.Path(session_id) / "rc.txt"
+    temp_dir = pathlib.Path(session_id)
+    rc_file = temp_dir / "rc.txt"
     import time
     for _ in range(50):
         if rc_file.exists():
             break
         time.sleep(0.1)
     
+    assert temp_dir.exists(), "temp_dir must exist before daemon cleanup"
+    
     mock_bus = mock.MagicMock()
     run_once(paths, now=datetime.now(UTC), bus=mock_bus)
     
     task = tasks.get_task("TASK-CODEX-FAIL")
     assert task.phase == "blocked"
+    
+    assert not temp_dir.exists(), "temp_dir must be cleaned up after failing task transitions to blocked"
     
     from agpair.storage.journal import JournalRepository
     journal = JournalRepository(paths.db_path)

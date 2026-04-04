@@ -219,3 +219,15 @@ class CodexExecutor(ExecutorAdapter):
                     os.kill(-pid, signal.SIGTERM)
                 except Exception:
                     pass
+
+    def cleanup(self, session_id: str) -> None:
+        """
+        Clean up the task's temporary directory.
+        """
+        import shutil
+        import pathlib
+        if not session_id:
+            return
+        temp_dir = pathlib.Path(session_id)
+        if temp_dir.exists() and temp_dir.name.startswith("agpair_codex_"):
+            shutil.rmtree(temp_dir, ignore_errors=True)
