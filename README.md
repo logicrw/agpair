@@ -132,7 +132,7 @@ You want `agent_bus_available=true`, `desktop_reader_conflict=false`, and `repo_
 ```bash
 agpair daemon start
 agpair task start --repo-path /path/to/your/project \
-  --body "Goal: fix the failing smoke test and return EVIDENCE_PACK."
+  --body "Goal: fix the failing smoke test. Scope: smoke tests. Required changes: update assertion. Exit criteria: tests pass and return EVIDENCE_PACK."
 ```
 
 By default, `task start` **waits** until the task reaches a terminal phase. Add `--no-wait` for fire-and-forget.
@@ -144,7 +144,7 @@ agpair target add --name my-project --repo-path /path/to/your/project
 agpair doctor --target my-project
 agpair inspect --target my-project --json
 agpair task start --target my-project \
-  --body "Goal: fix the failing smoke test and return EVIDENCE_PACK."
+  --body "Goal: fix the failing smoke test. Scope: smoke tests. Required changes: update assertion. Exit criteria: tests pass and return EVIDENCE_PACK."
 ```
 
 For the full step-by-step walkthrough, see the detailed guides below.

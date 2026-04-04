@@ -136,7 +136,7 @@ agpair doctor --repo-path /你的项目路径
 ```bash
 agpair daemon start
 agpair task start --repo-path /你的项目路径 \
-  --body "Goal: 修复 xxx，并返回 EVIDENCE_PACK。"
+  --body "Goal: 修复 xxx。Scope: 只有文件 Y。Required changes: 更新行 Z。Exit criteria: 成功返回 EVIDENCE_PACK。"
 ```
 
 默认情况下，`task start` **会等待**任务进入终态。加 `--no-wait` 可以即发即走。
@@ -148,7 +148,7 @@ agpair target add --name my-project --repo-path /你的项目路径
 agpair doctor --target my-project
 agpair inspect --target my-project --json
 agpair task start --target my-project \
-  --body "Goal: 修复 xxx，并返回 EVIDENCE_PACK。"
+  --body "Goal: 修复 xxx。Scope: 只有文件 Y。Required changes: 更新行 Z。Exit criteria: 成功返回 EVIDENCE_PACK。"
 ```
 
 完整的操作步骤请参考下面的文档链接。

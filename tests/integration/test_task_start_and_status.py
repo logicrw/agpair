@@ -218,7 +218,7 @@ def test_task_start_creates_local_record_and_sends_task(tmp_path: Path, monkeypa
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: fix it", "--task-id", "TASK-CLI-1", "--no-wait"],
+        ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test", "--task-id", "TASK-CLI-1", "--no-wait"],
     )
 
     assert result.exit_code == 0
@@ -235,7 +235,7 @@ def test_task_start_creates_local_record_and_sends_task(tmp_path: Path, monkeypa
     assert "--status" in recorded[-1]["argv"]
     assert "TASK" in recorded[-1]["argv"]
     assert "repo_path: /tmp/repo" in recorded[-1]["body"]
-    assert "Goal: fix it" in recorded[-1]["body"]
+    assert "Goal: test" in recorded[-1]["body"]
 
 
 def test_task_start_reuses_existing_task_for_same_repo_and_idempotency_key(tmp_path: Path, monkeypatch) -> None:
@@ -253,8 +253,7 @@ def test_task_start_reuses_existing_task_for_same_repo_and_idempotency_key(tmp_p
             "start",
             "--repo-path",
             "/tmp/repo-a",
-            "--body",
-            "Goal: first dispatch",
+            "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id",
             "TASK-IDEMP-1",
             "--idempotency-key",
@@ -269,8 +268,7 @@ def test_task_start_reuses_existing_task_for_same_repo_and_idempotency_key(tmp_p
             "start",
             "--repo-path",
             "/tmp/repo-a",
-            "--body",
-            "Goal: duplicate dispatch",
+            "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id",
             "TASK-IDEMP-2",
             "--idempotency-key",
@@ -304,8 +302,7 @@ def test_task_start_idempotency_key_is_scoped_to_repo_path(tmp_path: Path, monke
             "start",
             "--repo-path",
             "/tmp/repo-a",
-            "--body",
-            "Goal: first dispatch",
+            "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id",
             "TASK-IDEMP-REPO-A",
             "--idempotency-key",
@@ -320,8 +317,7 @@ def test_task_start_idempotency_key_is_scoped_to_repo_path(tmp_path: Path, monke
             "start",
             "--repo-path",
             "/tmp/repo-b",
-            "--body",
-            "Goal: second dispatch",
+            "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id",
             "TASK-IDEMP-REPO-B",
             "--idempotency-key",
@@ -622,7 +618,7 @@ def test_task_start_marks_blocked_when_dispatch_fails(tmp_path: Path, monkeypatc
 
     result = CliRunner().invoke(
         app,
-        ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: fix it", "--task-id", "TASK-FAIL-1"],
+        ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test", "--task-id", "TASK-FAIL-1"],
     )
 
     assert result.exit_code == 1
@@ -849,7 +845,7 @@ def test_task_start_target_substitution(tmp_path: Path, monkeypatch) -> None:
 
     result = CliRunner().invoke(
         app,
-        ["task", "start", "--target", "app-repo", "--body", "Goal: fix it", "--task-id", "TASK-TARGET-1", "--no-wait"],
+        ["task", "start", "--target", "app-repo", "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test", "--task-id", "TASK-TARGET-1", "--no-wait"],
     )
 
     assert result.exit_code == 0
@@ -872,7 +868,7 @@ def test_task_start_rejects_target_and_repo_path_together(tmp_path: Path, monkey
 
     result = CliRunner().invoke(
         app,
-        ["task", "start", "--target", "dual", "--repo-path", str(repo_path), "--body", "Goal", "--no-wait"],
+        ["task", "start", "--target", "dual", "--repo-path", str(repo_path), "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test", "--no-wait"],
     )
     assert result.exit_code != 0
     assert "cannot specify both" in (result.stdout + result.stderr).lower()
@@ -885,7 +881,7 @@ def test_task_start_default_executor_is_antigravity(tmp_path: Path, monkeypatch)
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
 
     runner = CliRunner()
-    result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: default it", "--task-id", "TASK-EXEC-DEFAULT", "--no-wait"])
+    result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test", "--task-id", "TASK-EXEC-DEFAULT", "--no-wait"])
     
     assert result.exit_code == 0
     task = make_task_repo(tmp_path).get_task("TASK-EXEC-DEFAULT")
@@ -910,7 +906,7 @@ def test_task_start_explicit_executor_codex(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setattr(agpair.executors.codex.CodexExecutor, "dispatch", mock_dispatch)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: run codex", "--task-id", "TASK-EXEC-CODEX", "--executor", "codex", "--no-wait"])
+    result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test", "--task-id", "TASK-EXEC-CODEX", "--executor", "codex", "--no-wait"])
     
     assert result.exit_code == 0
     task = make_task_repo(tmp_path).get_task("TASK-EXEC-CODEX")
@@ -935,7 +931,7 @@ def test_task_start_explicit_executor_gemini(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setattr(agpair.executors.gemini.GeminiExecutor, "dispatch", mock_dispatch)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: run gemini", "--task-id", "TASK-EXEC-GEMINI", "--executor", "gemini", "--no-wait"])
+    result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test", "--task-id", "TASK-EXEC-GEMINI", "--executor", "gemini", "--no-wait"])
     
     assert result.exit_code == 0
     task = make_task_repo(tmp_path).get_task("TASK-EXEC-GEMINI")
@@ -985,7 +981,7 @@ def test_task_start_persists_dependencies_and_isolation(tmp_path: Path, monkeypa
         [
             "task", "start",
             "--repo-path", "/tmp/repo",
-            "--body", "Goal: test config",
+            "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "TASK-DEPS-1",
             "--depends-on", '["TASK-0"]',
             "--isolated-worktree",
@@ -1031,4 +1027,36 @@ def test_task_logs_filters_noise_by_default(tmp_path: Path, monkeypatch) -> None
     assert "heartbeat" in events_all
     assert "receipt_stale" in events_all
     assert "created" in events_all
+
+
+def test_task_start_rejects_missing_sections(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    runner = CliRunner()
+    result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: fix the thing\nScope: none\nRequired changes: tests"])
+    assert result.exit_code == 1
+    assert "Refused" in result.stderr
+    assert "exit criteria" in result.stderr
+
+
+def test_task_start_rejects_placeholder(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    runner = CliRunner()
+    for placeholder in ["todo", "fix this"]:
+        result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", placeholder])
+        assert result.exit_code == 1
+        assert "Refused" in result.stderr
+        assert "placeholder" in result.stderr
+
+
+def test_task_start_accepts_valid_brief(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    runner = CliRunner()
+    valid_body = "Goal: A\nScope: B\nRequired changes: C\nExit criteria: D"
+    result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", valid_body, "--no-wait"])
+    assert result.exit_code == 0
+
 

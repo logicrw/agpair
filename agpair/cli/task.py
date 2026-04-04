@@ -362,6 +362,25 @@ _JSON_OPTION = typer.Option(False, "--json", help="Emit machine-readable JSON.")
 # task start
 # ---------------------------------------------------------------------------
 
+def _validate_task_body(body: str) -> None:
+    trimmed = body.strip()
+    if not trimmed:
+        typer.echo("Refused: task body is empty.", err=True)
+        raise typer.Exit(code=1)
+
+    lower_body = trimmed.lower()
+    placeholders = {"bar", "foo", "todo", "fix this", "test"}
+    if trimmed.lower() in placeholders or len(trimmed) < 15:
+        typer.echo("Refused: task body looks like a trivial placeholder.", err=True)
+        raise typer.Exit(code=1)
+
+    required_sections = ["goal", "scope", "required changes", "exit criteria"]
+    missing = [s for s in required_sections if s not in lower_body]
+    if missing:
+        typer.echo(f"Refused: task body is missing key structural sections: {', '.join(missing)}", err=True)
+        raise typer.Exit(code=1)
+
+
 
 @app.command("start")
 def start_task(
@@ -379,6 +398,8 @@ def start_task(
 ) -> None:
     from agpair.executors import AntigravityExecutor, CodexExecutor, GeminiExecutor
     from agpair.targets import resolve_repo_path
+
+    _validate_task_body(body)
 
     paths = _paths()
     resolved_repo_path = resolve_repo_path(repo_path, target, paths)
