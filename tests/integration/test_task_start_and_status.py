@@ -923,6 +923,32 @@ def test_task_start_explicit_executor_codex(tmp_path: Path, monkeypatch) -> None
     assert payload["active_executor_backend"] == "codex_cli"
 
 
+def test_task_start_explicit_executor_gemini(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+
+    import agpair.executors.gemini
+    from unittest.mock import MagicMock
+    mock_ref = MagicMock()
+    mock_ref.temp_dir = tmp_path / "mock_temp"
+    mock_dispatch = MagicMock(return_value=mock_ref)
+    monkeypatch.setattr(agpair.executors.gemini.GeminiExecutor, "dispatch", mock_dispatch)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: run gemini", "--task-id", "TASK-EXEC-GEMINI", "--executor", "gemini", "--no-wait"])
+    
+    assert result.exit_code == 0
+    task = make_task_repo(tmp_path).get_task("TASK-EXEC-GEMINI")
+    assert task is not None
+    assert task.executor_backend == "gemini_cli"
+    
+    status = runner.invoke(app, ["task", "status", "TASK-EXEC-GEMINI", "--json"])
+    assert status.exit_code == 0
+    payload = json.loads(status.stdout)
+    assert payload["active_executor_backend"] == "gemini_cli"
+
+
 def test_legacy_rows_without_executor_field_remain_readable(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     paths = make_paths(tmp_path)

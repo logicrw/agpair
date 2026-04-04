@@ -160,12 +160,18 @@ def build_task_payload(paths: AppPaths, task) -> dict:
     committed_result = _committed_result_payload(terminal_receipt)
     failure_context = _failure_context_payload(task, terminal_receipt)
     blocker_type = failure_context["blocker_type"] if failure_context else None
-    from agpair.executors import AntigravityExecutor, CodexExecutor
+    from agpair.executors import AntigravityExecutor, CodexExecutor, GeminiExecutor
     
     ag_exec = AntigravityExecutor("")
     cx_exec = CodexExecutor()
+    gm_exec = GeminiExecutor()
 
-    active_exec = cx_exec if task.executor_backend == cx_exec.backend_id else ag_exec
+    if task.executor_backend == cx_exec.backend_id:
+        active_exec = cx_exec
+    elif task.executor_backend == gm_exec.backend_id:
+        active_exec = gm_exec
+    else:
+        active_exec = ag_exec
 
     return {
         "task_id": task.task_id,
@@ -174,6 +180,7 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "supported_backends": {
             ag_exec.backend_id: ag_exec.continuation_capability.value,
             cx_exec.backend_id: cx_exec.continuation_capability.value,
+            gm_exec.backend_id: gm_exec.continuation_capability.value,
         },
         "phase": task.phase,
         "a2a_state_hint": a2a_state_hint_from_phase(task.phase, blocker_type=blocker_type),
@@ -349,12 +356,12 @@ def start_task(
     body: str = typer.Option(..., "--body"),
     task_id: str | None = typer.Option(None, "--task-id"),
     idempotency_key: str | None = typer.Option(None, "--idempotency-key"),
-    executor: str | None = typer.Option(None, "--executor", help="Executor backend to run the task (antigravity or codex)."),
+    executor: str | None = typer.Option(None, "--executor", help="Executor backend to run the task (antigravity, codex, or gemini)."),
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
 ) -> None:
-    from agpair.executors import AntigravityExecutor, CodexExecutor
+    from agpair.executors import AntigravityExecutor, CodexExecutor, GeminiExecutor
     from agpair.targets import resolve_repo_path
 
     paths = _paths()
@@ -365,6 +372,9 @@ def start_task(
     if executor == "codex":
         exec_instance = CodexExecutor()
         backend_to_store = exec_instance.backend_id
+    elif executor == "gemini":
+        exec_instance = GeminiExecutor()
+        backend_to_store = exec_instance.backend_id
     elif executor == "antigravity":
         exec_instance = AntigravityExecutor(paths.agent_bus_bin)
         backend_to_store = exec_instance.backend_id
@@ -372,7 +382,7 @@ def start_task(
         exec_instance = AntigravityExecutor(paths.agent_bus_bin)
         backend_to_store = None
     else:
-        raise typer.BadParameter("Invalid --executor. Allowed values are 'antigravity' or 'codex'.")
+        raise typer.BadParameter("Invalid --executor. Allowed values are 'antigravity', 'codex', or 'gemini'.")
 
     tasks = TaskRepository(paths.db_path)
     journal = JournalRepository(paths.db_path)
@@ -432,10 +442,10 @@ def start_task(
         typer.echo(reason, err=True)
         raise typer.Exit(code=1)
 
-    if executor == "codex":
+    if executor in {"codex", "gemini"}:
         session_id = str(dispatch_result.temp_dir)
         tasks.mark_acked(task_id=final_task_id, session_id=session_id)
-        journal.append(final_task_id, "cli", "dispatched", f"started codex exec in {session_id}")
+        journal.append(final_task_id, "cli", "dispatched", f"started {executor} exec in {session_id}")
     else:
         journal.append(final_task_id, "cli", "dispatched", f"sent TASK to agent-bus id={dispatch_result}")
 
@@ -633,6 +643,23 @@ def abandon_task(
             )
             exec_instance.cancel(task_ref)
             journal.append(task_id, "cli", "executor_cancelled", "codex executor cancelled locally")
+        elif task.executor_backend == "gemini_cli":
+            import pathlib
+            from agpair.executors import GeminiExecutor
+            from agpair.executors.gemini import GeminiTaskRef
+            
+            exec_instance = GeminiExecutor()
+            temp_dir = pathlib.Path(task.antigravity_session_id)
+            task_ref = GeminiTaskRef(
+                task_id=task.task_id,
+                process=None,
+                stdout_file=temp_dir / "stdout.log",
+                stderr_file=temp_dir / "stderr.log",
+                rc_file=temp_dir / "rc.txt",
+                temp_dir=temp_dir,
+            )
+            exec_instance.cancel(task_ref)
+            journal.append(task_id, "cli", "executor_cancelled", "gemini executor cancelled locally")
         else:
             bridge_cancel_attempted = True
             bridge_cancelled, bridge_message = _cancel_bridge_task(
@@ -657,7 +684,7 @@ def abandon_task(
                 )
     tasks.mark_abandoned(task_id=task_id, reason=reason)
     journal.append(task_id, "cli", "abandoned", reason)
-    if not bridge_cancel_attempted and task.executor_backend != "codex_cli":
+    if not bridge_cancel_attempted and task.executor_backend not in {"codex_cli", "gemini_cli"}:
         journal.append(task_id, "cli", "bridge_cancel_skipped", "task had no live bridge session to release")
     typer.echo(task_id)
 
