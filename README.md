@@ -6,7 +6,7 @@
 
 [中文说明](README.zh-CN.md) | [新手教程](docs/getting-started-zh.md) | [中文命令参考](docs/usage.zh-CN.md)
 
-**agpair** is a lightweight CLI that connects any AI coding agent to an [Antigravity](https://antigravity.google/) executor — so you can dispatch coding tasks, track their progress, and review results without leaving the conversation.
+**agpair** is a lightweight CLI that gives AI coding agents a unified task lifecycle layer for supported executors — currently [Antigravity](https://antigravity.google/) and the local Codex CLI — so you can dispatch coding tasks, track their progress, and review results without leaving the conversation.
 
 Works with [Codex](https://openai.com/codex) (CLI & Desktop), [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and any tool that can run shell commands.
 
@@ -145,7 +145,7 @@ After installing, restart or open a new window. Say `use agpair` in your prompt 
 
 ## Status
 
-agpair v1.0 bridges AI coding agents to Antigravity executors.
+agpair v1.0 started as an Antigravity bridge and now exposes a growing multi-executor control plane.
 
 What already works:
 
@@ -161,8 +161,11 @@ What already works:
 - Structured terminal receipts (v1) and JSON CLI output with A2A state hints
 - Task start idempotency keys and structured committed result/failure context
 - Internal `ExecutorAdapter` abstraction extended to expose a stable `backend_id` (`antigravity` / `codex_cli`), now visible in read-only info (e.g., `task status --json` and `doctor`) for transparency.
+- `task start --executor codex` as a first-class entry point, with Codex tasks now flowing through dispatch / poll / canonical terminal receipt synthesis
 - Added formal Continuation Capability Matrix to encode policy for backends (e.g., `same_session` for Antigravity vs. `fresh_resume_first` for Codex CLI), visible in `task status --json`.
 - Implemented `fresh_resume_first` path for review/approval flows, allowing Codex-backed tasks to seamlessly carry over feedback via a fresh dispatch.
+- Automatic closeout for eligible `evidence_ready` tasks when strong repo-side commit evidence exists but a final terminal receipt never arrived
+- Background daemon stdout/stderr now persist to `~/.agpair/daemon.stdout.log` and `~/.agpair/daemon.stderr.log`
 
 What is explicitly *not* in scope:
 

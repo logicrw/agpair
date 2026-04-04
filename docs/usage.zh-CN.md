@@ -112,6 +112,11 @@ agpair daemon run --once
 agpair daemon run --interval-ms 1000 --timeout-seconds 1800
 ```
 
+后台 daemon 日志现在会写到：
+
+- `~/.agpair/daemon.stdout.log`
+- `~/.agpair/daemon.stderr.log`
+
 ### `--force`
 
 ```bash
@@ -130,6 +135,15 @@ agpair daemon run --once --force
 
 ```bash
 agpair task start \
+  --repo-path /absolute/path/to/repo \
+  --body "Goal: ..."
+```
+
+如果要显式使用 Codex backend：
+
+```bash
+agpair task start \
+  --executor codex \
   --repo-path /absolute/path/to/repo \
   --body "Goal: ..."
 ```
@@ -276,6 +290,8 @@ agpair task wait TASK-001 --timeout-seconds 600 --interval-seconds 10
 ```
 
 退出码 `0` 表示成功（`evidence_ready` / `committed`），`1` 表示失败（`blocked` / `stuck` / `abandoned` / 超时 / **watchdog**）。
+
+现在对于“repo 里其实已经有 commit，但最终 terminal receipt 没回来”的部分 `evidence_ready` 任务，系统可以基于强 repo 证据自动收口。遇到这类情况时，优先查看 `task status --json` / `inspect --json`，而不是默认手动 `abandon`。
 
 当 daemon watchdog 触发（任务仍为 `acked` 但 `retry_recommended=true`）时，
 `task wait` 和默认自动等待会提前退出并提示你执行 `agpair task retry <TASK_ID>`。

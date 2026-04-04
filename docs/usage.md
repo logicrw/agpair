@@ -92,6 +92,11 @@ agpair daemon run --once
 agpair daemon run --interval-ms 1000 --timeout-seconds 1800
 ```
 
+Background daemon logs are written to:
+
+- `~/.agpair/daemon.stdout.log`
+- `~/.agpair/daemon.stderr.log`
+
 Override the standalone guard only if you explicitly want `agpair` to own receipt ingestion in the current environment:
 
 ```bash
@@ -111,6 +116,15 @@ agpair daemon stop
 agpair task start \
   --repo-path /absolute/path/to/repo \
   --body "Goal: implement the smoke fix and show evidence."
+```
+
+To explicitly use the Codex backend:
+
+```bash
+agpair task start \
+  --executor codex \
+  --repo-path /absolute/path/to/repo \
+  --body "Goal: ..."
 ```
 
 By default, `task start` blocks until the task reaches a terminal phase.
@@ -210,6 +224,8 @@ agpair task wait TASK-SMOKE-001 --timeout-seconds 600 --interval-seconds 10
 Exit code `0` means success (`evidence_ready` / `committed`).
 Exit code `1` means `blocked`, `stuck`, `abandoned`, timeout, or **watchdog** (the
 daemon flagged `retry_recommended=true` while the task was still `acked`).
+
+Some `evidence_ready` tasks can now auto-close when strong repo-side commit evidence exists but a final terminal receipt never arrived. In that case, inspect `task status --json` / `inspect --json` before manually abandoning the task.
 
 When the watchdog triggers, the message will tell you to run
 `agpair task retry <TASK_ID>`.
