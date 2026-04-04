@@ -1,47 +1,29 @@
 ---
 name: agpair
-description: "Use agpair as the unified task lifecycle/control plane for delegating coding work to supported executors (currently Antigravity, Codex, and Gemini), checking health/status/watch, and handling continue/approve/retry flows. Trigger when the user asks to send work out, use agpair, inspect doctor/task state, or when a mechanical, well-specified task should be delegated proactively."
+description: "Use agpair from Claude Code to delegate coding work to supported executors (currently Antigravity, Codex, and Gemini), check doctor/status/watch, and drive continue/approve/retry flows."
 ---
 
 # agpair
 
-## Overview
+## Purpose
 
-Use this skill when your agent is the controller/reviewer and `agpair` is the lifecycle layer.
+Use `agpair` as the task lifecycle layer.
 
-`agpair` is responsible for:
+It handles:
 
-- preflight health checks
-- task dispatch
-- task watch / status / logs
-- terminal receipts and task state
+- health checks
+- dispatch
+- watch / status / logs
+- structured task state
 - semantic follow-up (`continue`, `approve`, `reject`, `retry`)
 
-It is **not** the executor itself. Executors are pluggable.
-
-Recommended controller stance:
-
-- use `agpair` naturally from Claude Code for long-running orchestration
-- use Codex more often as an executor or short-chain reviewer than as the primary long-running controller
-- keep the product/controller distinction clear: `agpair` is the lifecycle layer, not the planner
-
-Current executor policy:
-
-- `antigravity`: primary interactive IDE executor, `same_session`
-- `codex`: CLI executor, `fresh_resume_first`
-- `gemini`: CLI executor, continuation support is conservative/limited
-
-Important distinction:
-
-- `antigravity` currently has real session semantics
-- `codex` in the current agpair implementation is **process-based** (`codex exec` per task), not a manually reused interactive terminal session
-- `gemini` in the current agpair implementation is also **process-based** (`gemini -p ...` per task), and current continuation support is intentionally conservative
+It does **not** replace planning or code review.
 
 ## Default Flow
 
-### 1. Preflight first
+### 1. Preflight
 
-Before any semantic action, check:
+Before dispatch:
 
 ```bash
 agpair doctor --repo-path <absolute-repo-path>
@@ -53,97 +35,79 @@ Do not dispatch if:
 - `desktop_reader_conflict=true`
 - `repo_bridge_session_ready=false`
 
-### 2. Dispatch with `--no-wait`
+### 2. Dispatch
 
-Always dispatch with `--no-wait`:
+Always use `--no-wait`:
 
 ```bash
 agpair task start --repo-path <path> --body "<task brief>" --no-wait
 ```
 
-Use `agpair task watch <TASK_ID>` as the default observation path.
-Use `task status` / `task logs` when you need point-in-time inspection.
-
-Treat terminal phase as truth. Do **not** treat `ACK` as completion.
-
-### 3. Prefer `watch` over manual polling
-
-Default:
+Default observation path:
 
 ```bash
 agpair task watch <TASK_ID>
 ```
 
-Fallback:
+Use `status` / `logs` only when you need point-in-time inspection.
 
-- `agpair task status <TASK_ID>`
-- `agpair task logs <TASK_ID> --limit <n>`
+Treat terminal phase as truth. Do **not** treat `ACK` as completion.
 
-### 4. Review only when needed
+### 3. Review only when needed
 
-If the task reaches `evidence_ready`:
+If a task reaches `evidence_ready`:
 
-1. Inspect `status` and `logs`
-2. Spot-check key files if needed
-3. Choose exactly one:
+1. inspect `status` and `logs`
+2. spot-check key files if needed
+3. choose exactly one:
    - `continue`
    - `approve`
    - `reject`
    - `retry`
 
-## Session Reuse Policy
+## Session Rule
 
-Default rule: **open a fresh task for new work; reuse only for follow-up on the same task**.
+Default rule: **new work = new task**.
 
-Reuse the current execution chain only when:
+Reuse only for follow-up on the same task:
 
-- the current task is already in a review/follow-up stage (`evidence_ready`, `continue`, `approve`, `reject`)
-- the follow-up is still about the same code slice and same acceptance target
-- the executor/session still looks healthy
+- `evidence_ready`
+- `continue`
+- `approve`
+- `reject`
 
-Prefer a fresh task or fresh resume when:
+Prefer fresh task / fresh resume when:
 
 - this is a new independent unit of work
-- the next step is a different concern, layer, or language
-- CLI explicitly suggests `--fresh-resume`
-- the task has gone through several review rounds and context is bloated
-- the session is stale, dead, or clearly unreliable
+- the next step changes concern, layer, or language
+- CLI suggests `--fresh-resume`
+- the session is stale, dead, or unreliable
 
-Executor-specific continuation policy:
+Executor continuation policy:
 
-- `antigravity`: try same-session continuation first
-- `codex`: treat continuation as `fresh_resume_first`; current agpair integration is process-based (`codex exec` per task), not a long-lived interactive session
-- `gemini`: treat continuation conservatively; do not assume same-session continuation unless runtime behavior clearly supports it
+- `antigravity`: prefer same-session continuation
+- `codex`: `fresh_resume_first`
+- `gemini`: conservative / limited continuation support
 
-If continuation fails and the product automatically switches to fresh resume, accept that path. Do not force same-session continuation just to preserve conversation continuity.
-
-## Parallelism Boundary
+## Parallelism Rule
 
 Default rule: **parallelize across worktrees, not inside one worktree**.
 
 Allowed:
 
-- task A in worktree A
-- task B in worktree B
-- different executors on different worktrees
-- multiple Codex-backed tasks in separate worktrees
-- multiple Gemini-backed tasks in separate worktrees
+- different tasks in different worktrees
+- different executors in different worktrees
+- multiple Codex or Gemini tasks in separate worktrees
 
 Avoid:
 
-- multiple active tasks in the same repo worktree
-- multiple controllers issuing semantic actions against the same task/worktree
-- overlapping write scopes across parallel tasks unless the merge plan is explicit
+- multiple active tasks in the same worktree
+- multiple controllers acting on the same task/worktree
+- overlapping write scopes unless the merge plan is explicit
 
-Operational guidance:
+## Antigravity Brief Header
 
-- use one main controller per worktree
-- start with 2-way parallelism, then increase only after the flow is stable
-- prefer Codex for larger fan-out parallel worker sets; use Antigravity more conservatively when opening many concurrent sessions
-
-## Antigravity Task Body Rules
-
-When the executor is Antigravity, prepend this execution block to the task body:
+When the executor is Antigravity, prepend this block:
 
 ```text
 ## Execution Rules (highest priority)
@@ -155,11 +119,9 @@ When the executor is Antigravity, prepend this execution block to the task body:
 6. Do NOT use shell/terminal for read-only operations; use built-in IDE tools instead
 ```
 
-Keep this block stable. Do not improvise alternate rules unless the project explicitly requires it.
-
 ## Task Brief Template
 
-Every delegated implementation task should include:
+Every delegated task should include:
 
 - `Goal`
 - `Non-goals`
@@ -170,37 +132,22 @@ Every delegated implementation task should include:
 - `Required evidence`
 - `Exit criteria`
 
-Keep briefs precise. If the task is already single-language, single-focus, and mechanically implementable, prefer sending it as one card. Split only when cross-boundary coupling would make the brief fragile or ambiguous.
-
-## Proactive Dispatch
-
-Dispatch proactively when the task is:
-
-- mechanical
-- well-specified
-- multi-file enough to benefit from executor throughput
-
-Do **not** dispatch proactively when:
-
-- user input or product decisions are still needed
-- the task is trivial
-- you have not inspected enough code to write a precise brief
+Prefer one well-scoped card when the task is already single-language, single-focus, and mechanically implementable. Split only when boundaries are genuinely ambiguous or fragile.
 
 ## Anti-Patterns
 
-- Do not use `--wait` as the default control path
-- Do not treat every follow-up as a reason to open a fresh task
-- Do not force reuse for a new independent task just to save explanation tokens
-- Do not keep long historical failure playbooks in your head; follow current CLI/runtime signals
-- Do not send multiple semantic actions while an active wait is in progress
+- Do not use `--wait` as the default path
+- Do not open a fresh task for every follow-up
+- Do not force reuse for a new independent task
+- Do not send multiple semantic actions while an active wait exists
 - Do not over-split simple work into tiny cards
-- Do not force same-session continuation when the executor policy is `fresh_resume_first`
+- Do not force same-session continuation when backend policy is `fresh_resume_first`
 
 ## Completion Gate
 
 Before telling the user a delegated task is done, confirm:
 
-- `doctor` was healthy at dispatch time
-- the task reached a real terminal or committed state in code/repo reality
-- the relevant evidence or verification was actually reviewed
-- no pending task is left hanging in the bridge for the same worktree
+- dispatch health was good
+- the task reached a real terminal or committed state in repo reality
+- the evidence was actually reviewed
+- no pending task is left hanging for the same worktree
