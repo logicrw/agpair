@@ -6,27 +6,49 @@
 
 [中文说明](README.zh-CN.md) | [新手教程](docs/getting-started-zh.md) | [中文命令参考](docs/usage.zh-CN.md)
 
-**agpair** is a lightweight CLI that gives AI coding agents a unified task lifecycle layer for supported executors — currently [Antigravity](https://antigravity.google/) and the local Codex CLI — so you can dispatch coding tasks, track their progress, and review results without leaving the conversation.
+**agpair** is a lightweight task-lifecycle layer for AI coding workflows that need to run for minutes or hours, not just one quick handoff. It lets a controller agent (for example Claude Code or Codex Desktop) break work into tasks, send those tasks to supported executors — currently [Antigravity](https://antigravity.google/) and the local Codex CLI — and keep making structured decisions as results come back.
 
 Works with [Codex](https://openai.com/codex) (CLI & Desktop), [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and any tool that can run shell commands.
 
 ## Why agpair?
 
-When you use an AI coding agent + Antigravity together, there is a mechanical gap between "I told my agent what to do" and "Antigravity finished executing it." That gap includes:
+Many tools are great at **one-shot delegation**:
 
-- dispatching the task over `agent-bus`
-- tracking which task maps to which executor session
-- collecting receipts (`ACK`, `EVIDENCE_PACK`, `BLOCKED`, `COMMITTED`)
-- detecting stuck tasks
-- providing a clean continue / approve / reject / retry flow
+- send one prompt
+- wait for one result
+- maybe inspect or cancel it
 
-**agpair fills that gap.** It is a tool belt for your AI agent — and a manual fallback for you when you need direct control.
+That is enough for a quick rescue, quick review, or one-off patch. It is **not** enough for the workflow many serious codebases actually need:
+
+1. write a plan or project spec
+2. split it into multiple tasks
+3. dispatch those tasks one by one, or in parallel across isolated worktrees
+4. watch progress over time
+5. decide what to do next based on structured results
+6. recover when a task stalls, blocks, or needs a fresh resume
+
+That is the gap `agpair` fills.
+
+`agpair` is useful when you want:
+
+- **persistent task state** instead of relying on chat context alone
+- **structured receipts** (`ACK`, `EVIDENCE_PACK`, `BLOCKED`, `COMMITTED`) instead of guessing from free text
+- **controller semantics** like `continue / approve / reject / retry`
+- **watchdog and health checks** for long-running work
+- **executor flexibility** so the same control plane can drive Antigravity today and Codex CLI tomorrow
+
+In other words:
+
+- a plugin is often the best tool for **“send one task to Codex quickly”**
+- `agpair` is the better tool for **“run a multi-step engineering workflow without losing the plot”**
+
+**agpair does not replace your AI agent.** It gives your AI agent a durable control plane.
 
 ### What agpair is *not*
 
-- Not a semantic controller — your AI agent stays in charge of decisions.
-- Not a fully autonomous reviewer — you (or your AI agent) choose the next action.
-- Not a zero-dependency runtime — it still depends on `agent-bus`, Antigravity itself, and the bundled companion extension.
+- Not a semantic controller — your AI agent stays in charge of planning and decisions.
+- Not a “just type one slash command” UX layer — it is closer to infrastructure than a thin plugin.
+- Not a zero-dependency runtime — it still depends on `agent-bus`, supported executors, and the bundled companion extension where applicable.
 
 ## Prerequisites
 

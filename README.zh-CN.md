@@ -6,27 +6,52 @@
 
 [English](README.md) | 中文
 
-**agpair** 是一个轻量级工具，为 AI 编程工具提供统一的任务生命周期控制层，目前支持 [Antigravity](https://antigravity.google/) 与本地 Codex CLI 两类 executor——让你在对话中就能发任务、跟踪进度、审核结果。
+**agpair** 是一个轻量级的任务生命周期控制层，适合那种会持续运行几分钟到几小时、需要反复决策推进的 AI 编程工作流。它让主控 AI（比如 Claude Code 或 Codex Desktop）先拆任务，再把任务派给受支持的 executor——目前包括 [Antigravity](https://antigravity.google/) 和本地 Codex CLI——并在结果回来后继续做结构化决策。
 
 支持 [Codex](https://openai.com/codex)（CLI 和 Desktop）、[Claude Code](https://docs.anthropic.com/en/docs/claude-code)，以及任何能跑终端命令的工具。
 
 ## 为什么需要 agpair？
 
-当你同时使用 AI 编程工具 + Antigravity 时，"我告诉 AI 工具该做什么"到"Antigravity 执行完毕"之间有一段机械链路需要处理：
+很多工具很擅长做**一次性委托**：
 
-- 通过 `agent-bus` 发任务
-- 跟踪 task 和 executor session 的映射
-- 接收回执（`ACK`、`EVIDENCE_PACK`、`BLOCKED`、`COMMITTED`）
-- 检测卡住的任务
-- 提供 continue / approve / reject / retry 流程
+- 把一个 prompt 发出去
+- 等一个结果回来
+- 最多再看一下状态或取消它
 
-**agpair 填补了这段空白。** 它是 AI 工具的工具箱——也是你需要直接控制时的手动操作台。
+这很适合快速 rescue、快速 review、一次性小改动。  
+但它不适合下面这种更接近真实工程节奏的工作流：
+
+1. 先写一份方案或项目文档
+2. 拆成多个任务
+3. 把任务一个个派出去，或者在不同 worktree 中并行派发
+4. 持续观察任务进度
+5. 基于结构化结果决定下一步
+6. 遇到卡住、阻塞、需要 fresh resume 时继续推进，而不是丢状态
+
+`agpair` 补的就是这块。
+
+你可以把它理解成：
+
+- **持久化的任务状态层**
+- **结构化 receipt 层**
+- **continue / approve / reject / retry 的控制层**
+- **watchdog / doctor / watch 的运行时控制面**
+
+所以更准确地说：
+
+- 如果你只是想**快速把一个任务甩给 Codex**
+  - 插件往往更直接
+- 如果你想跑的是**长时间、多任务、可恢复、可编排**的工程工作流
+  - `agpair` 更合适
+
+**agpair 不是替代你的 AI。**  
+它是给你的 AI 一个可持续运行的控制面。
 
 ### agpair *不是*什么
 
-- 不是语义控制器——语义决策由你的 AI 工具负责。
-- 不是完全自动的 reviewer——你（或你的 AI 工具）来选择下一步。
-- 不是零依赖 runtime——它仍然依赖 `agent-bus`、Antigravity 本体，以及仓库内自带的 companion 扩展。
+- 不是语义控制器——语义规划和决策仍由你的 AI 工具负责。
+- 不是“一个 slash 命令就完事”的超轻插件——它更接近基础设施/控制面。
+- 不是零依赖 runtime——它仍然依赖 `agent-bus`、受支持的 executor，以及适用时的 companion 扩展。
 
 ## 前置条件
 
