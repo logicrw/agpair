@@ -81,6 +81,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "isolated_worktree" not in task_cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN isolated_worktree INTEGER NOT NULL DEFAULT 0")
         conn.commit()
+    # Migration 9: add setup_commands and teardown_commands
+    if "setup_commands" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN setup_commands TEXT")
+        conn.commit()
+    if "teardown_commands" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN teardown_commands TEXT")
+        conn.commit()
 
 
 def _configure_connection(conn: sqlite3.Connection) -> None:

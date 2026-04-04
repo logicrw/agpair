@@ -115,6 +115,8 @@ def inspect(
                 "retry_recommended": task_payload["retry_recommended"],
                 "last_heartbeat_at": task_payload["last_heartbeat_at"],
                 "last_workspace_activity_at": task_payload["last_workspace_activity_at"],
+                "setup_commands": task_payload["setup_commands"],
+                "teardown_commands": task_payload["teardown_commands"],
             }
             if task_payload.get("terminal_receipt"):
                 task_dict["latest_receipt_summary"] = task_payload["terminal_receipt"].get("summary")

@@ -206,6 +206,8 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "last_workspace_activity_at": task.last_workspace_activity_at,
         "depends_on": json.loads(task.depends_on) if task.depends_on else None,
         "isolated_worktree": task.isolated_worktree,
+        "setup_commands": json.loads(task.setup_commands) if task.setup_commands else None,
+        "teardown_commands": json.loads(task.teardown_commands) if task.teardown_commands else None,
         "liveness_state": liveness.value if liveness is not None else None,
         "waiter": _waiter_payload(waiter),
         "terminal_receipt": terminal_receipt,
@@ -392,6 +394,8 @@ def start_task(
     executor: str | None = typer.Option(None, "--executor", help="Executor backend to run the task (antigravity, codex, or gemini)."),
     depends_on: str | None = typer.Option(None, "--depends-on", help="JSON array of task IDs this task depends on."),
     isolated_worktree: bool = typer.Option(False, "--isolated-worktree", help="Whether the task requires a parallel-safe isolated worktree."),
+    setup_commands: str | None = typer.Option(None, "--setup-commands", help="JSON array of setup commands to run before the task."),
+    teardown_commands: str | None = typer.Option(None, "--teardown-commands", help="JSON array of teardown commands to run after the task."),
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
@@ -450,6 +454,8 @@ def start_task(
             executor_backend=backend_to_store,
             depends_on=depends_on,
             isolated_worktree=isolated_worktree,
+            setup_commands=setup_commands,
+            teardown_commands=teardown_commands,
         )
     except sqlite3.IntegrityError:
         if not idempotency_key:
@@ -540,6 +546,8 @@ def task_status(
     typer.echo(f"last_workspace_activity_at: {payload['last_workspace_activity_at']}")
     typer.echo(f"depends_on: {json.dumps(payload['depends_on'])}")
     typer.echo(f"isolated_worktree: {payload['isolated_worktree']}")
+    typer.echo(f"setup_commands: {json.dumps(payload['setup_commands'])}")
+    typer.echo(f"teardown_commands: {json.dumps(payload['teardown_commands'])}")
     if payload["liveness_state"] is not None:
         typer.echo(f"liveness_state: {payload['liveness_state']}")
     terminal_receipt = payload["terminal_receipt"]

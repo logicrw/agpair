@@ -1060,3 +1060,32 @@ def test_task_start_accepts_valid_brief(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
 
 
+
+def test_task_start_persists_setup_and_teardown_hooks(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "task", "start",
+            "--repo-path", "/tmp/repo",
+            "--body", "Goal: test hooks\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--task-id", "TASK-HOOKS-1",
+            "--setup-commands", "[\"echo setup\"]",
+            "--teardown-commands", "[\"echo teardown\"]",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 0
+    
+    status_result = runner.invoke(app, ["task", "status", "TASK-HOOKS-1", "--json"])
+    assert status_result.exit_code == 0
+    payload = json.loads(status_result.stdout)
+    assert payload["setup_commands"] == ["echo setup"]
+    assert payload["teardown_commands"] == ["echo teardown"]

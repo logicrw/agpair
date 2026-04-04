@@ -38,6 +38,8 @@ class TaskRecord:
     executor_backend: str | None = None
     depends_on: str | None = None
     isolated_worktree: bool = False
+    setup_commands: str | None = None
+    teardown_commands: str | None = None
 
 
 @dataclass(frozen=True)
