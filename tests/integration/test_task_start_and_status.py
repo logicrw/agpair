@@ -971,3 +971,38 @@ def test_legacy_rows_without_executor_field_remain_readable(tmp_path: Path, monk
     assert status.exit_code == 0
     payload = json.loads(status.stdout)
     assert payload["active_executor_backend"] == "antigravity"
+
+
+def test_task_start_persists_dependencies_and_isolation(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "task", "start",
+            "--repo-path", "/tmp/repo",
+            "--body", "Goal: test config",
+            "--task-id", "TASK-DEPS-1",
+            "--depends-on", '["TASK-0"]',
+            "--isolated-worktree",
+            "--no-wait",
+        ]
+    )
+
+    assert result.exit_code == 0
+
+    task = make_task_repo(tmp_path).get_task("TASK-DEPS-1")
+    assert task is not None
+    assert task.depends_on == '["TASK-0"]'
+    assert task.isolated_worktree is True
+
+    status = runner.invoke(app, ["task", "status", "TASK-DEPS-1", "--json"])
+    assert status.exit_code == 0
+    payload = json.loads(status.stdout)
+    assert payload["depends_on"] == ["TASK-0"]
+    assert payload["isolated_worktree"] is True

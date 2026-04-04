@@ -74,6 +74,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "executor_backend" not in task_cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN executor_backend TEXT")
         conn.commit()
+    # Migration 8: add depends_on and isolated_worktree
+    if "depends_on" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN depends_on TEXT")
+        conn.commit()
+    if "isolated_worktree" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN isolated_worktree INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
 
 
 def _configure_connection(conn: sqlite3.Connection) -> None:

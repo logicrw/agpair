@@ -29,6 +29,8 @@ class TaskRecord:
     last_workspace_activity_at: str | None = None
     client_idempotency_key: str | None = None
     executor_backend: str | None = None
+    depends_on: str | None = None
+    isolated_worktree: bool = False
 
 
 @dataclass(frozen=True)

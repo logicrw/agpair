@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   last_heartbeat_at TEXT,
   last_workspace_activity_at TEXT,
   client_idempotency_key TEXT,
-  executor_backend TEXT
+  executor_backend TEXT,
+  depends_on TEXT,
+  isolated_worktree INTEGER NOT NULL DEFAULT 0
 );
 -- NOTE: uq_tasks_repo_idempotency index on (repo_path, client_idempotency_key)
 -- is created by _migrate_schema() in db.py to support both fresh and migrated databases.

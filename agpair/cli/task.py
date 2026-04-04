@@ -192,6 +192,8 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "stuck_reason": task.stuck_reason,
         "last_heartbeat_at": task.last_heartbeat_at,
         "last_workspace_activity_at": task.last_workspace_activity_at,
+        "depends_on": json.loads(task.depends_on) if task.depends_on else None,
+        "isolated_worktree": task.isolated_worktree,
         "liveness_state": liveness.value if liveness is not None else None,
         "waiter": _waiter_payload(waiter),
         "terminal_receipt": terminal_receipt,
@@ -357,6 +359,8 @@ def start_task(
     task_id: str | None = typer.Option(None, "--task-id"),
     idempotency_key: str | None = typer.Option(None, "--idempotency-key"),
     executor: str | None = typer.Option(None, "--executor", help="Executor backend to run the task (antigravity, codex, or gemini)."),
+    depends_on: str | None = typer.Option(None, "--depends-on", help="JSON array of task IDs this task depends on."),
+    isolated_worktree: bool = typer.Option(False, "--isolated-worktree", help="Whether the task requires a parallel-safe isolated worktree."),
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
@@ -411,6 +415,8 @@ def start_task(
             repo_path=resolved_repo_path,
             client_idempotency_key=idempotency_key,
             executor_backend=backend_to_store,
+            depends_on=depends_on,
+            isolated_worktree=isolated_worktree,
         )
     except sqlite3.IntegrityError:
         if not idempotency_key:
@@ -497,6 +503,8 @@ def task_status(
     typer.echo(f"stuck_reason: {payload['stuck_reason']}")
     typer.echo(f"last_heartbeat_at: {payload['last_heartbeat_at']}")
     typer.echo(f"last_workspace_activity_at: {payload['last_workspace_activity_at']}")
+    typer.echo(f"depends_on: {json.dumps(payload['depends_on'])}")
+    typer.echo(f"isolated_worktree: {payload['isolated_worktree']}")
     if payload["liveness_state"] is not None:
         typer.echo(f"liveness_state: {payload['liveness_state']}")
     terminal_receipt = payload["terminal_receipt"]

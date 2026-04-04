@@ -39,7 +39,7 @@ class TaskRepository:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
 
-    def create_task(self, *, task_id: str, repo_path: str, client_idempotency_key: str | None = None, executor_backend: str | None = None) -> None:
+    def create_task(self, *, task_id: str, repo_path: str, client_idempotency_key: str | None = None, executor_backend: str | None = None, depends_on: str | None = None, isolated_worktree: bool = False) -> None:
         now = utcnow_iso()
         with connect(self.db_path) as conn:
             conn.execute(
@@ -47,10 +47,11 @@ class TaskRepository:
                 INSERT INTO tasks (
                   task_id, repo_path, phase, antigravity_session_id, attempt_no, retry_count,
                   last_receipt_id, stuck_reason, retry_recommended, last_activity_at, created_at, updated_at,
-                  last_heartbeat_at, last_workspace_activity_at, client_idempotency_key, executor_backend
-                ) VALUES (?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?)
+                  last_heartbeat_at, last_workspace_activity_at, client_idempotency_key, executor_backend,
+                  depends_on, isolated_worktree
+                ) VALUES (?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
                 """,
-                (task_id, repo_path, now, now, now, client_idempotency_key, executor_backend),
+                (task_id, repo_path, now, now, now, client_idempotency_key, executor_backend, depends_on, 1 if isolated_worktree else 0),
             )
             conn.commit()
 
@@ -397,6 +398,14 @@ class TaskRepository:
             executor_backend = row["executor_backend"]
         except (IndexError, KeyError):
             executor_backend = None
+        try:
+            depends_on = row["depends_on"]
+        except (IndexError, KeyError):
+            depends_on = None
+        try:
+            isolated_worktree = bool(row["isolated_worktree"])
+        except (IndexError, KeyError):
+            isolated_worktree = False
         return TaskRecord(
             task_id=row["task_id"],
             repo_path=row["repo_path"],
@@ -414,4 +423,6 @@ class TaskRepository:
             last_workspace_activity_at=ws_activity,
             client_idempotency_key=idempotency_key,
             executor_backend=executor_backend,
+            depends_on=depends_on,
+            isolated_worktree=isolated_worktree,
         )
