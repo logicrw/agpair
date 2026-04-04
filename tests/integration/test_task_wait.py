@@ -542,7 +542,7 @@ def test_task_start_no_wait_returns_immediately(tmp_path: Path, monkeypatch):
         [
             "task", "start",
             "--repo-path", "/tmp/repo",
-            "--body", "Goal: test",
+            "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "T-NW1",
             "--no-wait",
         ],
@@ -591,7 +591,7 @@ def test_task_start_auto_wait_exits_0_when_terminal(tmp_path: Path, monkeypatch)
         [
             "task", "start",
             "--repo-path", "/tmp/repo",
-            "--body", "Goal: test",
+            "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "T-AW1",
             "--interval-seconds", "0.01",
             "--timeout-seconds", "5",
@@ -816,7 +816,7 @@ def test_auto_wait_exits_1_on_watchdog(tmp_path: Path, monkeypatch):
         [
             "task", "start",
             "--repo-path", "/tmp/repo",
-            "--body", "Goal: test",
+            "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "T-AWD1",
             "--interval-seconds", "0.01",
             "--timeout-seconds", "5",

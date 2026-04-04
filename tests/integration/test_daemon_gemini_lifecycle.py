@@ -10,6 +10,8 @@ from agpair.storage.db import ensure_database
 from agpair.storage.tasks import TaskRepository
 from typer.testing import CliRunner
 
+VALID_BRIEF = "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test"
+
 def write_fake_gemini_bin(tmp_path: pathlib.Path) -> pathlib.Path:
     bin_path = tmp_path / "fake-gemini"
     # A script that ignores arguments, simulates typing some json,
@@ -71,7 +73,7 @@ def test_gemini_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
         "--repo-path", str(tmp_path),
         "--task-id", "TASK-GEMINI-TEST",
         "--executor", "gemini",
-        "--body", "test body",
+        "--body", VALID_BRIEF,
         "--no-wait",
     ])
     assert result.exit_code == 0
@@ -171,7 +173,7 @@ def test_gemini_lifecycle_failure(tmp_path: pathlib.Path, monkeypatch) -> None:
     runner = CliRunner()
     result = runner.invoke(app, [
         "start", "--repo-path", str(tmp_path), "--task-id", "TASK-GEMINI-FAIL",
-        "--executor", "gemini", "--body", "test bad", "--no-wait",
+        "--executor", "gemini", "--body", VALID_BRIEF, "--no-wait",
     ])
     assert result.exit_code == 0
     
@@ -233,7 +235,7 @@ def test_gemini_evidence_ready_not_repolled(tmp_path: pathlib.Path, monkeypatch)
     runner = CliRunner()
     result = runner.invoke(app, [
         "start", "--repo-path", str(tmp_path), "--task-id", "TASK-GEMINI-NR",
-        "--executor", "gemini", "--body", "test no-repoll", "--no-wait",
+        "--executor", "gemini", "--body", VALID_BRIEF, "--no-wait",
     ])
     assert result.exit_code == 0
 
@@ -285,7 +287,7 @@ def test_gemini_receipt_carries_real_attempt_no(tmp_path: pathlib.Path, monkeypa
     runner = CliRunner()
     result = runner.invoke(app, [
         "start", "--repo-path", str(tmp_path), "--task-id", "TASK-GEMINI-ATT",
-        "--executor", "gemini", "--body", "test attempt", "--no-wait",
+        "--executor", "gemini", "--body", VALID_BRIEF, "--no-wait",
     ])
     assert result.exit_code == 0
 
@@ -314,4 +316,3 @@ def test_gemini_receipt_carries_real_attempt_no(tmp_path: pathlib.Path, monkeypa
             break
     else:
         raise AssertionError("evidence_ready journal entry not found")
-

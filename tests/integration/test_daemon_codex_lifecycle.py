@@ -10,6 +10,8 @@ from agpair.storage.db import ensure_database
 from agpair.storage.tasks import TaskRepository
 from typer.testing import CliRunner
 
+VALID_BRIEF = "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test"
+
 def write_fake_codex_bin(tmp_path: pathlib.Path) -> pathlib.Path:
     bin_path = tmp_path / "fake-codex"
     # A script that ignores arguments, simulates typing some json,
@@ -71,7 +73,7 @@ def test_codex_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
         "--repo-path", str(tmp_path),
         "--task-id", "TASK-CODEX-TEST",
         "--executor", "codex",
-        "--body", "test body",
+        "--body", VALID_BRIEF,
         "--no-wait",
     ])
     assert result.exit_code == 0
@@ -171,7 +173,7 @@ def test_codex_lifecycle_failure(tmp_path: pathlib.Path, monkeypatch) -> None:
     runner = CliRunner()
     result = runner.invoke(app, [
         "start", "--repo-path", str(tmp_path), "--task-id", "TASK-CODEX-FAIL",
-        "--executor", "codex", "--body", "test bad", "--no-wait",
+        "--executor", "codex", "--body", VALID_BRIEF, "--no-wait",
     ])
     assert result.exit_code == 0
     
@@ -233,7 +235,7 @@ def test_codex_evidence_ready_not_repolled(tmp_path: pathlib.Path, monkeypatch) 
     runner = CliRunner()
     result = runner.invoke(app, [
         "start", "--repo-path", str(tmp_path), "--task-id", "TASK-CODEX-NR",
-        "--executor", "codex", "--body", "test no-repoll", "--no-wait",
+        "--executor", "codex", "--body", VALID_BRIEF, "--no-wait",
     ])
     assert result.exit_code == 0
 
@@ -285,7 +287,7 @@ def test_codex_receipt_carries_real_attempt_no(tmp_path: pathlib.Path, monkeypat
     runner = CliRunner()
     result = runner.invoke(app, [
         "start", "--repo-path", str(tmp_path), "--task-id", "TASK-CODEX-ATT",
-        "--executor", "codex", "--body", "test attempt", "--no-wait",
+        "--executor", "codex", "--body", VALID_BRIEF, "--no-wait",
     ])
     assert result.exit_code == 0
 
@@ -314,4 +316,3 @@ def test_codex_receipt_carries_real_attempt_no(tmp_path: pathlib.Path, monkeypat
             break
     else:
         raise AssertionError("evidence_ready journal entry not found")
-
