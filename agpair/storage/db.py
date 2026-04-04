@@ -88,6 +88,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "teardown_commands" not in task_cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN teardown_commands TEXT")
         conn.commit()
+    # Migration 10: add env_vars
+    if "env_vars" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN env_vars TEXT")
+        conn.commit()
 
 
 def _configure_connection(conn: sqlite3.Connection) -> None:

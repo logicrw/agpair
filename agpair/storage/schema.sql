@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   depends_on TEXT,
   isolated_worktree INTEGER NOT NULL DEFAULT 0,
   setup_commands TEXT,
-  teardown_commands TEXT
+  teardown_commands TEXT,
+  env_vars TEXT
 );
 -- NOTE: uq_tasks_repo_idempotency index on (repo_path, client_idempotency_key)
 -- is created by _migrate_schema() in db.py to support both fresh and migrated databases.

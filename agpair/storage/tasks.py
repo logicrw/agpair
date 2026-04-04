@@ -39,7 +39,7 @@ class TaskRepository:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
 
-    def create_task(self, *, task_id: str, repo_path: str, client_idempotency_key: str | None = None, executor_backend: str | None = None, depends_on: str | None = None, isolated_worktree: bool = False, setup_commands: str | None = None, teardown_commands: str | None = None) -> None:
+    def create_task(self, *, task_id: str, repo_path: str, client_idempotency_key: str | None = None, executor_backend: str | None = None, depends_on: str | None = None, isolated_worktree: bool = False, setup_commands: str | None = None, teardown_commands: str | None = None, env_vars: str | None = None) -> None:
         now = utcnow_iso()
         with connect(self.db_path) as conn:
             conn.execute(
@@ -48,10 +48,10 @@ class TaskRepository:
                   task_id, repo_path, phase, antigravity_session_id, attempt_no, retry_count,
                   last_receipt_id, stuck_reason, retry_recommended, last_activity_at, created_at, updated_at,
                   last_heartbeat_at, last_workspace_activity_at, client_idempotency_key, executor_backend,
-                  depends_on, isolated_worktree, setup_commands, teardown_commands
-                ) VALUES (?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
+                  depends_on, isolated_worktree, setup_commands, teardown_commands, env_vars
+                ) VALUES (?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (task_id, repo_path, now, now, now, client_idempotency_key, executor_backend, depends_on, 1 if isolated_worktree else 0, setup_commands, teardown_commands),
+                (task_id, repo_path, now, now, now, client_idempotency_key, executor_backend, depends_on, 1 if isolated_worktree else 0, setup_commands, teardown_commands, env_vars),
             )
             conn.commit()
 
@@ -414,6 +414,10 @@ class TaskRepository:
             teardown_commands = row["teardown_commands"]
         except (IndexError, KeyError):
             teardown_commands = None
+        try:
+            env_vars = row["env_vars"]
+        except (IndexError, KeyError):
+            env_vars = None
         return TaskRecord(
             task_id=row["task_id"],
             repo_path=row["repo_path"],
@@ -435,4 +439,5 @@ class TaskRepository:
             isolated_worktree=isolated_worktree,
             setup_commands=setup_commands,
             teardown_commands=teardown_commands,
+            env_vars=env_vars,
         )

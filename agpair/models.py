@@ -40,6 +40,7 @@ class TaskRecord:
     isolated_worktree: bool = False
     setup_commands: str | None = None
     teardown_commands: str | None = None
+    env_vars: str | None = None
 
 
 @dataclass(frozen=True)

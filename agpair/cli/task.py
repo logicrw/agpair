@@ -208,6 +208,7 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "isolated_worktree": task.isolated_worktree,
         "setup_commands": json.loads(task.setup_commands) if task.setup_commands else None,
         "teardown_commands": json.loads(task.teardown_commands) if task.teardown_commands else None,
+        "env_vars": json.loads(task.env_vars) if task.env_vars else None,
         "liveness_state": liveness.value if liveness is not None else None,
         "waiter": _waiter_payload(waiter),
         "terminal_receipt": terminal_receipt,
@@ -396,6 +397,7 @@ def start_task(
     isolated_worktree: bool = typer.Option(False, "--isolated-worktree", help="Whether the task requires a parallel-safe isolated worktree."),
     setup_commands: str | None = typer.Option(None, "--setup-commands", help="JSON array of setup commands to run before the task."),
     teardown_commands: str | None = typer.Option(None, "--teardown-commands", help="JSON array of teardown commands to run after the task."),
+    env_vars: str | None = typer.Option(None, "--env-vars", help="JSON object of environment overrides (e.g. PORT) for this task's worktree."),
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
@@ -456,6 +458,7 @@ def start_task(
             isolated_worktree=isolated_worktree,
             setup_commands=setup_commands,
             teardown_commands=teardown_commands,
+            env_vars=env_vars,
         )
     except sqlite3.IntegrityError:
         if not idempotency_key:
@@ -548,6 +551,7 @@ def task_status(
     typer.echo(f"isolated_worktree: {payload['isolated_worktree']}")
     typer.echo(f"setup_commands: {json.dumps(payload['setup_commands'])}")
     typer.echo(f"teardown_commands: {json.dumps(payload['teardown_commands'])}")
+    typer.echo(f"env_vars: {json.dumps(payload['env_vars'])}")
     if payload["liveness_state"] is not None:
         typer.echo(f"liveness_state: {payload['liveness_state']}")
     terminal_receipt = payload["terminal_receipt"]
