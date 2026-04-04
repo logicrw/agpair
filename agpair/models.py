@@ -42,6 +42,7 @@ class TaskRecord:
     teardown_commands: str | None = None
     env_vars: str | None = None
     worktree_boundary: str | None = None
+    spotlight_testing: bool = False
 
 
 @dataclass(frozen=True)

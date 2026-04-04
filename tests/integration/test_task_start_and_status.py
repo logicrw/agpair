@@ -1146,3 +1146,83 @@ def test_task_start_persists_and_surfaces_worktree_boundary(tmp_path: Path, monk
     payload = json.loads(status_result.stdout)
     assert payload["worktree_boundary"] == "/tmp/repo/my-feature-worktree"
 
+
+def test_task_start_spotlight_testing_defaults_to_false(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "task", "start",
+            "--repo-path", "/tmp/repo",
+            "--body", "Goal: test defaults\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--task-id", "TASK-SPOT-DEFAULT",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    status_result = runner.invoke(app, ["task", "status", "TASK-SPOT-DEFAULT", "--json"])
+    assert status_result.exit_code == 0
+    payload = json.loads(status_result.stdout)
+    assert payload["spotlight_testing"] is False
+
+
+def test_task_start_persists_and_surfaces_spotlight_testing(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "task", "start",
+            "--repo-path", "/tmp/repo",
+            "--body", "Goal: test spotlight\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--task-id", "TASK-SPOT-1",
+            "--spotlight-testing",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 0
+
+    # Verify JSON output
+    status_result = runner.invoke(app, ["task", "status", "TASK-SPOT-1", "--json"])
+    assert status_result.exit_code == 0
+    payload = json.loads(status_result.stdout)
+    assert payload["spotlight_testing"] is True
+
+    # Verify human-readable output
+    status_human = runner.invoke(app, ["task", "status", "TASK-SPOT-1"])
+    assert status_human.exit_code == 0
+    assert "spotlight_testing: True" in status_human.stdout
+
+
+def test_task_repository_spotlight_testing_roundtrip(tmp_path: Path) -> None:
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-SPOT-RT-1", repo_path="/tmp/repo", spotlight_testing=True)
+    task = repo.get_task("TASK-SPOT-RT-1")
+    assert task is not None
+    assert task.spotlight_testing is True
+
+    repo.create_task(task_id="TASK-SPOT-RT-2", repo_path="/tmp/repo", spotlight_testing=False)
+    task2 = repo.get_task("TASK-SPOT-RT-2")
+    assert task2 is not None
+    assert task2.spotlight_testing is False
+
+    # Default should be False
+    repo.create_task(task_id="TASK-SPOT-RT-3", repo_path="/tmp/repo")
+    task3 = repo.get_task("TASK-SPOT-RT-3")
+    assert task3 is not None
+    assert task3.spotlight_testing is False
+

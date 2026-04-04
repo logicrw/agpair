@@ -39,7 +39,7 @@ class TaskRepository:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
 
-    def create_task(self, *, task_id: str, repo_path: str, client_idempotency_key: str | None = None, executor_backend: str | None = None, depends_on: str | None = None, isolated_worktree: bool = False, setup_commands: str | None = None, teardown_commands: str | None = None, env_vars: str | None = None, worktree_boundary: str | None = None) -> None:
+    def create_task(self, *, task_id: str, repo_path: str, client_idempotency_key: str | None = None, executor_backend: str | None = None, depends_on: str | None = None, isolated_worktree: bool = False, setup_commands: str | None = None, teardown_commands: str | None = None, env_vars: str | None = None, worktree_boundary: str | None = None, spotlight_testing: bool = False) -> None:
         now = utcnow_iso()
         with connect(self.db_path) as conn:
             conn.execute(
@@ -48,10 +48,11 @@ class TaskRepository:
                   task_id, repo_path, phase, antigravity_session_id, attempt_no, retry_count,
                   last_receipt_id, stuck_reason, retry_recommended, last_activity_at, created_at, updated_at,
                   last_heartbeat_at, last_workspace_activity_at, client_idempotency_key, executor_backend,
-                  depends_on, isolated_worktree, setup_commands, teardown_commands, env_vars, worktree_boundary
-                ) VALUES (?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+                  depends_on, isolated_worktree, setup_commands, teardown_commands, env_vars, worktree_boundary,
+                  spotlight_testing
+                ) VALUES (?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (task_id, repo_path, now, now, now, client_idempotency_key, executor_backend, depends_on, 1 if isolated_worktree else 0, setup_commands, teardown_commands, env_vars, worktree_boundary),
+                (task_id, repo_path, now, now, now, client_idempotency_key, executor_backend, depends_on, 1 if isolated_worktree else 0, setup_commands, teardown_commands, env_vars, worktree_boundary, 1 if spotlight_testing else 0),
             )
             conn.commit()
 
@@ -422,6 +423,10 @@ class TaskRepository:
             worktree_boundary = row["worktree_boundary"]
         except (IndexError, KeyError):
             worktree_boundary = None
+        try:
+            spotlight_testing = bool(row["spotlight_testing"])
+        except (IndexError, KeyError):
+            spotlight_testing = False
         return TaskRecord(
             task_id=row["task_id"],
             repo_path=row["repo_path"],
@@ -445,4 +450,5 @@ class TaskRepository:
             teardown_commands=teardown_commands,
             env_vars=env_vars,
             worktree_boundary=worktree_boundary,
+            spotlight_testing=spotlight_testing,
         )

@@ -216,7 +216,7 @@ What already works:
 - `doctor` preflight checks (local health, desktop conflicts, bridge health, concurrency policy/pending tasks)
 - Structured terminal receipts (v1) and JSON CLI output with A2A state hints
 - Task start idempotency keys and structured committed result/failure context
-- Minimal persistent task dependency, concurrency, and setup/teardown hook metadata for controller execution planning
+- Minimal persistent task dependency, concurrency, setup/teardown hook metadata, and localized spotlight testing hints for controller execution planning
 - Internal `ExecutorAdapter` abstraction extended to expose a stable `backend_id` (`antigravity` / `codex_cli` / `gemini_cli`), now visible in read-only info (e.g., `task status --json` and `doctor`) for transparency.
 - `task start --executor codex` and `task start --executor gemini` as first-class entry points, with both CLI-backed executors now flowing through dispatch / poll / canonical terminal receipt synthesis
 - Added formal Continuation Capability Matrix to encode policy for backends (e.g., `same_session` for Antigravity, `fresh_resume_first` for Codex CLI, and conservative/limited continuation for Gemini), visible in `task status --json`.

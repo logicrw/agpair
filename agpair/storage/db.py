@@ -96,6 +96,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "worktree_boundary" not in task_cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN worktree_boundary TEXT")
         conn.commit()
+    # Migration 12: add spotlight_testing
+    if "spotlight_testing" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN spotlight_testing INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
 
 
 def _configure_connection(conn: sqlite3.Connection) -> None:
