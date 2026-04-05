@@ -1,0 +1,178 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+import json
+
+from agpair.config import AppPaths
+from agpair.storage.db import ensure_database
+from agpair.storage.journal import JournalRepository
+from agpair.storage.tasks import TaskRepository
+
+
+class FakePullBus:
+    def __init__(self, receipts: list[dict]) -> None:
+        self._receipts = receipts
+        self.sent_messages: list[tuple[str, tuple, dict]] = []
+
+    def pull_receipts(self, *, task_id: str | None = None, limit: int = 20) -> list[dict]:
+        return list(self._receipts)
+
+    def send_task(self, *args, **kwargs):
+        self.sent_messages.append(("send_task", args, kwargs))
+
+    def send_review(self, *args, **kwargs):
+        self.sent_messages.append(("send_review", args, kwargs))
+
+    def send_approved(self, *args, **kwargs):
+        self.sent_messages.append(("send_approved", args, kwargs))
+
+
+def make_paths(tmp_path: Path) -> AppPaths:
+    return AppPaths.from_root(tmp_path / ".agpair")
+
+
+def seed_task(tmp_path: Path, task_id: str = "TASK-1", completion_policy: str = "direct_commit") -> AppPaths:
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    TaskRepository(paths.db_path).create_task(
+        task_id=task_id, 
+        repo_path=str(tmp_path / "repo"), 
+        completion_policy=completion_policy
+    )
+    return paths
+
+
+def test_direct_commit_policy_rejects_evidence_pack(tmp_path: Path) -> None:
+    from agpair.daemon.loop import run_once
+
+    paths = seed_task(tmp_path, completion_policy="direct_commit")
+    repo = TaskRepository(paths.db_path)
+    repo.mark_acked(task_id="TASK-1", session_id="session-123")
+    
+    bus = FakePullBus(
+        [
+            {
+                "id": 1,
+                "task_id": "TASK-1",
+                "status": "EVIDENCE_PACK",
+                "body": "{}",
+            }
+        ]
+    )
+
+    run_once(paths, now=datetime(2026, 3, 21, 12, 0, tzinfo=UTC), bus=bus)
+
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.phase == "acked"
+    
+    rows = JournalRepository(paths.db_path).tail("TASK-1", limit=1)
+    assert rows[0].event == "policy_rejection"
+    assert "EVIDENCE_PACK not permitted" in rows[0].body
+
+
+def test_review_then_commit_policy_rejects_committed_before_approval(tmp_path: Path) -> None:
+    from agpair.daemon.loop import run_once
+
+    paths = seed_task(tmp_path, completion_policy="review_then_commit")
+    repo = TaskRepository(paths.db_path)
+    repo.mark_acked(task_id="TASK-1", session_id="session-123")
+    
+    bus = FakePullBus(
+        [
+            {
+                "id": 1,
+                "task_id": "TASK-1",
+                "status": "COMMITTED",
+                "body": "{}",
+            }
+        ]
+    )
+
+    run_once(paths, now=datetime(2026, 3, 21, 12, 0, tzinfo=UTC), bus=bus)
+
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.phase == "acked"
+    
+    rows = JournalRepository(paths.db_path).tail("TASK-1", limit=1)
+    assert rows[0].event == "policy_rejection"
+    assert "COMMITTED not permitted" in rows[0].body
+
+
+def test_review_then_commit_policy_allows_evidence_pack_and_then_commit_after_approval(tmp_path: Path) -> None:
+    from agpair.daemon.loop import run_once
+
+    paths = seed_task(tmp_path, completion_policy="review_then_commit")
+    repo = TaskRepository(paths.db_path)
+    repo.mark_acked(task_id="TASK-1", session_id="session-123")
+    
+    bus = FakePullBus(
+        [
+            {
+                "id": 1,
+                "task_id": "TASK-1",
+                "status": "EVIDENCE_PACK",
+                "body": "{}",
+            }
+        ]
+    )
+
+    run_once(paths, now=datetime(2026, 3, 21, 12, 0, tzinfo=UTC), bus=bus)
+
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.phase == "evidence_ready"
+
+    # Now approve it
+    bus2 = FakePullBus(
+        [
+            {
+                "id": 2,
+                "task_id": "TASK-1",
+                "status": "APPROVE_ACK",
+                "body": "{}",
+            }
+        ]
+    )
+    run_once(paths, now=datetime(2026, 3, 21, 12, 1, tzinfo=UTC), bus=bus2)
+    
+    task = repo.get_task("TASK-1")
+    assert task.is_approved is True
+    
+    # Now commit should work
+    bus3 = FakePullBus(
+        [
+            {
+                "id": 3,
+                "task_id": "TASK-1",
+                "status": "COMMITTED",
+                "body": "{}",
+            }
+        ]
+    )
+    run_once(paths, now=datetime(2026, 3, 21, 12, 2, tzinfo=UTC), bus=bus3)
+    
+    task = repo.get_task("TASK-1")
+    assert task.phase == "committed"
+    assert task.terminal_source == "receipt"
+
+
+def test_repo_evidence_fallback(tmp_path: Path, monkeypatch) -> None:
+    from agpair.daemon.loop import auto_close_evidence_ready_tasks
+
+    paths = seed_task(tmp_path, completion_policy="review_then_commit")
+    repo = TaskRepository(paths.db_path)
+    repo.mark_acked(task_id="TASK-1", session_id="session-123")
+    repo.mark_evidence_ready(task_id="TASK-1", last_receipt_id="1")
+    
+    import agpair.daemon.loop
+    monkeypatch.setattr(agpair.daemon.loop, "detect_committed_task_in_repo", lambda repo_path, task_id: "abcdef123456")
+    
+    closed_count = auto_close_evidence_ready_tasks(paths)
+    assert closed_count == 1
+    
+    task = repo.get_task("TASK-1")
+    assert task.phase == "committed"
+    assert task.terminal_source == "repo_evidence"

@@ -100,6 +100,16 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "spotlight_testing" not in task_cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN spotlight_testing INTEGER NOT NULL DEFAULT 0")
         conn.commit()
+    # Migration 13: add completion_policy, terminal_source, is_approved
+    if "completion_policy" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN completion_policy TEXT NOT NULL DEFAULT 'direct_commit'")
+        conn.commit()
+    if "terminal_source" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN terminal_source TEXT")
+        conn.commit()
+    if "is_approved" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN is_approved INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
 
 
 def _configure_connection(conn: sqlite3.Connection) -> None:

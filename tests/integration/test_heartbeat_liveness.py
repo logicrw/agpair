@@ -165,13 +165,13 @@ def test_running_followed_by_terminal_receipt(tmp_path: Path) -> None:
     run_once(paths, now=t1, bus=bus1)
     assert repo.get_task("TASK-HB1").phase == "acked"
 
-    # Then: terminal evidence_pack
+    # Then: terminal committed
     t2 = datetime(2026, 3, 24, 12, 10, tzinfo=UTC)
-    bus2 = FakePullBus([{"id": 11, "task_id": "TASK-HB1", "status": "EVIDENCE_PACK", "body": "done"}])
+    bus2 = FakePullBus([{"id": 11, "task_id": "TASK-HB1", "status": "COMMITTED", "body": "done"}])
     run_once(paths, now=t2, bus=bus2)
 
     task = repo.get_task("TASK-HB1")
-    assert task.phase == "evidence_ready"
+    assert task.phase == "committed"
     assert task.last_receipt_id == "11"
 
 

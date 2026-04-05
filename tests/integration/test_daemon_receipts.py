@@ -33,10 +33,10 @@ def make_paths(tmp_path: Path) -> AppPaths:
     return AppPaths.from_root(tmp_path / ".agpair")
 
 
-def seed_task(tmp_path: Path, task_id: str = "TASK-1") -> AppPaths:
+def seed_task(tmp_path: Path, task_id: str = "TASK-1", completion_policy: str = "direct_commit") -> AppPaths:
     paths = make_paths(tmp_path)
     ensure_database(paths.db_path)
-    TaskRepository(paths.db_path).create_task(task_id=task_id, repo_path="/tmp/repo")
+    TaskRepository(paths.db_path).create_task(task_id=task_id, repo_path="/tmp/repo", completion_policy=completion_policy)
     return paths
 
 
@@ -69,7 +69,7 @@ def test_daemon_ingests_ack_and_updates_session_mapping(tmp_path: Path) -> None:
 def test_daemon_ingests_evidence_pack_marks_task_ready(tmp_path: Path) -> None:
     from agpair.daemon.loop import run_once
 
-    paths = seed_task(tmp_path)
+    paths = seed_task(tmp_path, completion_policy="review_then_commit")
     repo = TaskRepository(paths.db_path)
     repo.mark_acked(task_id="TASK-1", session_id="session-123")
     bus = FakePullBus(

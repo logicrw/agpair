@@ -43,6 +43,9 @@ class TaskRecord:
     env_vars: str | None = None
     worktree_boundary: str | None = None
     spotlight_testing: bool = False
+    completion_policy: str = "direct_commit"
+    terminal_source: str | None = None
+    is_approved: bool = False
 
 
 @dataclass(frozen=True)

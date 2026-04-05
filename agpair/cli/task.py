@@ -211,6 +211,9 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "env_vars": json.loads(task.env_vars) if task.env_vars else None,
         "worktree_boundary": task.worktree_boundary,
         "spotlight_testing": task.spotlight_testing,
+        "completion_policy": task.completion_policy,
+        "terminal_source": task.terminal_source,
+        "is_approved": task.is_approved,
         "liveness_state": liveness.value if liveness is not None else None,
         "waiter": _waiter_payload(waiter),
         "terminal_receipt": terminal_receipt,
@@ -402,6 +405,7 @@ def start_task(
     env_vars: str | None = typer.Option(None, "--env-vars", help="JSON object of environment overrides (e.g. PORT) for this task's worktree."),
     worktree_boundary: str | None = typer.Option(None, "--worktree-boundary", help="Declared worktree boundary path/label for this task."),
     spotlight_testing: bool = typer.Option(False, "--spotlight-testing", help="Declare intent to prefer localized/spotlight tests over full-suite runs."),
+    completion_policy: str = typer.Option("direct_commit", "--completion-policy", help="Completion policy: direct_commit or review_then_commit."),
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
@@ -465,6 +469,7 @@ def start_task(
             env_vars=env_vars,
             worktree_boundary=worktree_boundary,
             spotlight_testing=spotlight_testing,
+            completion_policy=completion_policy,
         )
     except sqlite3.IntegrityError:
         if not idempotency_key:
@@ -560,6 +565,9 @@ def task_status(
     typer.echo(f"env_vars: {json.dumps(payload['env_vars'])}")
     typer.echo(f"worktree_boundary: {payload['worktree_boundary']}")
     typer.echo(f"spotlight_testing: {payload['spotlight_testing']}")
+    typer.echo(f"completion_policy: {payload['completion_policy']}")
+    typer.echo(f"terminal_source: {payload['terminal_source']}")
+    typer.echo(f"is_approved: {payload['is_approved']}")
     if payload["liveness_state"] is not None:
         typer.echo(f"liveness_state: {payload['liveness_state']}")
     terminal_receipt = payload["terminal_receipt"]

@@ -67,7 +67,7 @@ def seed_task(tmp_path: Path, task_id: str = "TASK-1") -> AppPaths:
 class TestParseDeliveryHeader:
     def test_terminal_with_header(self) -> None:
         body = "X-Delivery-Id: dlv-abc-123\nlines of evidence\nmore"
-        result = parse_delivery_header("EVIDENCE_PACK", body)
+        result = parse_delivery_header("COMMITTED", body)
         assert result == ParsedBody(delivery_id="dlv-abc-123", clean_body="lines of evidence\nmore")
 
     def test_terminal_without_header(self) -> None:
@@ -94,7 +94,7 @@ class TestParseDeliveryHeader:
         assert result.clean_body == "Commit SHA: abc123"
 
     def test_empty_body(self) -> None:
-        result = parse_delivery_header("EVIDENCE_PACK", "")
+        result = parse_delivery_header("COMMITTED", "")
         assert result.delivery_id is None
         assert result.clean_body == ""
 
@@ -114,8 +114,8 @@ def test_message_id_duplicate_still_rejected(tmp_path: Path) -> None:
     paths = make_paths(tmp_path)
     ensure_database(paths.db_path)
     repo = ReceiptRepository(paths.db_path)
-    assert repo.record("msg-1", "TASK-1", "EVIDENCE_PACK") is True
-    assert repo.record("msg-1", "TASK-1", "EVIDENCE_PACK") is False  # same msg
+    assert repo.record("msg-1", "TASK-1", "COMMITTED") is True
+    assert repo.record("msg-1", "TASK-1", "COMMITTED") is False  # same msg
 
 
 # ===========================================================================
@@ -129,10 +129,10 @@ def test_delivery_id_duplicate_rejected_different_message_id(tmp_path: Path) -> 
     ensure_database(paths.db_path)
     repo = ReceiptRepository(paths.db_path)
 
-    ok1 = repo.record("msg-100", "TASK-1", "EVIDENCE_PACK", delivery_id="dlv-abc")
+    ok1 = repo.record("msg-100", "TASK-1", "COMMITTED", delivery_id="dlv-abc")
     assert ok1 is True
 
-    ok2 = repo.record("msg-200", "TASK-1", "EVIDENCE_PACK", delivery_id="dlv-abc")
+    ok2 = repo.record("msg-200", "TASK-1", "COMMITTED", delivery_id="dlv-abc")
     assert ok2 is False  # duplicate logical delivery
 
 
@@ -142,8 +142,8 @@ def test_delivery_id_null_allows_multiple(tmp_path: Path) -> None:
     ensure_database(paths.db_path)
     repo = ReceiptRepository(paths.db_path)
 
-    assert repo.record("msg-1", "TASK-1", "EVIDENCE_PACK", delivery_id=None) is True
-    assert repo.record("msg-2", "TASK-1", "EVIDENCE_PACK", delivery_id=None) is True
+    assert repo.record("msg-1", "TASK-1", "COMMITTED", delivery_id=None) is True
+    assert repo.record("msg-2", "TASK-1", "COMMITTED", delivery_id=None) is True
 
 
 def test_same_delivery_id_different_task_allowed(tmp_path: Path) -> None:
@@ -152,8 +152,8 @@ def test_same_delivery_id_different_task_allowed(tmp_path: Path) -> None:
     ensure_database(paths.db_path)
     repo = ReceiptRepository(paths.db_path)
 
-    assert repo.record("msg-1", "TASK-A", "EVIDENCE_PACK", delivery_id="dlv-x") is True
-    assert repo.record("msg-2", "TASK-B", "EVIDENCE_PACK", delivery_id="dlv-x") is True
+    assert repo.record("msg-1", "TASK-A", "COMMITTED", delivery_id="dlv-x") is True
+    assert repo.record("msg-2", "TASK-B", "COMMITTED", delivery_id="dlv-x") is True
 
 
 # ===========================================================================
@@ -173,21 +173,21 @@ def test_e2e_duplicate_delivery_id_ignored(tmp_path: Path) -> None:
     bus1 = FakePullBus([{
         "id": 10,
         "task_id": "TASK-1",
-        "status": "EVIDENCE_PACK",
+        "status": "COMMITTED",
         "body": header_body,
     }])
     run_once(paths, now=datetime(2026, 3, 24, 12, 0, tzinfo=UTC), bus=bus1)
 
     task = TaskRepository(paths.db_path).get_task("TASK-1")
     assert task is not None
-    assert task.phase == "evidence_ready"
+    assert task.phase == "committed"
     assert task.last_receipt_id == "10"
 
     # Second delivery — same delivery id, different message id
     bus2 = FakePullBus([{
         "id": 20,
         "task_id": "TASK-1",
-        "status": "EVIDENCE_PACK",
+        "status": "COMMITTED",
         "body": header_body,
     }])
     run_once(paths, now=datetime(2026, 3, 24, 12, 1, tzinfo=UTC), bus=bus2)
@@ -195,7 +195,7 @@ def test_e2e_duplicate_delivery_id_ignored(tmp_path: Path) -> None:
     # Phase and receipt id must NOT have changed
     task2 = TaskRepository(paths.db_path).get_task("TASK-1")
     assert task2 is not None
-    assert task2.phase == "evidence_ready"
+    assert task2.phase == "committed"
     assert task2.last_receipt_id == "10"  # NOT overwritten to 20
 
 
@@ -237,7 +237,7 @@ def test_terminal_without_header_still_works(tmp_path: Path) -> None:
     bus = FakePullBus([{
         "id": 50,
         "task_id": "TASK-1",
-        "status": "EVIDENCE_PACK",
+        "status": "COMMITTED",
         "body": "plain evidence body, no header",
     }])
 
@@ -245,7 +245,7 @@ def test_terminal_without_header_still_works(tmp_path: Path) -> None:
 
     task = TaskRepository(paths.db_path).get_task("TASK-1")
     assert task is not None
-    assert task.phase == "evidence_ready"
+    assert task.phase == "committed"
     journal = JournalRepository(paths.db_path).tail("TASK-1", limit=5)
     assert any("plain evidence body" in j.body for j in journal)
 
@@ -315,13 +315,13 @@ def test_journal_body_is_clean(tmp_path: Path) -> None:
     bus_ep = FakePullBus([{
         "id": 80,
         "task_id": "TASK-1",
-        "status": "EVIDENCE_PACK",
+        "status": "COMMITTED",
         "body": "X-Delivery-Id: dlv-ep-1\nevidence body here",
     }])
     run_once(paths, now=datetime(2026, 3, 24, 12, 0, tzinfo=UTC), bus=bus_ep)
 
     journal = JournalRepository(paths.db_path).tail("TASK-1", limit=5)
-    ep_entries = [j for j in journal if j.event == "evidence_ready"]
+    ep_entries = [j for j in journal if j.event == "committed"]
     assert len(ep_entries) == 1
     assert "X-Delivery-Id" not in ep_entries[0].body
     assert "evidence body here" in ep_entries[0].body
@@ -387,7 +387,7 @@ def test_stale_receipt_watermark_resets_on_reack(tmp_path: Path) -> None:
     bus1 = FakePullBus([{
         "id": 100,
         "task_id": "TASK-1",
-        "status": "EVIDENCE_PACK",
+        "status": "COMMITTED",
         "body": "X-Delivery-Id: dlv-first\nfirst evidence",
     }])
     run_once(paths, now=datetime(2026, 3, 24, 12, 0, tzinfo=UTC), bus=bus1)
@@ -407,12 +407,12 @@ def test_stale_receipt_watermark_resets_on_reack(tmp_path: Path) -> None:
     bus2 = FakePullBus([{
         "id": 50,
         "task_id": "TASK-1",
-        "status": "EVIDENCE_PACK",
+        "status": "COMMITTED",
         "body": "X-Delivery-Id: dlv-new\nnew evidence",
     }])
     run_once(paths, now=datetime(2026, 3, 24, 12, 1, tzinfo=UTC), bus=bus2)
 
     task2 = TaskRepository(paths.db_path).get_task("TASK-1")
     assert task2 is not None
-    assert task2.phase == "evidence_ready"
+    assert task2.phase == "committed"
     assert task2.last_receipt_id == "50"

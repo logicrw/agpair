@@ -165,7 +165,7 @@ class CodexExecutor(ExecutorAdapter):
         receipt = None
         if is_done:
             if retcode == 0:
-                status = "EVIDENCE_PACK"
+                status = "COMMITTED"
                 summary = last_message or "Task finished successfully"
                 payload = {
                     "events_count": events_count,

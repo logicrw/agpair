@@ -112,7 +112,7 @@ def test_gemini_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
     
     # 4. Check the task phase is now 'evidence_ready' and receipt matches
     task = tasks.get_task("TASK-GEMINI-TEST")
-    assert task.phase == "evidence_ready"
+    assert task.phase == "committed"
     
     assert not temp_dir.exists(), "temp_dir must be cleaned up after terminal transition"
     
@@ -121,13 +121,13 @@ def test_gemini_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
     journal = JournalRepository(paths.db_path)
     terminal_event = None
     for row in journal.tail("TASK-GEMINI-TEST", limit=10):
-        if row.event == "evidence_ready":
+        if row.event == "committed":
             terminal_event = row
             break
             
     assert terminal_event is not None
     receipt = json.loads(terminal_event.body)
-    assert receipt["status"] == "EVIDENCE_PACK"
+    assert receipt["status"] == "COMMITTED"
     assert receipt["summary"] == "Task finished successfully via Gemini"
     assert receipt["payload"]["returncode"] == 0
     assert receipt["payload"]["events_count"] == 2
@@ -253,7 +253,7 @@ def test_gemini_evidence_ready_not_repolled(tmp_path: pathlib.Path, monkeypatch)
     mock_bus = mock.MagicMock()
     run_once(paths, now=datetime.now(UTC), bus=mock_bus)
     task = tasks.get_task("TASK-GEMINI-NR")
-    assert task.phase == "evidence_ready"
+    assert task.phase == "committed"
 
     from agpair.storage.journal import JournalRepository
     journal = JournalRepository(paths.db_path)
@@ -261,10 +261,10 @@ def test_gemini_evidence_ready_not_repolled(tmp_path: pathlib.Path, monkeypatch)
     # Second tick should NOT produce new evidence_ready entries
     run_once(paths, now=datetime.now(UTC), bus=mock_bus)
     task = tasks.get_task("TASK-GEMINI-NR")
-    assert task.phase == "evidence_ready"
+    assert task.phase == "committed"
 
     rows_after = journal.tail("TASK-GEMINI-NR", limit=100)
-    evidence_events = [r for r in rows_after if r.event == "evidence_ready"]
+    evidence_events = [r for r in rows_after if r.event == "committed"]
     assert len(evidence_events) == 1, "evidence_ready must not be emitted twice"
 
 
@@ -305,12 +305,12 @@ def test_gemini_receipt_carries_real_attempt_no(tmp_path: pathlib.Path, monkeypa
     mock_bus = mock.MagicMock()
     run_once(paths, now=datetime.now(UTC), bus=mock_bus)
     task = tasks.get_task("TASK-GEMINI-ATT")
-    assert task.phase == "evidence_ready"
+    assert task.phase == "committed"
 
     from agpair.storage.journal import JournalRepository
     journal = JournalRepository(paths.db_path)
     for row in journal.tail("TASK-GEMINI-ATT", limit=10):
-        if row.event == "evidence_ready":
+        if row.event == "committed":
             receipt = json.loads(row.body)
             assert receipt["attempt_no"] == 1
             break

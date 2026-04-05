@@ -39,7 +39,7 @@ class TaskRepository:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
 
-    def create_task(self, *, task_id: str, repo_path: str, client_idempotency_key: str | None = None, executor_backend: str | None = None, depends_on: str | None = None, isolated_worktree: bool = False, setup_commands: str | None = None, teardown_commands: str | None = None, env_vars: str | None = None, worktree_boundary: str | None = None, spotlight_testing: bool = False) -> None:
+    def create_task(self, *, task_id: str, repo_path: str, client_idempotency_key: str | None = None, executor_backend: str | None = None, depends_on: str | None = None, isolated_worktree: bool = False, setup_commands: str | None = None, teardown_commands: str | None = None, env_vars: str | None = None, worktree_boundary: str | None = None, spotlight_testing: bool = False, completion_policy: str = "direct_commit") -> None:
         now = utcnow_iso()
         with connect(self.db_path) as conn:
             conn.execute(
@@ -49,10 +49,10 @@ class TaskRepository:
                   last_receipt_id, stuck_reason, retry_recommended, last_activity_at, created_at, updated_at,
                   last_heartbeat_at, last_workspace_activity_at, client_idempotency_key, executor_backend,
                   depends_on, isolated_worktree, setup_commands, teardown_commands, env_vars, worktree_boundary,
-                  spotlight_testing
-                ) VALUES (?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  spotlight_testing, completion_policy, terminal_source, is_approved
+                ) VALUES (?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
                 """,
-                (task_id, repo_path, now, now, now, client_idempotency_key, executor_backend, depends_on, 1 if isolated_worktree else 0, setup_commands, teardown_commands, env_vars, worktree_boundary, 1 if spotlight_testing else 0),
+                (task_id, repo_path, now, now, now, client_idempotency_key, executor_backend, depends_on, 1 if isolated_worktree else 0, setup_commands, teardown_commands, env_vars, worktree_boundary, 1 if spotlight_testing else 0, completion_policy),
             )
             conn.commit()
 
@@ -123,7 +123,7 @@ class TaskRepository:
             (reason, now, now, task_id),
         )
 
-    def mark_committed(self, *, task_id: str, last_receipt_id: str | None = None) -> None:
+    def mark_committed(self, *, task_id: str, last_receipt_id: str | None = None, terminal_source: str | None = None) -> None:
         task = self.get_task(task_id)
         if task is None:
             raise TaskNotFoundError(f"task not found: {task_id}")
@@ -133,10 +133,25 @@ class TaskRepository:
             task_id,
             """
             UPDATE tasks
-            SET phase='committed', last_receipt_id=?, last_activity_at=?, updated_at=?
+            SET phase='committed', last_receipt_id=?, terminal_source=?, last_activity_at=?, updated_at=?
             WHERE task_id=?
             """,
-            (last_receipt_id, now, now, task_id),
+            (last_receipt_id, terminal_source, now, now, task_id),
+        )
+
+    def mark_approved(self, *, task_id: str) -> None:
+        task = self.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(f"task not found: {task_id}")
+        now = utcnow_iso()
+        self._update(
+            task_id,
+            """
+            UPDATE tasks
+            SET is_approved=1, last_activity_at=?, updated_at=?
+            WHERE task_id=?
+            """,
+            (now, now, task_id),
         )
 
     def mark_stuck(self, *, task_id: str, reason: str) -> None:
@@ -277,7 +292,9 @@ class TaskRepository:
                     last_activity_at=?,
                     updated_at=?,
                     last_heartbeat_at=NULL,
-                    last_workspace_activity_at=NULL
+                    last_workspace_activity_at=NULL,
+                    is_approved=0,
+                    terminal_source=NULL
                 WHERE task_id=?
                 """,
                 (next_attempt, next_retry_count, now, now, task_id),
@@ -427,6 +444,18 @@ class TaskRepository:
             spotlight_testing = bool(row["spotlight_testing"])
         except (IndexError, KeyError):
             spotlight_testing = False
+        try:
+            completion_policy = row["completion_policy"]
+        except (IndexError, KeyError):
+            completion_policy = "direct_commit"
+        try:
+            terminal_source = row["terminal_source"]
+        except (IndexError, KeyError):
+            terminal_source = None
+        try:
+            is_approved = bool(row["is_approved"])
+        except (IndexError, KeyError):
+            is_approved = False
         return TaskRecord(
             task_id=row["task_id"],
             repo_path=row["repo_path"],
@@ -451,4 +480,7 @@ class TaskRepository:
             env_vars=env_vars,
             worktree_boundary=worktree_boundary,
             spotlight_testing=spotlight_testing,
+            completion_policy=completion_policy,
+            terminal_source=terminal_source,
+            is_approved=is_approved,
         )

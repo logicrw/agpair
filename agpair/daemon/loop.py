@@ -175,7 +175,7 @@ def auto_close_evidence_ready_tasks(
             continue
 
         try:
-            tasks.mark_committed(task_id=task.task_id)
+            tasks.mark_committed(task_id=task.task_id, terminal_source="repo_evidence")
             journal.append(
                 task.task_id,
                 "daemon",
@@ -297,6 +297,10 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 tasks.record_heartbeat(task_id=task_id, heartbeat_at=to_iso(current))
                 journal.append(task_id, "daemon", "heartbeat", body or "RUNNING", classification="transient")
             elif status == messages.EVIDENCE_PACK:
+                policy = current_task.completion_policy if current_task else "direct_commit"
+                if policy == "direct_commit":
+                    journal.append(task_id, "daemon", "policy_rejection", f"EVIDENCE_PACK not permitted for completion_policy={policy}. Terminal receipts must match policy.", "invalid")
+                    continue
                 tasks.mark_evidence_ready(task_id=task_id, last_receipt_id=message_id)
                 journal.append(task_id, "daemon", "evidence_ready", journal_body)
                 if current_task and current_task.antigravity_session_id:
@@ -316,13 +320,25 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                     if exec_instance:
                         exec_instance.cleanup(current_task.antigravity_session_id)
             elif status == messages.COMMITTED:
-                tasks.mark_committed(task_id=task_id, last_receipt_id=message_id)
+                policy = current_task.completion_policy if current_task else "direct_commit"
+                is_approved = current_task.is_approved if current_task else False
+                if policy == "review_then_commit" and not is_approved:
+                    journal.append(task_id, "daemon", "policy_rejection", f"COMMITTED not permitted for completion_policy={policy} before approval.", "invalid")
+                    continue
+                tasks.mark_committed(task_id=task_id, last_receipt_id=message_id, terminal_source="receipt")
                 journal.append(task_id, "daemon", "committed", journal_body)
+                if current_task and current_task.antigravity_session_id:
+                    from agpair.executors import get_executor
+                    exec_instance = get_executor(current_task.executor_backend)
+                    if exec_instance:
+                        exec_instance.cleanup(current_task.antigravity_session_id)
             elif status == messages.REVIEW_ACK:
                 journal.append(task_id, "daemon", "review_ack", clean_body)
             elif status == messages.REVIEW_NACK:
                 journal.append(task_id, "daemon", "review_nack", clean_body)
             elif status == messages.APPROVE_ACK:
+                if current_task:
+                    tasks.mark_approved(task_id=task_id)
                 journal.append(task_id, "daemon", "approve_ack", clean_body)
             elif status == messages.APPROVE_NACK:
                 journal.append(task_id, "daemon", "approve_nack", clean_body)

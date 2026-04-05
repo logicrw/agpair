@@ -163,7 +163,7 @@ class GeminiExecutor(ExecutorAdapter):
         receipt = None
         if is_done:
             if retcode == 0:
-                status = "EVIDENCE_PACK"
+                status = "COMMITTED"
                 summary = "Task finished successfully via Gemini"
                 payload = {
                     "events_count": events_count,
