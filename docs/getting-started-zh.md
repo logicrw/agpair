@@ -62,7 +62,7 @@ cd ..
 
 安装后重新加载 Antigravity 窗口。扩展在启动时自动激活。
 
-> **安全提示**：Bridge 仅监听 `127.0.0.1`。默认情况下，bridge 使用自动生成的 bearer token 进行保护，token 存储在 VS Code 的 SecretStorage 中——无需手动配置。修改性端点（`/run_task`、`/continue_task`、`/write_receipt` 等）需要有效的 `Authorization: Bearer <token>` 头；只读端点（`/health`、`/task_status`）无需认证即可访问，以保证 `agpair doctor` 开箱即用。仅在本地调试时，可以设置 `antigravityCompanion.bridgeInsecure = true` 来禁用认证——不建议日常使用。请求体大小限制为 1 MiB。
+> **安全提示**：Bridge 仅监听 `127.0.0.1`。默认情况下，bridge 使用自动生成的 bearer token 进行保护，token 存储在 VS Code 的 SecretStorage 中——无需手动配置。修改性端点（`/run_task`、`/write_receipt` 等）需要有效的 `Authorization: Bearer <token>` 头；只读端点（`/health`、`/task_status`）无需认证即可访问，以保证 `agpair doctor` 开箱即用。仅在本地调试时，可以设置 `antigravityCompanion.bridgeInsecure = true` 来禁用认证——不建议日常使用。请求体大小限制为 1 MiB。
 
 ## 第 2 步：确认 agent-bus 可用
 
@@ -115,7 +115,6 @@ agpair daemon status
 daemon 是一个轻量后台进程，负责：
 
 - 接收回执（`ACK`、`EVIDENCE_PACK`、`BLOCKED`、`COMMITTED`）
-- 维护 task → session 连续性
 - 检测卡住任务（soft watchdog → hard timeout）
 
 它**不是**语义审核者——不解读代码，也不做决策。
@@ -182,26 +181,12 @@ created_at: 2026-03-24T10:00:00Z
 看完 `task logs` 后，只选一个：
 
 ```bash
-# 在同一 session 继续
-agpair task continue <TASK_ID> --body "继续处理这个问题"
-
-# 批准并提交
-agpair task approve <TASK_ID> --body "Approved. Commit and return COMMITTED."
-
-# 驳回，但保持同一 session
-agpair task reject <TASK_ID> --body "还不行，继续修改"
-
 # 换 fresh session 重试
 agpair task retry <TASK_ID> --body "换 fresh session 重试"
 
 # 停止本地跟踪（不通知 Antigravity）
 agpair task abandon <TASK_ID> --reason "不再需要了"
 ```
-
-**什么时候用 `continue`，什么时候用 `retry`：**
-
-- **`continue`** — session 还健康，只是需要再跑一轮
-- **`retry`** — session 明显坏了、卡了，不值得继续
 
 ## 第 8 步：配合 AI 编程工具使用（正常流程）
 
@@ -232,7 +217,7 @@ CLI 是手动辅助工具，适用于：
 
 ### `BLOCKED`
 
-这轮执行没有成功。跑 `agpair task logs <TASK_ID>` 看原因，然后决定是 `continue` 同一 session 还是 `retry` 换新的。
+这轮执行没有成功。跑 `agpair task logs <TASK_ID>` 看原因，然后通过 `retry` 换新的 session 重试。
 
 ## 可选：让 daemon 开机自启
 

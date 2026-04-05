@@ -159,9 +159,9 @@ agpair task start \
 
 当前后端策略摘要：
 
-- `antigravity`：交互式 IDE executor，same-session 语义最强
-- `codex`：CLI executor，采用 `fresh_resume_first`
-- `gemini`：CLI executor，目前对 continuation 采取更保守策略
+- `antigravity`：交互式 IDE executor
+- `codex`：CLI executor
+- `gemini`：CLI executor
 
 默认情况下，`task start` **会阻塞**直到任务进入终态。
 要立即返回：
@@ -243,48 +243,14 @@ agpair task logs TASK-001
 - EVIDENCE_PACK
 - BLOCKED
 - COMMITTED
-- retry / continuation 事件
+- COMMITTED
+- retry 事件
 
 ---
 
-## 8. `task continue`
+## 8. `task retry`
 
-用于在**同一个 Antigravity session**里继续推进。
-
-```bash
-agpair task continue TASK-001 --body "继续处理这个问题"
-```
-
-适合：
-
-- session 还健康
-- 只是需要补一轮修改
-
----
-
-## 9. `task approve`
-
-表示你认为当前结果可以进入提交/收口。
-
-```bash
-agpair task approve TASK-001 --body "Approved. Commit and return COMMITTED."
-```
-
----
-
-## 10. `task reject`
-
-表示当前结果不合格，但还想让同一个 session 继续修。
-
-```bash
-agpair task reject TASK-001 --body "还不行，继续改"
-```
-
----
-
-## 11. `task retry`
-
-表示当前 session 不值得继续，直接换一轮 fresh session。
+表示换一轮 fresh session 重新执行。
 
 ```bash
 agpair task retry TASK-001 --body "Retry with a fresh session."
@@ -294,11 +260,10 @@ agpair task retry TASK-001 --body "Retry with a fresh session."
 
 - 当前 session 明显坏了
 - 卡住了
-- continuation 已经不划算
 
 ---
 
-## 12. `task abandon`
+## 9. `task abandon`
 
 如果你只是想在本地停止跟踪一个悬挂任务，可以直接：
 
@@ -310,7 +275,7 @@ agpair task abandon TASK-001 --reason "manual cleanup"
 
 ---
 
-## 13. `task wait`
+## 10. `task wait`
 
 如果你发单时用了 `--no-wait`，可以之后再挂起等待：
 
@@ -328,9 +293,9 @@ agpair task wait TASK-001 --timeout-seconds 600 --interval-seconds 10
 
 ---
 
-## 14. 自动等待选项
+## 11. 自动等待选项
 
-所有发单命令（`start`、`continue`、`approve`、`reject`、`retry`）支持：
+所有发单命令（`start`、`retry`）支持：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -342,7 +307,7 @@ agpair task wait TASK-001 --timeout-seconds 600 --interval-seconds 10
 
 ---
 
-## 15. 失败姿态
+## 12. 失败姿态
 
 `agpair` 故意偏保守：
 
@@ -354,7 +319,7 @@ agpair task wait TASK-001 --timeout-seconds 600 --interval-seconds 10
 
 ---
 
-## 16. 最推荐的命令顺序
+## 13. 最推荐的命令顺序
 
 对真实任务，建议顺序是：
 
@@ -364,9 +329,6 @@ agpair task wait TASK-001 --timeout-seconds 600 --interval-seconds 10
 4. `agpair task status <TASK_ID>` 或 `agpair task list`
 5. `agpair task logs <TASK_ID>`
 6. 只选一个：
-   - `continue`
-   - `approve`
-   - `reject`
    - `retry`
    - `abandon`（仅本地清理）
 7. 再看一次 `status` 和 `logs`
