@@ -563,6 +563,7 @@ describe("Heartbeat integration scenarios", () => {
       receiptDir: dir,
       pollIntervalMs: 60000,
       staleAfterMs: 60000, // 60s window (would normally not trigger at 5s)
+      lostSessionReceiptGraceMs: 0,
       outputChannel: { appendLine: () => undefined },
       sendTerminal: async (taskId, status, body) => {
         terminalSent.push({ taskId, status, body });

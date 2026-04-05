@@ -413,6 +413,75 @@ describe("DelegationReceiptWatcher", () => {
     watcher.dispose();
   });
 
+  it("prefers a delayed receipt over lost-session BLOCKED when receipt appears within grace window", async () => {
+    const dir = makeTempDir();
+    const tracker = new DelegationTaskTracker();
+    const sent: Array<{ taskId: string; status: string; body: string }> = [];
+
+    const receiptPath = DelegationReceiptWatcher.receiptPath(
+      dir,
+      "TASK-RACE-1",
+    );
+    tracker.register({
+      taskId: "TASK-RACE-1",
+      sessionId: "sess-race-1",
+      repoPath: "/tmp/repo",
+      receiptPath,
+      status: "ACKED",
+      ackedAt: new Date().toISOString(),
+      lastActivityAt: new Date().toISOString(),
+      terminalSentAt: null,
+      terminalStatus: null,
+      terminalBody: null,
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
+    });
+
+    const watcher = new DelegationReceiptWatcher({
+      tracker,
+      receiptDir: dir,
+      pollIntervalMs: 60000,
+      staleAfterMs: 1000,
+      lostSessionReceiptGraceMs: 20,
+      outputChannel: { appendLine: () => undefined },
+      sendTerminal: async (taskId, status, body) => {
+        sent.push({ taskId, status, body });
+      },
+      sessionCtrl: {
+        async hasPositiveEvidenceOfLoss() {
+          setTimeout(() => {
+            fs.writeFileSync(
+              receiptPath,
+              JSON.stringify({
+                task_id: "TASK-RACE-1",
+                status: "BLOCKED",
+                body: "visible-window-confirmed",
+              }),
+              "utf-8",
+            );
+          }, 5);
+          return true;
+        },
+      } as any,
+      recoveryMaxRetries: 0,
+    });
+
+    await watcher.poll(() => 0);
+    assert.equal(sent.length, 0, "first poll should only enter grace window");
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await watcher.poll(() => 25);
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].taskId, "TASK-RACE-1");
+    assert.equal(sent[0].status, "BLOCKED");
+    assert.match(sent[0].body, /visible-window-confirmed/);
+    assert.equal(tracker.isTerminalSent("TASK-RACE-1"), true);
+
+    watcher.dispose();
+  });
+
   it("recovers a pending delegated task after restart and still sends terminal receipt", async () => {
     const dir = makeTempDir();
     const statePath = path.join(dir, "delegation-state.json");

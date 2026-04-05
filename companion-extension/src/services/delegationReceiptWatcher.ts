@@ -33,6 +33,7 @@ export interface DelegationReceiptWatcherOptions {
   receiptDir: string;
   pollIntervalMs: number;
   staleAfterMs?: number;
+  lostSessionReceiptGraceMs?: number;
   outputChannel: { appendLine(message: string): void };
   sendTerminal: (taskId: string, status: string, body: string) => Promise<void>;
   /** SessionController for stuck-session recovery. If omitted, recovery is disabled. */
@@ -42,10 +43,12 @@ export interface DelegationReceiptWatcherOptions {
 }
 
 export class DelegationReceiptWatcher {
+  private static readonly DEFAULT_LOST_SESSION_RECEIPT_GRACE_MS = 15000;
   private readonly tracker: DelegationTaskTracker;
   private readonly receiptDir: string;
   private readonly pollIntervalMs: number;
   private readonly staleAfterMs: number;
+  private readonly lostSessionReceiptGraceMs: number;
   private readonly outputChannel: { appendLine(message: string): void };
   private readonly sendTerminal: (
     taskId: string,
@@ -59,6 +62,7 @@ export class DelegationReceiptWatcher {
   private readonly sessionCtrl: SessionController | null;
   private readonly recoveryMaxRetries: number;
   private readonly recoveryAttempts = new Map<string, number>();
+  private readonly positiveLossFirstSeenAt = new Map<string, number>();
 
   constructor(options: DelegationReceiptWatcherOptions) {
     this.tracker = options.tracker;
@@ -67,6 +71,11 @@ export class DelegationReceiptWatcher {
     const rawStale = options.staleAfterMs ?? 0;
     this.staleAfterMs =
       Number.isFinite(rawStale) && rawStale > 0 ? rawStale : 0;
+    const rawGrace =
+      options.lostSessionReceiptGraceMs ??
+      DelegationReceiptWatcher.DEFAULT_LOST_SESSION_RECEIPT_GRACE_MS;
+    this.lostSessionReceiptGraceMs =
+      Number.isFinite(rawGrace) && rawGrace >= 0 ? rawGrace : 0;
 
     if (this.staleAfterMs === 0) {
       options.outputChannel.appendLine(
@@ -152,7 +161,35 @@ export class DelegationReceiptWatcher {
             ).hasPositiveEvidenceOfLoss(task.sessionId);
           }
 
+          if (positivelyLost) {
+            const nowMs = nowMsProvider();
+            const firstSeenMs =
+              this.positiveLossFirstSeenAt.get(task.taskId) ?? nowMs;
+            if (!this.positiveLossFirstSeenAt.has(task.taskId)) {
+              this.positiveLossFirstSeenAt.set(task.taskId, firstSeenMs);
+            }
+            if (nowMs - firstSeenMs < this.lostSessionReceiptGraceMs) {
+              continue;
+            }
+          }
+
           if (positivelyLost || this.isTaskStale(task, nowMsProvider())) {
+            if (positivelyLost) {
+              const delayedReceipt = await this.readReceiptNow(
+                receiptPath,
+                task.taskId,
+              );
+              if (delayedReceipt) {
+                this.positiveLossFirstSeenAt.delete(task.taskId);
+                await this.prepareAndSendTerminal(
+                  task.taskId,
+                  delayedReceipt.status,
+                  delayedReceipt.body,
+                  receiptPath,
+                );
+                continue;
+              }
+            }
             if (positivelyLost) {
               this.outputChannel.appendLine(
                 `[companion] delegation-receipt-watcher: positive evidence of lost session ${task.sessionId} for task ${task.taskId}`,
@@ -173,6 +210,7 @@ export class DelegationReceiptWatcher {
                 null, // no receipt file to clean up
               );
             }
+            this.positiveLossFirstSeenAt.delete(task.taskId);
           }
           continue;
         }
@@ -194,6 +232,7 @@ export class DelegationReceiptWatcher {
           receipt.body,
           receiptPath,
         );
+        this.positiveLossFirstSeenAt.delete(task.taskId);
       } catch (err: any) {
         this.outputChannel.appendLine(
           `[companion] delegation-receipt-watcher: error processing ${task.taskId}: ${err?.message ?? String(err)}`,
@@ -211,6 +250,20 @@ export class DelegationReceiptWatcher {
     expectedTaskId: string,
   ): DelegationReceipt | null {
     return parseDelegationReceipt(raw, expectedTaskId);
+  }
+
+  private async readReceiptNow(
+    receiptPath: string,
+    taskId: string,
+  ): Promise<DelegationReceipt | null> {
+    if (!fs.existsSync(receiptPath)) {
+      return null;
+    }
+    const raw = fs.readFileSync(receiptPath, "utf-8").trim();
+    if (!raw) {
+      return null;
+    }
+    return this.parseReceipt(raw, taskId);
   }
 
   private ensureDir(): void {
