@@ -176,3 +176,65 @@ def test_repo_evidence_fallback(tmp_path: Path, monkeypatch) -> None:
     task = repo.get_task("TASK-1")
     assert task.phase == "committed"
     assert task.terminal_source == "repo_evidence"
+
+
+def test_repo_evidence_fallback_direct_commit_acked(tmp_path: Path, monkeypatch) -> None:
+    from agpair.daemon.loop import auto_close_evidence_ready_tasks
+
+    paths = seed_task(tmp_path, completion_policy="direct_commit")
+    repo = TaskRepository(paths.db_path)
+    repo.mark_acked(task_id="TASK-1", session_id="session-123")
+    
+    import agpair.daemon.loop
+    monkeypatch.setattr(agpair.daemon.loop, "detect_committed_task_in_repo", lambda repo_path, task_id: "abcdef123456")
+    
+    closed_count = auto_close_evidence_ready_tasks(paths)
+    assert closed_count == 1
+    
+    task = repo.get_task("TASK-1")
+    assert task.phase == "committed"
+    assert task.terminal_source == "repo_evidence"
+
+
+def test_detect_committed_task_in_repo_false_positive(tmp_path: Path, monkeypatch) -> None:
+    from agpair.daemon.loop import detect_committed_task_in_repo
+    import subprocess
+    from unittest.mock import MagicMock
+
+    # Setup a mock subprocess result where task_id is just a substring of another task id
+    # Searching for TASK-1, but the commit only mentions TASK-100
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = "abcdef123456\x00implemented TASK-100 feature\n"
+    
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: mock_result)
+    
+    # It should not match TASK-1 because of word boundaries
+    sha = detect_committed_task_in_repo(str(tmp_path), "TASK-1")
+    assert sha is None
+    
+    # But it should match TASK-100
+    sha_100 = detect_committed_task_in_repo(str(tmp_path), "TASK-100")
+    assert sha_100 == "abcdef123456"
+
+    # Also test valid match for TASK-1 with word boundary
+    mock_result.stdout = "fedcba654321\x00implemented (TASK-1) feature\n"
+    sha_exact = detect_committed_task_in_repo(str(tmp_path), "TASK-1")
+    assert sha_exact == "fedcba654321"
+
+
+def test_repo_evidence_fallback_skips_review_then_commit_acked(tmp_path: Path, monkeypatch) -> None:
+    from agpair.daemon.loop import auto_close_evidence_ready_tasks
+
+    paths = seed_task(tmp_path, completion_policy="review_then_commit")
+    repo = TaskRepository(paths.db_path)
+    repo.mark_acked(task_id="TASK-1", session_id="session-123")
+    
+    import agpair.daemon.loop
+    monkeypatch.setattr(agpair.daemon.loop, "detect_committed_task_in_repo", lambda repo_path, task_id: "abcdef123456")
+    
+    closed_count = auto_close_evidence_ready_tasks(paths)
+    # Shouldn't close because it's review_then_commit and in acked, must be evidence_ready
+    assert closed_count == 0
+    task = repo.get_task("TASK-1")
+    assert task.phase == "acked"

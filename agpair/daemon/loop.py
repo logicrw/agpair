@@ -121,29 +121,41 @@ def scan_workspace_activity(paths: AppPaths, *, current: datetime) -> None:
 def detect_committed_task_in_repo(repo_path: str, task_id: str) -> str | None:
     """Check if a git commit containing *task_id* exists in *repo_path*.
 
-    Uses ``git log --all --grep=<task_id> --format=%H -1`` to find a commit
-    whose message contains the task_id.  This is strong repo-side evidence
+    Uses ``git log --all --grep=<task_id> --format=%H%x00%B -1`` to find a commit
+    whose message contains the task_id. Then strictly verifies with word boundaries
+    to prevent false positives from shortened tokens. This is strong repo-side evidence
     that the delegated work already landed as a commit.
 
     Returns the full commit SHA if found, or ``None`` if not found or if the
     directory is not a valid git repository.
     """
     import subprocess as _subprocess
+    import re
 
     try:
         result = _subprocess.run(
-            ["git", "log", "--all", f"--grep={task_id}", "--format=%H", "-1"],
+            ["git", "log", "--all", f"--grep={task_id}", "--format=%H%x00%B", "-1"],
             capture_output=True,
             text=True,
             cwd=repo_path,
             timeout=10,
         )
-        if result.returncode != 0:
+        if result.returncode != 0 or not result.stdout.strip():
             return None
     except (_subprocess.SubprocessError, FileNotFoundError, OSError):
         return None
 
-    sha = result.stdout.strip()
+    parts = result.stdout.strip().split("\x00", 1)
+    if len(parts) != 2:
+        return None
+        
+    sha, message = parts
+    
+    # Ensure exact match of the full task ID with word boundaries
+    # This prevents matching "TASK-1" against "TASK-1234"
+    if not re.search(rf"\b{re.escape(task_id)}\b", message):
+        return None
+
     return sha if sha else None
 
 
@@ -152,9 +164,9 @@ def auto_close_evidence_ready_tasks(
     *,
     skip_task_ids: set[str] | None = None,
 ) -> int:
-    """Auto-close evidence_ready tasks whose delegated commit already landed.
+    """Auto-close evidence_ready and acked direct_commit tasks whose delegated commit already landed.
 
-    For each evidence_ready task that was NOT just touched by receipt ingestion,
+    For each eligible task that was NOT just touched by receipt ingestion,
     check if a git commit containing the task_id exists in the task's repo.
     If so, transition the task to ``committed`` and record a journal entry
     explaining the auto-close.
@@ -166,8 +178,18 @@ def auto_close_evidence_ready_tasks(
     excluded = skip_task_ids or set()
     count = 0
 
-    for task in tasks.list_tasks(phase="evidence_ready", limit=100):
+    tasks_to_check = (
+        tasks.list_tasks(phase="evidence_ready", limit=100) +
+        tasks.list_tasks(phase="acked", limit=100)
+    )
+
+    for task in tasks_to_check:
         if task.task_id in excluded:
+            continue
+
+        # Only direct_commit tasks can be auto-closed from acked phase.
+        # review_then_commit tasks must go through evidence_ready first.
+        if task.phase == "acked" and task.completion_policy != "direct_commit":
             continue
 
         commit_sha = detect_committed_task_in_repo(task.repo_path, task.task_id)
