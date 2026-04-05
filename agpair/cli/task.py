@@ -241,12 +241,10 @@ def _bridge_marker_candidates(
         repo = Path(repo_path).expanduser().resolve()
         candidates.extend([
             repo / ".agpair" / marker_name,
-            repo / ".supervisor" / marker_name,
         ])
     if global_root is not None:
         candidates.extend([
             global_root / marker_name,
-            global_root.parent / ".supervisor" / marker_name,
         ])
         default_root = (Path.home() / ".agpair").resolve()
         if global_root.resolve() != default_root:
@@ -254,7 +252,6 @@ def _bridge_marker_candidates(
     home = Path.home()
     candidates.extend([
         home / ".agpair" / marker_name,
-        home / ".supervisor" / marker_name,
     ])
     return candidates
 

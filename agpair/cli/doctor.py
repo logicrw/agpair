@@ -10,7 +10,6 @@ from urllib import error, request
 
 from agpair.config import AppPaths
 from agpair.daemon.process import daemon_status
-from agpair.runtime_conflicts import detect_supervisor_desktop_reader_conflict
 
 # ---------------------------------------------------------------------------
 # Doctor result cache  (disk-persisted, cross-process)
@@ -127,9 +126,7 @@ def build_doctor_report(
     daemon_pid = status.get("pid")
     exclude_pids: set[int] | None = {daemon_pid} if isinstance(daemon_pid, int) and daemon_pid > 0 else None
 
-    desktop_reader_conflict = detect_supervisor_desktop_reader_conflict(
-        exclude_pids=exclude_pids,
-    )
+    desktop_reader_conflict = None
 
     from agpair.executors import AntigravityExecutor, CodexExecutor
 
@@ -203,11 +200,9 @@ def _build_repo_bridge_report(repo_path: Path) -> dict:
     expected_extension_path, expected_extension_version, expected_extension_id = _read_repo_companion_metadata(repo)
     repo_markers = [
         repo / ".agpair" / "bridge_port",
-        repo / ".supervisor" / "bridge_port",
     ]
     global_markers = [
         Path.home() / ".agpair" / "bridge_port",
-        Path.home() / ".supervisor" / "bridge_port",
     ]
     chosen_marker = next((marker for marker in repo_markers if marker.exists()), None)
     if chosen_marker is None:

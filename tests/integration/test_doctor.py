@@ -115,166 +115,6 @@ def test_doctor_handles_corrupt_database_file(tmp_path: Path, monkeypatch) -> No
     assert payload["db_error"] is not None
 
 
-def test_doctor_reports_supervisor_desktop_reader_conflict(tmp_path: Path, monkeypatch) -> None:
-    """Status-file conflict (real desktop watcher) is always reported."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    _clear_disk_cache(tmp_path)
-    supervisor_dir = tmp_path / ".supervisor"
-    supervisor_dir.mkdir(parents=True, exist_ok=True)
-    (supervisor_dir / "agent_bus_watch_desktop.status.json").write_text(
-        json.dumps(
-            {
-                "mode": "watching",
-                "pid": os.getpid(),
-                "command": "/repo/tools/desktop_agent_bus_watch.py --interval-ms 1000 --notify",
-                "updated_at": "2026-03-21T10:00:00Z",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = CliRunner().invoke(app, ["doctor"])
-
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["desktop_reader_conflict"] is True
-    assert payload["desktop_reader_conflict_detail"]["pid"] == os.getpid()
-
-
-def test_doctor_reports_shared_lock_conflict_without_status_file(tmp_path: Path, monkeypatch) -> None:
-    """Lock held by a non-agpair owner is still reported as a conflict."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    _clear_disk_cache(tmp_path)
-    supervisor_dir = tmp_path / ".supervisor"
-    supervisor_dir.mkdir(parents=True, exist_ok=True)
-    (supervisor_dir / "agent_bus_watch_desktop.lock").write_text(
-        f'{{"pid":{os.getpid()},"owner":"desktop_watch","lock_path":"{supervisor_dir / "agent_bus_watch_desktop.lock"}"}}',
-        encoding="utf-8",
-    )
-
-    result = CliRunner().invoke(app, ["doctor"])
-
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["desktop_reader_conflict"] is True
-    assert payload["desktop_reader_conflict_detail"]["source"] == "lock"
-
-
-# ---------------------------------------------------------------------------
-# Self-lock exclusion tests
-# ---------------------------------------------------------------------------
-
-
-def test_doctor_does_not_report_self_owned_agpair_lock_as_conflict(tmp_path: Path, monkeypatch) -> None:
-    """When the shared lock is held by the agpair daemon (owner=agpair, PID
-    matches daemon_pid), doctor must NOT flag it as a conflict."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    _clear_disk_cache(tmp_path)
-
-    # Write daemon PID file pointing to current process (simulates the daemon).
-    paths = AppPaths.default()
-    paths.root.mkdir(parents=True, exist_ok=True)
-    paths.pid_path.write_text(str(os.getpid()), encoding="utf-8")
-
-    # Write a lock file owned by the agpair daemon (same PID).
-    supervisor_dir = tmp_path / ".supervisor"
-    supervisor_dir.mkdir(parents=True, exist_ok=True)
-    (supervisor_dir / "agent_bus_watch_desktop.lock").write_text(
-        json.dumps(
-            {
-                "pid": os.getpid(),
-                "owner": "agpair",
-                "started_at": "2026-03-23T10:00:00Z",
-                "lock_path": str(supervisor_dir / "agent_bus_watch_desktop.lock"),
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = CliRunner().invoke(app, ["doctor"])
-
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    # Self-owned lock → no conflict!
-    assert payload["desktop_reader_conflict"] is False
-    assert payload["desktop_reader_conflict_detail"] is None
-
-
-def test_doctor_still_reports_external_lock_even_with_daemon_running(tmp_path: Path, monkeypatch) -> None:
-    """When the lock is held by a different PID (not the daemon), doctor must
-    still report it as a conflict, even if the daemon is running."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    _clear_disk_cache(tmp_path)
-
-    # Daemon PID file — use current process PID.
-    paths = AppPaths.default()
-    paths.root.mkdir(parents=True, exist_ok=True)
-    paths.pid_path.write_text(str(os.getpid()), encoding="utf-8")
-
-    # Lock file held by a DIFFERENT alive process (parent PID is always alive
-    # and accessible without root, unlike PID 1 on macOS).
-    other_pid = os.getppid()
-    supervisor_dir = tmp_path / ".supervisor"
-    supervisor_dir.mkdir(parents=True, exist_ok=True)
-    (supervisor_dir / "agent_bus_watch_desktop.lock").write_text(
-        json.dumps(
-            {
-                "pid": other_pid,
-                "owner": "desktop_watch",
-                "started_at": "2026-03-23T10:00:00Z",
-                "lock_path": str(supervisor_dir / "agent_bus_watch_desktop.lock"),
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = CliRunner().invoke(app, ["doctor"])
-
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["desktop_reader_conflict"] is True
-    assert payload["desktop_reader_conflict_detail"]["source"] == "lock"
-    assert payload["desktop_reader_conflict_detail"]["pid"] == other_pid
-
-
-def test_doctor_still_reports_status_conflict_even_if_pid_would_be_excluded(tmp_path: Path, monkeypatch) -> None:
-    """Status-file conflicts (desktop_agent_bus_watch.py running) are NEVER
-    excluded, even if the PID matches the daemon PID.  This is critical for
-    not weakening real conflict detection."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    _clear_disk_cache(tmp_path)
-
-    # Daemon PID = current process.
-    paths = AppPaths.default()
-    paths.root.mkdir(parents=True, exist_ok=True)
-    paths.pid_path.write_text(str(os.getpid()), encoding="utf-8")
-
-    # Status file from the external desktop watcher with SAME PID.
-    supervisor_dir = tmp_path / ".supervisor"
-    supervisor_dir.mkdir(parents=True, exist_ok=True)
-    (supervisor_dir / "agent_bus_watch_desktop.status.json").write_text(
-        json.dumps(
-            {
-                "mode": "watching",
-                "pid": os.getpid(),
-                "command": "/repo/tools/desktop_agent_bus_watch.py --interval-ms 1000 --notify",
-                "updated_at": "2026-03-23T10:00:00Z",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = CliRunner().invoke(app, ["doctor"])
-
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    # Must still be a conflict!
-    assert payload["desktop_reader_conflict"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -508,7 +348,7 @@ def test_doctor_reports_repo_bridge_health_when_repo_marker_is_live(tmp_path: Pa
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     _clear_disk_cache(tmp_path)
     repo_path = tmp_path / "repo"
-    marker_dir = repo_path / ".supervisor"
+    marker_dir = repo_path / ".agpair"
     marker_dir.mkdir(parents=True, exist_ok=True)
 
     with run_health_server(
@@ -576,7 +416,7 @@ def test_doctor_reports_repo_bridge_warning_when_ls_bridge_not_ready(tmp_path: P
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     _clear_disk_cache(tmp_path)
     repo_path = tmp_path / "repo"
-    marker_dir = repo_path / ".supervisor"
+    marker_dir = repo_path / ".agpair"
     marker_dir.mkdir(parents=True, exist_ok=True)
 
     with run_health_server(
@@ -606,7 +446,7 @@ def test_doctor_warns_when_running_extension_does_not_match_repo_checkout(
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     _clear_disk_cache(tmp_path)
     repo_path = tmp_path / "repo"
-    marker_dir = repo_path / ".supervisor"
+    marker_dir = repo_path / ".agpair"
     marker_dir.mkdir(parents=True, exist_ok=True)
     companion_dir = repo_path / "companion-extension"
     companion_dir.mkdir(parents=True, exist_ok=True)
@@ -707,7 +547,7 @@ def test_doctor_surfaces_bridge_auth_posture_from_health(
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     _clear_disk_cache(tmp_path)
     repo_path = tmp_path / "repo"
-    marker_dir = repo_path / ".supervisor"
+    marker_dir = repo_path / ".agpair"
     marker_dir.mkdir(parents=True, exist_ok=True)
 
     with run_health_server(
@@ -740,7 +580,7 @@ def test_doctor_returns_none_when_health_omits_auth_fields(
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     _clear_disk_cache(tmp_path)
     repo_path = tmp_path / "repo"
-    marker_dir = repo_path / ".supervisor"
+    marker_dir = repo_path / ".agpair"
     marker_dir.mkdir(parents=True, exist_ok=True)
 
     with run_health_server(
@@ -775,7 +615,7 @@ def test_doctor_does_not_leak_token_in_report(
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     _clear_disk_cache(tmp_path)
     repo_path = tmp_path / "repo"
-    marker_dir = repo_path / ".supervisor"
+    marker_dir = repo_path / ".agpair"
     marker_dir.mkdir(parents=True, exist_ok=True)
 
     secret = "tok_super_secret_value_12345"
@@ -812,7 +652,7 @@ def test_doctor_reports_pending_tasks_and_concurrency_policy(
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     _clear_disk_cache(tmp_path)
     repo_path = tmp_path / "repo"
-    marker_dir = repo_path / ".supervisor"
+    marker_dir = repo_path / ".agpair"
     marker_dir.mkdir(parents=True, exist_ok=True)
 
     with run_health_server(

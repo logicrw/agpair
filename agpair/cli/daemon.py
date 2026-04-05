@@ -11,7 +11,6 @@ from agpair.daemon.process import daemon_status, start_background_daemon, stop_b
 from agpair.runtime_conflicts import (
     DesktopReaderLockError,
     acquire_shared_desktop_reader_lock,
-    detect_supervisor_desktop_reader_conflict,
     release_shared_desktop_reader_lock,
 )
 
@@ -22,25 +21,6 @@ def _paths() -> AppPaths:
     return AppPaths.default()
 
 
-def _fail_on_desktop_reader_conflict(*, force: bool) -> None:
-    conflict = detect_supervisor_desktop_reader_conflict()
-    if conflict is None:
-        return
-    if force and conflict.get("source") != "lock":
-        return
-    pid = conflict.get("pid")
-    command = conflict.get("command") or "desktop_agent_bus_watch.py"
-    typer.echo(
-        (
-            "refusing to start agpair daemon while another desktop watcher is already "
-            f"claiming code->desktop receipts (pid={pid}, command={command}). "
-            "Stop the existing desktop watcher first, or pass --force if you know "
-            "you are in a dedicated standalone environment."
-        ),
-        err=True,
-    )
-    raise typer.Exit(code=1)
-
 
 @app.command("run")
 def run_daemon(
@@ -50,7 +30,6 @@ def run_daemon(
     force: bool = typer.Option(False, "--force"),
 ) -> None:
     paths = _paths()
-    _fail_on_desktop_reader_conflict(force=force)
     previous_sigint = signal.getsignal(signal.SIGINT)
     previous_sigterm = signal.getsignal(signal.SIGTERM)
     _shutdown_requested = False
@@ -83,7 +62,6 @@ def start_daemon(
     timeout_seconds: int = typer.Option(1800, "--timeout-seconds"),
     force: bool = typer.Option(False, "--force"),
 ) -> None:
-    _fail_on_desktop_reader_conflict(force=force)
     pid = start_background_daemon(_paths(), interval_ms=interval_ms, timeout_seconds=timeout_seconds)
     typer.echo(pid)
 
