@@ -471,6 +471,7 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
     ]);
 
     assert.equal(capturedPrompt.includes("commit your work directly and send a COMMITTED receipt"), true);
+    assert.equal(capturedPrompt.includes("MUST include the exact task ID in the commit message"), true);
     assert.equal(capturedPrompt.includes('"status": "COMMITTED"'), true);
     assert.equal(capturedPrompt.includes('"commit_sha": "...", // required for COMMITTED only'), true);
     // ensure it no longer forces EVIDENCE_PACK only
@@ -506,6 +507,7 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
 
     assert.equal(capturedPrompt.includes('Codex/Claude Code APPROVED: commit phase for TASK-APP-PROMPT'), true);
     assert.equal(capturedPrompt.includes('"status": "COMMITTED"'), true);
+    assert.equal(capturedPrompt.includes("MUST include the exact task ID in the commit message"), true);
 
     service.dispose();
   });
