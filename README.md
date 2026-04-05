@@ -91,14 +91,11 @@ This is a usage recommendation, not a product limitation: `agpair` itself stays 
 | **macOS** | Primary tested platform. Linux is untested but may work. |
 | **Python 3.12+** | For the `agpair` CLI |
 | **Node.js 18+** | For building the companion extension |
-| **`agent-bus`** | Shared message bus CLI — see below |
-| **[Antigravity](https://antigravity.google/) IDE** | The companion extension runs inside it |
+| **[Antigravity](https://antigravity.google/) IDE** | The companion extension runs inside it (Antigravity executor only) |
 
 ### `agent-bus`
 
-`agent-bus` is the local message bus agpair uses for its Antigravity-backed execution path. If you use Antigravity as an executor, it must be available on your `PATH`.
-
-> **Note:** `agent-bus` is distributed as part of the Antigravity tooling environment. If you are only using `codex` / `gemini` executors, agpair's lifecycle still works, but the Antigravity-specific transport path is unused. If you want Antigravity available as an executor, ensure the `agent-bus` binary is on your `PATH`.
+`agent-bus` is the local message bus agpair uses for its Antigravity-backed execution path. It is **bundled with agpair** and installed automatically via `pip install -e .` — no separate download is needed.
 
 ### Antigravity IDE
 

@@ -11,12 +11,11 @@ This guide walks you through going from zero to your first successful task dispa
 | **macOS** | Primary tested platform. Linux is untested but may work. |
 | **Python 3.12+** | For the `agpair` CLI |
 | **Node.js 18+** | For building the companion extension |
-| **`agent-bus`** | Shared message bus CLI — must be on your `PATH` |
-| **[Antigravity](https://antigravity.google/) IDE** | The companion extension runs inside it |
+| **[Antigravity](https://antigravity.google/) IDE** | The companion extension runs inside it (Antigravity executor only) |
 
 ### What is `agent-bus`?
 
-`agent-bus` is the local message bus that agpair uses for its Antigravity-backed execution path. It is distributed as part of the Antigravity tooling environment. If you are using Antigravity as the executor, it must be available on your `PATH`. If you are using an Antigravity-managed setup, it should already be available. Otherwise, install the `agent-bus` binary provided by your Antigravity distribution and ensure it is on your `PATH`. There is currently no standalone public package for `agent-bus`.
+`agent-bus` is the local message bus that agpair uses for its Antigravity-backed execution path. It is **bundled with agpair** and installed automatically when you run `pip install -e .` — no separate download is needed.
 
 If you use `--executor codex` or `--executor gemini`, the same agpair lifecycle still applies, but the executor process is local CLI-based rather than Antigravity-session-based. This guide continues to use Antigravity examples because that path has the richest runtime surface.
 
@@ -70,7 +69,7 @@ Reload the Antigravity window after installing. The extension activates on start
 agent-bus --help
 ```
 
-If this fails, install or configure `agent-bus` first. agpair cannot dispatch tasks without it. See the [Prerequisites](#what-is-agent-bus) section for details on where to obtain it.
+If this fails, make sure you ran `pip install -e .` (or `pip install -e '.[dev]'`) — `agent-bus` is bundled with agpair and should be installed automatically.
 
 ## Step 3: Check target repo health
 
