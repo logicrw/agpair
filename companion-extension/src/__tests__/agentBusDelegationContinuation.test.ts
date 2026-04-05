@@ -445,4 +445,68 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
 
     service.dispose();
   });
+
+  it("builds initial task prompt that instructs COMMITTED on success", async () => {
+    const tracker = new DelegationTaskTracker();
+    let capturedPrompt = "";
+
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async createBackgroundSession(prompt: string) {
+          capturedPrompt = prompt;
+          return { ok: true, session_id: "sess-12345" };
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      sendReply: async () => {},
+    });
+
+    await service.handleMessages([
+      { id: 12, task_id: "TASK-PROMPT-TEST", status: "TASK", body: "Implement direct commit." },
+    ]);
+
+    assert.equal(capturedPrompt.includes("commit your work directly and send a COMMITTED receipt"), true);
+    assert.equal(capturedPrompt.includes('"status": "COMMITTED"'), true);
+    assert.equal(capturedPrompt.includes('"commit_sha": "...", // required for COMMITTED only'), true);
+    // ensure it no longer forces EVIDENCE_PACK only
+    assert.equal(capturedPrompt.includes('send a real EVIDENCE_PACK via agent-bus with diff stat'), false);
+
+    service.dispose();
+  });
+
+  it("builds approved prompt that asks for COMMITTED", async () => {
+    const tracker = new DelegationTaskTracker();
+    registerPendingTask(tracker, "TASK-APP-PROMPT");
+    let capturedPrompt = "";
+
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async sendPrompt(sessionId: string, prompt: string) {
+          capturedPrompt = prompt;
+          return { ok: true };
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      sendReply: async () => {},
+    });
+
+    await service.handleMessages([
+      { task_id: "TASK-APP-PROMPT", status: "APPROVED", body: "LGTM." },
+    ]);
+
+    assert.equal(capturedPrompt.includes('Codex/Claude Code APPROVED: commit phase for TASK-APP-PROMPT'), true);
+    assert.equal(capturedPrompt.includes('"status": "COMMITTED"'), true);
+
+    service.dispose();
+  });
 });
