@@ -446,6 +446,38 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
     service.dispose();
   });
 
+  it("emits BLOCKED when TASK session creation hangs past timeout", async () => {
+    const tracker = new DelegationTaskTracker();
+    const replies: Array<{ taskId: string; status: string; body: string }> = [];
+
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async createBackgroundSession() {
+          return await new Promise(() => undefined);
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      sessionOperationTimeoutMs: 10,
+      sendReply: async (reply: AgentBusDelegationReply) => {
+        replies.push(reply);
+      },
+    });
+
+    await service.handleMessages([
+      { id: 12_1, task_id: "TASK-HANG-START", status: "TASK", body: "Do it." },
+    ]);
+
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].status, "BLOCKED");
+    assert.match(replies[0].body, /timed out/i);
+    service.dispose();
+  });
+
   it("builds initial task prompt that instructs COMMITTED on success", async () => {
     const tracker = new DelegationTaskTracker();
     let capturedPrompt = "";
@@ -512,6 +544,39 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
     service.dispose();
   });
 
+  it("emits REVIEW_NACK when continuation send hangs past timeout", async () => {
+    const tracker = new DelegationTaskTracker();
+    registerPendingTask(tracker, "TASK-REV-HANG");
+
+    const replies: AgentBusDelegationReply[] = [];
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async sendPrompt() {
+          return await new Promise(() => undefined);
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      sessionOperationTimeoutMs: 10,
+      sendReply: async (reply: AgentBusDelegationReply) => {
+        replies.push(reply);
+      },
+    });
+
+    await service.handleMessages([
+      { id: 13_1, task_id: "TASK-REV-HANG", status: "REVIEW", body: "Fix it." },
+    ]);
+
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].status, "REVIEW_NACK");
+    assert.match(replies[0].body, /timed out/i);
+    service.dispose();
+  });
+
   it("builds review continuation prompt that asks for EVIDENCE_PACK instead of COMMITTED", async () => {
     const tracker = new DelegationTaskTracker();
     registerPendingTask(tracker, "TASK-REV-PROMPT");
@@ -541,6 +606,39 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
     assert.equal(capturedPrompt.includes('status=EVIDENCE_PACK or BLOCKED'), true);
     assert.equal(capturedPrompt.includes('COMMITTED'), false);
 
+    service.dispose();
+  });
+
+  it("emits APPROVE_NACK when approved send hangs past timeout", async () => {
+    const tracker = new DelegationTaskTracker();
+    registerPendingTask(tracker, "TASK-APP-HANG");
+
+    const replies: AgentBusDelegationReply[] = [];
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async sendPrompt() {
+          return await new Promise(() => undefined);
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      sessionOperationTimeoutMs: 10,
+      sendReply: async (reply: AgentBusDelegationReply) => {
+        replies.push(reply);
+      },
+    });
+
+    await service.handleMessages([
+      { id: 14_1, task_id: "TASK-APP-HANG", status: "APPROVED", body: "LGTM." },
+    ]);
+
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].status, "APPROVE_NACK");
+    assert.match(replies[0].body, /timed out/i);
     service.dispose();
   });
 });

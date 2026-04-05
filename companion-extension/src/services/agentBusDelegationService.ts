@@ -39,11 +39,13 @@ export interface AgentBusDelegationServiceOptions {
   /** Heartbeat cadence in ms. Default: 30 000 (30 s). */
   heartbeatIntervalMs?: number;
   staleAfterMs?: number;
+  sessionOperationTimeoutMs?: number;
   spawnFn?: typeof childProcess.spawn;
   sendReply?: (reply: AgentBusDelegationReply) => Promise<void>;
 }
 
 export class AgentBusDelegationService {
+  private static readonly DEFAULT_SESSION_OPERATION_TIMEOUT_MS = 15_000;
   private readonly enabled: boolean;
   private readonly command: string;
   private readonly workspacePathsProvider: () => string[];
@@ -58,6 +60,7 @@ export class AgentBusDelegationService {
   private readonly receiptWatcher: DelegationReceiptWatcher;
   private readonly heartbeatService: DelegationHeartbeatService;
   private readonly receiptDir: string;
+  private readonly sessionOperationTimeoutMs: number;
 
   constructor(options: AgentBusDelegationServiceOptions) {
     this.enabled = options.enabled;
@@ -70,6 +73,11 @@ export class AgentBusDelegationService {
     this.tracker = options.tracker;
     this.receiptDir =
       options.receiptDir ?? DelegationReceiptWatcher.defaultReceiptDir();
+    this.sessionOperationTimeoutMs = Math.max(
+      options.sessionOperationTimeoutMs ??
+        AgentBusDelegationService.DEFAULT_SESSION_OPERATION_TIMEOUT_MS,
+      1_000,
+    );
 
     this.receiptWatcher = new DelegationReceiptWatcher({
       tracker: this.tracker,
@@ -194,10 +202,23 @@ export class AgentBusDelegationService {
       body: typeof message.body === "string" ? message.body : "",
       receiptPath,
     });
-    const result = await this.sessionCtrl.createBackgroundSession(prompt, {
-      allowInteractiveFallback: true,
-      contextLabel: `delegated task ${taskId}`,
-    });
+    let result;
+    try {
+      result = await this.withSessionTimeout(
+        this.sessionCtrl.createBackgroundSession(prompt, {
+          allowInteractiveFallback: true,
+          contextLabel: `delegated task ${taskId}`,
+        }),
+        `createBackgroundSession for ${taskId}`,
+      );
+    } catch (err: any) {
+      await this.sendReplyFn({
+        taskId,
+        status: "BLOCKED",
+        body: `Failed to start Antigravity executor session: ${err?.message ?? String(err)}`,
+      });
+      return;
+    }
     if (!result.ok || !result.session_id) {
       await this.sendReplyFn({
         taskId,
@@ -326,13 +347,12 @@ export class AgentBusDelegationService {
     });
 
     try {
-      const result = await this.sessionCtrl.sendPrompt(
-        tracked.sessionId,
-        prompt,
-        {
+      const result = await this.withSessionTimeout(
+        this.sessionCtrl.sendPrompt(tracked.sessionId, prompt, {
           allowPanelFallback: false,
           contextLabel: `delegated task ${taskId} (${status})`,
-        },
+        }),
+        `sendPrompt ${status} for ${taskId}`,
       );
       if (!result.ok) {
         throw new Error(result.error ?? "sendPrompt returned ok=false");
@@ -422,13 +442,12 @@ export class AgentBusDelegationService {
     });
 
     try {
-      const result = await this.sessionCtrl.sendPrompt(
-        tracked.sessionId,
-        prompt,
-        {
+      const result = await this.withSessionTimeout(
+        this.sessionCtrl.sendPrompt(tracked.sessionId, prompt, {
           allowPanelFallback: false,
           contextLabel: `delegated task ${taskId} (APPROVED)`,
-        },
+        }),
+        `sendPrompt APPROVED for ${taskId}`,
       );
       if (!result.ok) {
         throw new Error(result.error ?? "sendPrompt returned ok=false");
@@ -477,6 +496,27 @@ export class AgentBusDelegationService {
       receipt_dir: this.receiptDir,
       tracker_summary: this.tracker.getSummary(),
     };
+  }
+
+  private withSessionTimeout<T>(
+    promise: Promise<T>,
+    label: string,
+  ): Promise<T> {
+    let timer: NodeJS.Timeout | null = null;
+    const timeoutPromise = new Promise<T>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new Error(
+            `${label} timed out after ${this.sessionOperationTimeoutMs}ms`,
+          ),
+        );
+      }, this.sessionOperationTimeoutMs);
+    });
+    return Promise.race([promise, timeoutPromise]).finally(() => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }) as Promise<T>;
   }
 
   /**

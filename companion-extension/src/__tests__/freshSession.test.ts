@@ -1,36 +1,56 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 
-import { pickFreshSessionId } from "../sdk/freshSession";
+import {
+  pickFreshSessionId,
+  pickFreshTrajectoryId,
+} from "../sdk/freshSession";
 
-describe("pickFreshSessionId", () => {
-  it("accepts a returned session id when it was not present before", () => {
-    const sessionId = pickFreshSessionId(
-      new Set(["sess-old-1", "sess-old-2"]),
-      "sess-new-1",
-      [{ id: "sess-old-1" }, { id: "sess-old-2" }, { id: "sess-new-1" }],
-    );
+describe("freshSession helpers", () => {
+  it("prefers a returned session id when it is new", () => {
+    const beforeIds = new Set(["sess-old"]);
 
-    assert.equal(sessionId, "sess-new-1");
+    const result = pickFreshSessionId(beforeIds, "sess-new", [
+      { id: "sess-old" },
+      { id: "sess-new" },
+    ]);
+
+    assert.equal(result, "sess-new");
   });
 
-  it("prefers a newly discovered session when LS returned an existing session id", () => {
-    const sessionId = pickFreshSessionId(
-      new Set(["sess-old-1"]),
-      "sess-old-1",
-      [{ id: "sess-old-1" }, { id: "sess-new-2" }],
-    );
+  it("selects the newest fresh session id from a session snapshot diff", () => {
+    const beforeIds = new Set(["sess-old"]);
 
-    assert.equal(sessionId, "sess-new-2");
+    const result = pickFreshSessionId(beforeIds, "", [
+      { id: "sess-old" },
+      { id: "sess-new-1" },
+      { id: "sess-new-2" },
+    ]);
+
+    assert.equal(result, "sess-new-2");
   });
 
-  it("returns null when there is no fresh session at all", () => {
-    const sessionId = pickFreshSessionId(
-      new Set(["sess-old-1"]),
-      "sess-old-1",
-      [{ id: "sess-old-1" }],
-    );
+  it("picks the first fresh trajectory id from diagnostics order", () => {
+    const beforeIds = new Set(["traj-old"]);
 
-    assert.equal(sessionId, null);
+    const result = pickFreshTrajectoryId(beforeIds, [
+      { googleAgentId: "traj-new" },
+      { googleAgentId: "traj-older-new" },
+      { googleAgentId: "traj-old" },
+    ]);
+
+    assert.equal(result, "traj-new");
+  });
+
+  it("returns null when diagnostics contain no fresh trajectory id", () => {
+    const beforeIds = new Set(["traj-old"]);
+
+    const result = pickFreshTrajectoryId(beforeIds, [
+      { googleAgentId: "traj-old" },
+      { googleAgentId: "" },
+      {},
+    ]);
+
+    assert.equal(result, null);
   });
 });

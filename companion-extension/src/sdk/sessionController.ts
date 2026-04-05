@@ -13,7 +13,11 @@
 import * as vscode from "vscode";
 import type { AntigravitySDK } from "antigravity-sdk";
 
-import { pickFreshSessionId } from "./freshSession";
+import {
+  pickFreshSessionId,
+  pickFreshTrajectoryId,
+  type RecentTrajectoryLike,
+} from "./freshSession";
 import { discoverLiveLsConnection } from "./lsConnectionRepair";
 
 export interface CreateSessionResult {
@@ -64,6 +68,7 @@ export class SessionController {
   ): Promise<CreateSessionResult> {
     const errors: string[] = [];
     const beforeIds = await this.snapshotSessionIds();
+    const beforeTrajectoryIds = await this.snapshotRecentTrajectoryIds();
     const allowInteractiveFallback = options.allowInteractiveFallback ?? false;
     const contextLabel = options.contextLabel?.trim() || "automated task";
 
@@ -85,10 +90,9 @@ export class SessionController {
     );
 
     // ── Path 4: Direct vscode commands ────────────────────────
-    // The only reliable path: bypass the SDK CascadeManager entirely.
-    // startNewConversation opens a real UI conversation, sendPromptToAgentPanel
-    // injects the prompt. getSessions() cannot reliably detect these sessions,
-    // so we generate a tracking ID instead of relying on session diff.
+    // The only reliable path we currently trust: open a real UI conversation
+    // and then verify that diagnostics/session listings surface a real ID.
+    // Never fabricate a synthetic tracking ID here — that causes false ACKs.
     try {
       console.log("[session] Path 4: Direct vscode commands...");
 
@@ -105,26 +109,27 @@ export class SessionController {
       // Wait for the prompt to be dispatched
       await new Promise((r) => setTimeout(r, 500));
 
-      // Best-effort session ID detection via diff.
-      // If getSessions() can't detect the new session, generate a tracking ID
-      // so the delegation system can still track the task.
-      let sessionId = "";
       try {
-        const after = await this.sdk.cascade.getSessions();
-        const freshSessionId = pickFreshSessionId(beforeIds, "", after);
-        if (freshSessionId) {
-          sessionId = freshSessionId;
-          console.log(`[session] New session detected by diff: ${sessionId}`);
-        }
+        await vscode.commands.executeCommand(
+          "antigravity.trackBackgroundConversationCreated",
+        );
       } catch {
-        // ignore — detection is best-effort
+        // best effort: command may be unavailable on some builds
+      }
+
+      let sessionId =
+        await this.waitForNewTrajectorySessionId(beforeTrajectoryIds, 8000);
+
+      if (!sessionId) {
+        sessionId = await this.resolveFreshSessionId(beforeIds, "");
       }
 
       if (!sessionId) {
-        sessionId = `ag-cmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        console.log(
-          `[session] getSessions() could not detect new session; using tracking ID: ${sessionId}`,
-        );
+        const message =
+          "Created a new Antigravity conversation, but could not verify a real session ID from diagnostics or session listings. Refusing to continue with an untrustworthy synthetic session.";
+        errors.push(message);
+        console.warn(`[session] ${message}`);
+        return { ok: false, session_id: "", error: message };
       }
 
       console.log(`[session] Direct commands succeeded: ${sessionId}`);
@@ -146,6 +151,25 @@ export class SessionController {
         sessions.map((session) => session.id).filter(Boolean),
       );
       console.log(`[session] Sessions before: ${ids.size} known`);
+      return ids;
+    } catch {
+      return new Set<string>();
+    }
+  }
+
+  private async snapshotRecentTrajectoryIds(): Promise<Set<string>> {
+    try {
+      const trajectories = await this.readRecentTrajectories();
+      const ids = new Set(
+        trajectories
+          .map((trajectory) =>
+            typeof trajectory.googleAgentId === "string"
+              ? trajectory.googleAgentId
+              : "",
+          )
+          .filter((id) => id.length > 0),
+      );
+      console.log(`[session] Trajectories before: ${ids.size} known`);
       return ids;
     } catch {
       return new Set<string>();
@@ -210,6 +234,39 @@ export class SessionController {
       }
     }
     return null;
+  }
+
+  private async waitForNewTrajectorySessionId(
+    beforeIds: Set<string>,
+    timeoutMs: number,
+  ): Promise<string | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      try {
+        const trajectories = await this.readRecentTrajectories();
+        const freshId = pickFreshTrajectoryId(beforeIds, trajectories);
+        if (freshId) {
+          return freshId;
+        }
+      } catch {
+        // best effort
+      }
+    }
+    return null;
+  }
+
+  private async readRecentTrajectories(): Promise<RecentTrajectoryLike[]> {
+    const raw = await vscode.commands.executeCommand(
+      "antigravity.getDiagnostics",
+    );
+    if (!raw || typeof raw !== "string") {
+      return [];
+    }
+    const parsed = JSON.parse(raw) as { recentTrajectories?: unknown };
+    return Array.isArray(parsed.recentTrajectories)
+      ? (parsed.recentTrajectories as RecentTrajectoryLike[])
+      : [];
   }
 
   /**

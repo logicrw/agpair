@@ -2,6 +2,10 @@ export interface SessionLike {
   id?: string | null;
 }
 
+export interface RecentTrajectoryLike {
+  googleAgentId?: string | null;
+}
+
 export function pickFreshSessionId(
   beforeIds: Set<string>,
   returnedId: string | null | undefined,
@@ -20,4 +24,20 @@ export function pickFreshSessionId(
   }
 
   return fresh[fresh.length - 1];
+}
+
+export function pickFreshTrajectoryId(
+  beforeIds: Set<string>,
+  trajectories: RecentTrajectoryLike[],
+): string | null {
+  for (const trajectory of trajectories) {
+    const id =
+      typeof trajectory.googleAgentId === "string"
+        ? trajectory.googleAgentId
+        : "";
+    if (id.length > 0 && !beforeIds.has(id)) {
+      return id;
+    }
+  }
+  return null;
 }
