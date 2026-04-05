@@ -80,6 +80,7 @@ export class AgentBusWatchService {
   private retryCount = 0;
   private stdoutBuffer = "";
   private stderrBuffer = "";
+  private fallbackNoRepoPath = false;
   private status: AgentBusWatchStatus;
 
   constructor(options: AgentBusWatchServiceOptions) {
@@ -159,8 +160,10 @@ export class AgentBusWatchService {
       ];
 
       const repoPath = this.workspacePathsProvider()[0];
-      if (repoPath) {
+      if (repoPath && !this.fallbackNoRepoPath) {
         args.push("--repo-path", repoPath);
+      } else if (repoPath && this.fallbackNoRepoPath) {
+        this.outputChannel.appendLine("[companion] Using fallback mode: skipping --repo-path isolation due to outdated agent-bus.");
       }
 
       const child = this.spawnFn(command, args, {
@@ -337,6 +340,9 @@ export class AgentBusWatchService {
       const trimmed = line.trim();
       if (!trimmed) continue;
       this.outputChannel.appendLine(`[companion] agent-bus stderr: ${trimmed}`);
+      if (trimmed.includes("unrecognized argument") && trimmed.includes("--repo-path")) {
+        this.fallbackNoRepoPath = true;
+      }
     }
   }
 

@@ -22,6 +22,7 @@ dev = [
 [project.scripts]
 agpair = "agpair.cli.app:main"
 agpair-mcp = "agpair.mcp_server:main"
+agent-bus = "agpair.cli.agent_bus:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
