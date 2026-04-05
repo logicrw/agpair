@@ -66,8 +66,15 @@ describe("resolveAuth", () => {
     const secrets = new InMemorySecretStorage();
     const result = await resolveAuth("", false, secrets);
     assert.equal(result.mode, "generated");
-    assert.ok(result.effectiveToken.length > 0, "generated token should be non-empty");
-    assert.equal(result.effectiveToken.length, 64, "should be 32 bytes = 64 hex chars");
+    assert.ok(
+      result.effectiveToken.length > 0,
+      "generated token should be non-empty",
+    );
+    assert.equal(
+      result.effectiveToken.length,
+      64,
+      "should be 32 bytes = 64 hex chars",
+    );
     // Verify it was persisted
     assert.equal(secrets.peek(SECRET_STORAGE_KEY), result.effectiveToken);
   });
@@ -83,7 +90,10 @@ describe("resolveAuth", () => {
 
 // ── Stub services ───────────────────────────────────────────────
 
-function makeStubConfig(authToken: string, authMode: BridgeAuthMode = "generated") {
+function makeStubConfig(
+  authToken: string,
+  authMode: BridgeAuthMode = "generated",
+) {
   return {
     port: 0,
     authToken,
@@ -123,33 +133,39 @@ function listenOnRandomPort(server: http.Server): Promise<number> {
   });
 }
 
-function httpRequest(port: number, options: {
-  method: string;
-  path: string;
-  headers?: Record<string, string>;
-  body?: string;
-}): Promise<{ status: number; body: any }> {
+function httpRequest(
+  port: number,
+  options: {
+    method: string;
+    path: string;
+    headers?: Record<string, string>;
+    body?: string;
+  },
+): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
-    const req = http.request({
-      hostname: "127.0.0.1",
-      port,
-      path: options.path,
-      method: options.method,
-      headers: {
-        "Content-Type": "application/json",
-        ...options.headers,
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: options.path,
+        method: options.method,
+        headers: {
+          "Content-Type": "application/json",
+          ...options.headers,
+        },
       },
-    }, (res) => {
-      let data = "";
-      res.on("data", (chunk: string) => (data += chunk));
-      res.on("end", () => {
-        try {
-          resolve({ status: res.statusCode || 0, body: JSON.parse(data) });
-        } catch {
-          resolve({ status: res.statusCode || 0, body: data });
-        }
-      });
-    });
+      (res) => {
+        let data = "";
+        res.on("data", (chunk: string) => (data += chunk));
+        res.on("end", () => {
+          try {
+            resolve({ status: res.statusCode || 0, body: JSON.parse(data) });
+          } catch {
+            resolve({ status: res.statusCode || 0, body: data });
+          }
+        });
+      },
+    );
     req.on("error", reject);
     if (options.body) req.write(options.body);
     req.end();
@@ -167,7 +183,9 @@ describe("Secure-by-default (generated token mode)", () => {
   });
 
   it("GET /health succeeds WITHOUT auth header", async () => {
-    server = createBridgeServer(makeStubConfig("generated-secret-token", "generated"));
+    server = createBridgeServer(
+      makeStubConfig("generated-secret-token", "generated"),
+    );
     port = await listenOnRandomPort(server);
     const res = await httpRequest(port, { method: "GET", path: "/health" });
     assert.equal(res.status, 200);
@@ -181,7 +199,13 @@ describe("Secure-by-default (generated token mode)", () => {
     const res = await httpRequest(port, {
       method: "POST",
       path: "/run_task",
-      body: JSON.stringify({ task_id: "t1", attempt_no: 0, review_round: 0, prompt: "test", repo_path: "/tmp" }),
+      body: JSON.stringify({
+        task_id: "t1",
+        attempt_no: 0,
+        review_round: 0,
+        prompt: "test",
+        repo_path: "/tmp",
+      }),
     });
     assert.equal(res.status, 401);
     assert.equal(res.body.ok, false);
@@ -195,7 +219,13 @@ describe("Secure-by-default (generated token mode)", () => {
       method: "POST",
       path: "/run_task",
       headers: { Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ task_id: "t1", attempt_no: 0, review_round: 0, prompt: "test", repo_path: "/tmp" }),
+      body: JSON.stringify({
+        task_id: "t1",
+        attempt_no: 0,
+        review_round: 0,
+        prompt: "test",
+        repo_path: "/tmp",
+      }),
     });
     assert.equal(res.status, 200);
     assert.equal(res.body.ok, true);
@@ -220,7 +250,13 @@ describe("Secure-by-default (generated token mode)", () => {
     const res = await httpRequest(port, {
       method: "POST",
       path: "/write_receipt",
-      body: JSON.stringify({ task_id: "t1", attempt_no: 0, review_round: 0, status: "EVIDENCE_PACK", summary: "done" }),
+      body: JSON.stringify({
+        task_id: "t1",
+        attempt_no: 0,
+        review_round: 0,
+        status: "EVIDENCE_PACK",
+        summary: "done",
+      }),
     });
     assert.equal(res.status, 401);
   });
@@ -278,7 +314,13 @@ describe("Insecure mode (bridgeInsecure=true)", () => {
     const res = await httpRequest(port, {
       method: "POST",
       path: "/run_task",
-      body: JSON.stringify({ task_id: "t1", attempt_no: 0, review_round: 0, prompt: "test", repo_path: "/tmp" }),
+      body: JSON.stringify({
+        task_id: "t1",
+        attempt_no: 0,
+        review_round: 0,
+        prompt: "test",
+        repo_path: "/tmp",
+      }),
     });
     assert.equal(res.status, 200);
     assert.equal(res.body.ok, true);
@@ -316,32 +358,50 @@ describe("Configured token mode", () => {
   });
 
   it("POST /run_task returns 401 with wrong token", async () => {
-    server = createBridgeServer(makeStubConfig("configured-secret", "configured"));
+    server = createBridgeServer(
+      makeStubConfig("configured-secret", "configured"),
+    );
     port = await listenOnRandomPort(server);
     const res = await httpRequest(port, {
       method: "POST",
       path: "/run_task",
       headers: { Authorization: "Bearer wrong-token" },
-      body: JSON.stringify({ task_id: "t1", attempt_no: 0, review_round: 0, prompt: "test", repo_path: "/tmp" }),
+      body: JSON.stringify({
+        task_id: "t1",
+        attempt_no: 0,
+        review_round: 0,
+        prompt: "test",
+        repo_path: "/tmp",
+      }),
     });
     assert.equal(res.status, 401);
   });
 
   it("POST /run_task succeeds with correct configured token", async () => {
-    server = createBridgeServer(makeStubConfig("configured-secret", "configured"));
+    server = createBridgeServer(
+      makeStubConfig("configured-secret", "configured"),
+    );
     port = await listenOnRandomPort(server);
     const res = await httpRequest(port, {
       method: "POST",
       path: "/run_task",
       headers: { Authorization: "Bearer configured-secret" },
-      body: JSON.stringify({ task_id: "t1", attempt_no: 0, review_round: 0, prompt: "test", repo_path: "/tmp" }),
+      body: JSON.stringify({
+        task_id: "t1",
+        attempt_no: 0,
+        review_round: 0,
+        prompt: "test",
+        repo_path: "/tmp",
+      }),
     });
     assert.equal(res.status, 200);
     assert.equal(res.body.ok, true);
   });
 
   it("GET /health still accessible without auth", async () => {
-    server = createBridgeServer(makeStubConfig("configured-secret", "configured"));
+    server = createBridgeServer(
+      makeStubConfig("configured-secret", "configured"),
+    );
     port = await listenOnRandomPort(server);
     const res = await httpRequest(port, { method: "GET", path: "/health" });
     assert.equal(res.status, 200);
@@ -355,14 +415,21 @@ describe("/write_receipt prompt wiring", () => {
   it("appendReceiptInstruction includes the effective token in Authorization header", () => {
     // We test this by importing TaskExecutionService and calling the private method
     // through a test wrapper.
-    const { TaskExecutionService } = require("../services/taskExecutionService");
+    const {
+      TaskExecutionService,
+    } = require("../services/taskExecutionService");
     const service = new TaskExecutionService(
-      { createBackgroundSession: async () => ({ ok: true, session_id: "s1" }) } as any,
+      {
+        createBackgroundSession: async () => ({ ok: true, session_id: "s1" }),
+      } as any,
       { get: () => null, count: () => 0 } as any,
       { push: () => {} } as any,
     );
 
-    service.setBridgeContext({ port: 9999, authToken: "effective-secret-token" });
+    service.setBridgeContext({
+      port: 9999,
+      authToken: "effective-secret-token",
+    });
 
     // Call the private method via bracket notation
     const result = (service as any).appendReceiptInstruction(
@@ -390,9 +457,13 @@ describe("/write_receipt prompt wiring", () => {
   });
 
   it("appendReceiptInstruction omits Authorization header when token is empty", () => {
-    const { TaskExecutionService } = require("../services/taskExecutionService");
+    const {
+      TaskExecutionService,
+    } = require("../services/taskExecutionService");
     const service = new TaskExecutionService(
-      { createBackgroundSession: async () => ({ ok: true, session_id: "s1" }) } as any,
+      {
+        createBackgroundSession: async () => ({ ok: true, session_id: "s1" }),
+      } as any,
       { get: () => null, count: () => 0 } as any,
       { push: () => {} } as any,
     );

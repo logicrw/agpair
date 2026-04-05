@@ -7,8 +7,12 @@ import { TaskSessionStore } from "../state/taskSessionStore";
 import { DelegationTaskTracker } from "../state/delegationTaskTracker";
 
 function createFakeSdk() {
-  let stepHandler: ((change: { sessionId: string; newCount: number; delta: number }) => void) | null = null;
-  let activeHandler: ((change: { previousSessionId: string; sessionId: string }) => void) | null = null;
+  let stepHandler:
+    | ((change: { sessionId: string; newCount: number; delta: number }) => void)
+    | null = null;
+  let activeHandler:
+    | ((change: { previousSessionId: string; sessionId: string }) => void)
+    | null = null;
 
   return {
     sdk: {

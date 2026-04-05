@@ -101,15 +101,25 @@ export class TaskExecutionService {
    *
    * Returns null if clean, or a structured error object if rejected.
    */
-  static sanitizePrompt(prompt: unknown): { ok: false; status: string; message: string } | null {
+  static sanitizePrompt(
+    prompt: unknown,
+  ): { ok: false; status: string; message: string } | null {
     if (prompt === undefined || prompt === null) {
       return { ok: false, status: "ERROR", message: "prompt is required" };
     }
     if (typeof prompt !== "string") {
-      return { ok: false, status: "ERROR", message: `prompt must be a string, got ${typeof prompt}` };
+      return {
+        ok: false,
+        status: "ERROR",
+        message: `prompt must be a string, got ${typeof prompt}`,
+      };
     }
     if (prompt.length === 0) {
-      return { ok: false, status: "ERROR", message: "prompt must not be empty" };
+      return {
+        ok: false,
+        status: "ERROR",
+        message: "prompt must not be empty",
+      };
     }
 
     // NUL byte check — definitive binary indicator
@@ -117,7 +127,8 @@ export class TaskExecutionService {
       return {
         ok: false,
         status: "ERROR",
-        message: "prompt contains NUL bytes (binary content detected). Only text prompts are accepted.",
+        message:
+          "prompt contains NUL bytes (binary content detected). Only text prompts are accepted.",
       };
     }
 
@@ -197,18 +208,35 @@ export class TaskExecutionService {
     MonitorController.ensureReceiptDir(repoPath);
 
     // Delete any stale receipt for same triplet (restart/retry within same round)
-    this.cleanStaleReceipt(repoPath, req.task_id, req.attempt_no, req.review_round);
+    this.cleanStaleReceipt(
+      repoPath,
+      req.task_id,
+      req.attempt_no,
+      req.review_round,
+    );
 
     // Append receipt-write instruction so the monitor can read the output.
     // GetConversation RPC is not implemented in this LS version (404),
     // so the agent writes a JSON receipt file instead.
-    const outputFile = MonitorController.outputFilePath(repoPath, req.task_id, req.attempt_no, req.review_round);
-    const promptWithSuffix = this.appendReceiptInstruction(req.prompt, req, outputFile);
+    const outputFile = MonitorController.outputFilePath(
+      repoPath,
+      req.task_id,
+      req.attempt_no,
+      req.review_round,
+    );
+    const promptWithSuffix = this.appendReceiptInstruction(
+      req.prompt,
+      req,
+      outputFile,
+    );
 
-    const result = await this.sessionCtrl.createBackgroundSession(promptWithSuffix, {
-      allowInteractiveFallback: true,
-      contextLabel: `task ${req.task_id}`,
-    });
+    const result = await this.sessionCtrl.createBackgroundSession(
+      promptWithSuffix,
+      {
+        allowInteractiveFallback: true,
+        contextLabel: `task ${req.task_id}`,
+      },
+    );
 
     if (!result.ok) {
       return {
@@ -239,7 +267,8 @@ export class TaskExecutionService {
         source_event_id: "",
         source_seq: 0,
         emitted_at: new Date().toISOString(),
-        message: "Failed to establish a trustworthy session (phantom ID). The UI may not be able to receive prompts reliably.",
+        message:
+          "Failed to establish a trustworthy session (phantom ID). The UI may not be able to receive prompts reliably.",
       };
     }
 
@@ -352,13 +381,15 @@ export class TaskExecutionService {
     }
 
     // ── Quarantine guard ──────────────────────────────────────
-    const quarantineEntry = TaskExecutionService.checkQuarantine(session.session_id);
+    const quarantineEntry = TaskExecutionService.checkQuarantine(
+      session.session_id,
+    );
     if (quarantineEntry) {
       const now = new Date().toISOString();
       console.warn(
         `[taskExec] QUARANTINED session refused: session=${session.session_id} ` +
-        `task=${req.task_id} signature=${quarantineEntry.signature} ` +
-        `count=${quarantineEntry.count}`
+          `task=${req.task_id} signature=${quarantineEntry.signature} ` +
+          `count=${quarantineEntry.count}`,
       );
       return {
         ok: false,
@@ -370,7 +401,8 @@ export class TaskExecutionService {
         source_event_id: "",
         source_seq: 0,
         emitted_at: now,
-        message: `Session ${session.session_id} is quarantined: ${quarantineEntry.signature} ` +
+        message:
+          `Session ${session.session_id} is quarantined: ${quarantineEntry.signature} ` +
           `(${quarantineEntry.count} occurrences, quarantined at ${quarantineEntry.quarantined_at}). ` +
           `Refusing continue_task to prevent bad-session loop.`,
       };
@@ -379,15 +411,33 @@ export class TaskExecutionService {
     // Delete stale receipt: current round (restart/retry) AND prior rounds
     const repoPath = req.repo_path || session.repo_path || "/tmp";
     MonitorController.ensureReceiptDir(repoPath);
-    this.cleanStaleReceipt(repoPath, req.task_id, req.attempt_no, req.review_round);
+    this.cleanStaleReceipt(
+      repoPath,
+      req.task_id,
+      req.attempt_no,
+      req.review_round,
+    );
 
     // Send prompt to existing session with receipt-write instruction
-    const outputFile = MonitorController.outputFilePath(repoPath, req.task_id, req.attempt_no, req.review_round);
-    const promptWithSuffix = this.appendReceiptInstruction(req.prompt, req, outputFile);
-    const result = await this.sessionCtrl.sendPrompt(session.session_id, promptWithSuffix, {
-      allowPanelFallback: false,
-      contextLabel: `task ${req.task_id}`,
-    });
+    const outputFile = MonitorController.outputFilePath(
+      repoPath,
+      req.task_id,
+      req.attempt_no,
+      req.review_round,
+    );
+    const promptWithSuffix = this.appendReceiptInstruction(
+      req.prompt,
+      req,
+      outputFile,
+    );
+    const result = await this.sessionCtrl.sendPrompt(
+      session.session_id,
+      promptWithSuffix,
+      {
+        allowPanelFallback: false,
+        contextLabel: `task ${req.task_id}`,
+      },
+    );
 
     if (!result.ok) {
       // Session exists in our store but SDK can't reach it → DESYNC
@@ -485,8 +535,9 @@ export class TaskExecutionService {
       status: "<YOUR_STATUS>",
       summary: "<YOUR_SUMMARY>",
       payload: {
-        "__instruction": "Replace this object with the status-specific payload. See prompt for schema."
-      }
+        __instruction:
+          "Replace this object with the status-specific payload. See prompt for schema.",
+      },
     };
     const receiptTemplate = JSON.stringify(receiptObj, null, 2);
 
@@ -504,10 +555,11 @@ export class TaskExecutionService {
       `The "payload" field MUST be a JSON object containing status-specific data:`,
       ` - For COMMITTED: {"commit_sha": "...", "branch": "...", "diff_stat": "...", "changed_files": ["..."], "validation": ["..."], "residual_risks": ["..."]}`,
       ` - For BLOCKED: {"blocker_type": "...", "message": "...", "recoverable": true|false, "suggested_action": "...", "last_error_excerpt": "..."}`,
-      ` - For EVIDENCE_PACK: {"diff_stat": "...", "changed_files": ["..."], "validation": ["..."], "residual_risks": ["..."]}`
+      ` - For EVIDENCE_PACK: {"diff_stat": "...", "changed_files": ["..."], "validation": ["..."], "residual_risks": ["..."]}`,
     ].join("\n");
 
-    return prompt +
+    return (
+      prompt +
       `\n\nAFTER completing your task, submit your structured v1 result receipt. ` +
       `Replace <YOUR_STATUS> with one of: EVIDENCE_PACK, BLOCKED, COMMITTED. ` +
       `Replace <YOUR_SUMMARY> with a brief description.\n\n` +
@@ -515,7 +567,8 @@ export class TaskExecutionService {
       preferred +
       `FALLBACK: If the bridge is unavailable, create the file ${outputFile} ` +
       `containing the same JSON object.\n` +
-      `Template:\n${receiptTemplate}`;
+      `Template:\n${receiptTemplate}`
+    );
   }
 
   /**
@@ -533,7 +586,12 @@ export class TaskExecutionService {
       const fs = require("fs");
       // Delete current round AND all prior rounds
       for (let r = 0; r <= currentRound; r++) {
-        const staleFile = MonitorController.outputFilePath(repoPath, taskId, attemptNo, r);
+        const staleFile = MonitorController.outputFilePath(
+          repoPath,
+          taskId,
+          attemptNo,
+          r,
+        );
         if (fs.existsSync(staleFile)) {
           fs.unlinkSync(staleFile);
           console.log(`[taskExec] Deleted stale receipt: ${staleFile}`);
@@ -571,7 +629,10 @@ export class TaskExecutionService {
       if (!fs.existsSync(TaskExecutionService.QUARANTINE_PATH)) {
         return null; // No registry → backward-compatible, no quarantine
       }
-      const raw = fs.readFileSync(TaskExecutionService.QUARANTINE_PATH, "utf-8");
+      const raw = fs.readFileSync(
+        TaskExecutionService.QUARANTINE_PATH,
+        "utf-8",
+      );
       const data = JSON.parse(raw);
       const entries: any[] = data.entries || [];
       for (const entry of entries) {
@@ -586,7 +647,9 @@ export class TaskExecutionService {
       }
     } catch (e: any) {
       // Registry unreadable → safe default: allow
-      console.warn(`[taskExec] Failed to read quarantine registry: ${e.message}`);
+      console.warn(
+        `[taskExec] Failed to read quarantine registry: ${e.message}`,
+      );
     }
     return null;
   }

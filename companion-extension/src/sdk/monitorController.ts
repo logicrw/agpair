@@ -24,7 +24,12 @@
  * Spec: codex_antigravity_companion_extension_ts_spec.md §7.3, §8
  */
 
-import type { AntigravitySDK, IStepCountChange, IActiveSessionChange, IDisposable } from "antigravity-sdk";
+import type {
+  AntigravitySDK,
+  IStepCountChange,
+  IActiveSessionChange,
+  IDisposable,
+} from "antigravity-sdk";
 import { PendingEventStore, PendingEvent } from "../state/pendingEventStore";
 import { TaskSessionStore, TaskSession } from "../state/taskSessionStore";
 import type { DelegationTaskTracker } from "../state/delegationTaskTracker";
@@ -50,9 +55,19 @@ export class MonitorController {
    * Shared by MonitorController (reader) and TaskExecutionService (writer instruction).
    * Uses workspace-relative .agpair/receipts/ directory.
    */
-  static outputFilePath(repoPath: string, taskId: string, attemptNo: number, reviewRound: number): string {
+  static outputFilePath(
+    repoPath: string,
+    taskId: string,
+    attemptNo: number,
+    reviewRound: number,
+  ): string {
     const path = require("path");
-    return path.join(repoPath, ".agpair", "receipts", `${taskId}_${attemptNo}_${reviewRound}.json`);
+    return path.join(
+      repoPath,
+      ".agpair",
+      "receipts",
+      `${taskId}_${attemptNo}_${reviewRound}.json`,
+    );
   }
 
   /**
@@ -82,15 +97,19 @@ export class MonitorController {
     if (this._running) return;
 
     // Subscribe to step count changes → emit RUNNING + check terminal
-    const stepSub = this.sdk.monitor.onStepCountChanged((change: IStepCountChange) => {
-      this.handleStepCountChange(change);
-    });
+    const stepSub = this.sdk.monitor.onStepCountChanged(
+      (change: IStepCountChange) => {
+        this.handleStepCountChange(change);
+      },
+    );
     this.disposables.push(stepSub);
 
     // Subscribe to active session changes → detect DESYNC
-    const sessionSub = this.sdk.monitor.onActiveSessionChanged((change: IActiveSessionChange) => {
-      this.handleActiveSessionChange(change);
-    });
+    const sessionSub = this.sdk.monitor.onActiveSessionChanged(
+      (change: IActiveSessionChange) => {
+        this.handleActiveSessionChange(change);
+      },
+    );
     this.disposables.push(sessionSub);
 
     // Periodic re-check for terminal output on RUNNING sessions.
@@ -99,8 +118,13 @@ export class MonitorController {
     this.terminalCheckTimer = setInterval(() => {
       const sessions = this.sessionStore.getAll();
       for (const session of sessions) {
-        if (session.last_known_status === "RUNNING" && session.last_step_count > 0) {
-          this.checkTerminalOutput(session, session.last_step_count).catch(() => {});
+        if (
+          session.last_known_status === "RUNNING" &&
+          session.last_step_count > 0
+        ) {
+          this.checkTerminalOutput(session, session.last_step_count).catch(
+            () => {},
+          );
         }
       }
     }, 5000);
@@ -138,7 +162,9 @@ export class MonitorController {
   private handleStepCountChange(change: IStepCountChange): void {
     const now = new Date().toISOString();
 
-    const delegatedTask = this.delegationTracker?.findBySessionId(change.sessionId);
+    const delegatedTask = this.delegationTracker?.findBySessionId(
+      change.sessionId,
+    );
     if (delegatedTask) {
       this.delegationTracker?.touch(delegatedTask.taskId, "RUNNING", now);
       console.log(
@@ -158,13 +184,17 @@ export class MonitorController {
       const allSessions = this.sessionStore.getAll();
       if (allSessions.length === 1) {
         // ── Quarantine guard: refuse rebind onto quarantined session ──
-        const { TaskExecutionService } = require("../services/taskExecutionService");
-        const quarantineEntry = TaskExecutionService.checkQuarantine(change.sessionId);
+        const {
+          TaskExecutionService,
+        } = require("../services/taskExecutionService");
+        const quarantineEntry = TaskExecutionService.checkQuarantine(
+          change.sessionId,
+        );
         if (quarantineEntry) {
           console.warn(
             `[monitor] QUARANTINE BLOCKED auto-rebind: ` +
-            `session=${change.sessionId} signature=${quarantineEntry.signature} ` +
-            `count=${quarantineEntry.count}. Refusing rebind.`
+              `session=${change.sessionId} signature=${quarantineEntry.signature} ` +
+              `count=${quarantineEntry.count}. Refusing rebind.`,
           );
           return;
         }
@@ -172,7 +202,9 @@ export class MonitorController {
         session = allSessions[0];
         const oldId = session.session_id;
         session.session_id = change.sessionId;
-        console.log(`[monitor] Auto-rebound session: ${oldId} -> ${change.sessionId} (task=${session.task_id})`);
+        console.log(
+          `[monitor] Auto-rebound session: ${oldId} -> ${change.sessionId} (task=${session.task_id})`,
+        );
       } else {
         return;
       }
@@ -204,7 +236,9 @@ export class MonitorController {
 
     // Check for terminal output (async, fire-and-forget)
     this.checkTerminalOutput(session, change.newCount).catch((err) => {
-      console.error(`[monitor] Terminal check failed for ${session.task_id}: ${err.message}`);
+      console.error(
+        `[monitor] Terminal check failed for ${session.task_id}: ${err.message}`,
+      );
     });
   }
 
@@ -218,7 +252,10 @@ export class MonitorController {
    * If parsing fails or no structured output is found, does nothing.
    * Monitor never guesses completion — only parses structured headers.
    */
-  private async checkTerminalOutput(session: TaskSession, stepCount: number): Promise<void> {
+  private async checkTerminalOutput(
+    session: TaskSession,
+    stepCount: number,
+  ): Promise<void> {
     // Get or create monitor state for this session
     let state = this.monitorState.get(session.session_id);
     if (!state) {
@@ -238,7 +275,10 @@ export class MonitorController {
 
     const repoPath = session.repo_path || "/tmp";
     const outputFile = MonitorController.outputFilePath(
-      repoPath, session.task_id, session.attempt_no, session.review_round
+      repoPath,
+      session.task_id,
+      session.attempt_no,
+      session.review_round,
     );
     try {
       const fs = require("fs");
@@ -256,14 +296,14 @@ export class MonitorController {
             `SUMMARY: ${receipt.summary || ""}`,
           ].join("\n");
           console.log(
-            `[monitor] Read JSON receipt: ${outputFile} → status=${receipt.status}`
+            `[monitor] Read JSON receipt: ${outputFile} → status=${receipt.status}`,
           );
         } catch {
           // Fallback: treat as plain text (M52 compat)
           lastText = raw;
           console.log(
             `[monitor] Read plain receipt: ${outputFile} (${raw.length} chars): ` +
-            `${raw.substring(0, 200)}`
+              `${raw.substring(0, 200)}`,
           );
         }
       } else {
@@ -283,7 +323,7 @@ export class MonitorController {
     if (parsed.task_id !== session.task_id) {
       console.warn(
         `[monitor] Structured output TASK_ID mismatch: ` +
-        `expected=${session.task_id}, got=${parsed.task_id}. Ignoring.`
+          `expected=${session.task_id}, got=${parsed.task_id}. Ignoring.`,
       );
       return;
     }
@@ -291,7 +331,7 @@ export class MonitorController {
     if (parsed.attempt_no !== session.attempt_no) {
       console.warn(
         `[monitor] Structured output ATTEMPT_NO mismatch: ` +
-        `expected=${session.attempt_no}, got=${parsed.attempt_no}. Ignoring.`
+          `expected=${session.attempt_no}, got=${parsed.attempt_no}. Ignoring.`,
       );
       return;
     }
@@ -299,7 +339,7 @@ export class MonitorController {
     if (parsed.review_round !== session.review_round) {
       console.warn(
         `[monitor] Structured output REVIEW_ROUND mismatch: ` +
-        `expected=${session.review_round}, got=${parsed.review_round}. Ignoring.`
+          `expected=${session.review_round}, got=${parsed.review_round}. Ignoring.`,
       );
       return;
     }
@@ -343,7 +383,7 @@ export class MonitorController {
 
     console.log(
       `[monitor] Terminal event emitted: task=${session.task_id} ` +
-      `status=${parsed.status} seq=${seq}`
+        `status=${parsed.status} seq=${seq}`,
     );
   }
 

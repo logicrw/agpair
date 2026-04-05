@@ -13,7 +13,12 @@ import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import { PendingEventStore, PendingEvent } from "../state/pendingEventStore";
 
-function makeEvent(task_id: string, eventId: string, seq: number, status = "RUNNING"): PendingEvent {
+function makeEvent(
+  task_id: string,
+  eventId: string,
+  seq: number,
+  status = "RUNNING",
+): PendingEvent {
   return {
     source_event_id: eventId,
     task_id,
@@ -102,8 +107,14 @@ describe("PendingEventStore", () => {
 
   it("deduplicates pushes with the same source_event_id", () => {
     const store = new PendingEventStore();
-    store.push("task-1", makeEvent("task-1", "session-1:evt:1000", 1000, "EVIDENCE_PACK"));
-    store.push("task-1", makeEvent("task-1", "session-1:evt:1000", 1000, "EVIDENCE_PACK"));
+    store.push(
+      "task-1",
+      makeEvent("task-1", "session-1:evt:1000", 1000, "EVIDENCE_PACK"),
+    );
+    store.push(
+      "task-1",
+      makeEvent("task-1", "session-1:evt:1000", 1000, "EVIDENCE_PACK"),
+    );
 
     const pending = store.getPending("task-1");
     assert.equal(pending.length, 1);

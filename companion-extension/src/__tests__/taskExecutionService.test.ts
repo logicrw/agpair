@@ -63,7 +63,11 @@ describe("TaskExecutionService automation fallback policy", () => {
 
     const service = new TaskExecutionService(
       {
-        async sendPrompt(_sessionId: string, _prompt: string, options?: unknown) {
+        async sendPrompt(
+          _sessionId: string,
+          _prompt: string,
+          options?: unknown,
+        ) {
           capturedOptions = options ?? null;
           return { ok: true };
         },
@@ -99,7 +103,7 @@ describe("TaskExecutionService automation fallback policy", () => {
         async terminateSession(sessionId: string) {
           terminatedSession = sessionId;
           return true;
-        }
+        },
       } as any,
       sessionStore,
       eventStore,
@@ -118,7 +122,7 @@ describe("TaskExecutionService automation fallback policy", () => {
     assert.match(result.message, /trustworthy session/i);
     assert.match(result.message, /phantom ID/i);
     assert.equal(terminatedSession, "ag-cmd-123456");
-    
+
     // Ensure no session was bound
     const bound = sessionStore.get("TASK-RUN-PHANTOM", 1);
     assert.equal(bound, undefined);

@@ -124,7 +124,11 @@ export class DelegationTaskTracker {
    * watcher can emit another EVIDENCE_PACK / BLOCKED after REVIEW or
    * REVIEW_DELTA is applied, and the heartbeat loop can resume cleanly.
    */
-  reopen(taskId: string, status: DelegationTaskStatus = "RUNNING", at?: string): boolean {
+  reopen(
+    taskId: string,
+    status: DelegationTaskStatus = "RUNNING",
+    at?: string,
+  ): boolean {
     const task = this.tasks.get(taskId);
     if (!task) {
       return false;
@@ -148,7 +152,11 @@ export class DelegationTaskTracker {
    * Update the session ID and receipt path for a task.
    * Used for session recovery when a task gets stuck.
    */
-  updateSession(taskId: string, sessionId: string, receiptPath: string): boolean {
+  updateSession(
+    taskId: string,
+    sessionId: string,
+    receiptPath: string,
+  ): boolean {
     const task = this.tasks.get(taskId);
     if (!task) return false;
     task.sessionId = sessionId;
@@ -195,11 +203,7 @@ export class DelegationTaskTracker {
    * Mark a task as having sent its terminal status.
    * Returns false if already sent (dedup guard).
    */
-  markTerminal(
-    taskId: string,
-    status: string,
-    body: string,
-  ): boolean {
+  markTerminal(taskId: string, status: string, body: string): boolean {
     const task = this.tasks.get(taskId);
     if (!task) return false;
     if (task.terminalSentAt) return false; // already sent
@@ -314,7 +318,7 @@ export class DelegationTaskTracker {
    */
   hasPendingTerminalDelivery(taskId: string): boolean {
     const task = this.tasks.get(taskId);
-    return (task?.pendingTerminalStatus != null) && (task?.terminalSentAt == null);
+    return task?.pendingTerminalStatus != null && task?.terminalSentAt == null;
   }
 
   /**
@@ -343,7 +347,10 @@ export class DelegationTaskTracker {
   /**
    * Get the first active delegated task for a repo path, excluding an optional task id.
    */
-  getPendingForRepo(repoPath: string, excludeTaskId?: string): DelegationTask | undefined {
+  getPendingForRepo(
+    repoPath: string,
+    excludeTaskId?: string,
+  ): DelegationTask | undefined {
     return this.getPending().find(
       (task) => task.repoPath === repoPath && task.taskId !== excludeTaskId,
     );
@@ -479,12 +486,13 @@ function normalizeTask(value: unknown): DelegationTask | null {
     sessionId: entry.sessionId,
     repoPath: entry.repoPath,
     receiptPath: entry.receiptPath,
-    taskBody:
-      typeof entry.taskBody === "string" ? entry.taskBody : null,
+    taskBody: typeof entry.taskBody === "string" ? entry.taskBody : null,
     status: entry.status as DelegationTaskStatus,
     ackedAt: entry.ackedAt,
     lastActivityAt:
-      typeof entry.lastActivityAt === "string" ? entry.lastActivityAt : entry.ackedAt,
+      typeof entry.lastActivityAt === "string"
+        ? entry.lastActivityAt
+        : entry.ackedAt,
     lastHeartbeatAt:
       typeof entry.lastHeartbeatAt === "string" ? entry.lastHeartbeatAt : null,
     terminalSentAt:
@@ -494,14 +502,24 @@ function normalizeTask(value: unknown): DelegationTask | null {
     terminalBody:
       typeof entry.terminalBody === "string" ? entry.terminalBody : null,
     pendingTerminalStatus:
-      typeof entry.pendingTerminalStatus === "string" ? entry.pendingTerminalStatus : null,
+      typeof entry.pendingTerminalStatus === "string"
+        ? entry.pendingTerminalStatus
+        : null,
     pendingTerminalBody:
-      typeof entry.pendingTerminalBody === "string" ? entry.pendingTerminalBody : null,
+      typeof entry.pendingTerminalBody === "string"
+        ? entry.pendingTerminalBody
+        : null,
     pendingTerminalPreparedAt:
-      typeof entry.pendingTerminalPreparedAt === "string" ? entry.pendingTerminalPreparedAt : null,
+      typeof entry.pendingTerminalPreparedAt === "string"
+        ? entry.pendingTerminalPreparedAt
+        : null,
     pendingTerminalInflightAt:
-      typeof entry.pendingTerminalInflightAt === "string" ? entry.pendingTerminalInflightAt : null,
+      typeof entry.pendingTerminalInflightAt === "string"
+        ? entry.pendingTerminalInflightAt
+        : null,
     pendingTerminalDeliveryId:
-      typeof entry.pendingTerminalDeliveryId === "string" ? entry.pendingTerminalDeliveryId : null,
+      typeof entry.pendingTerminalDeliveryId === "string"
+        ? entry.pendingTerminalDeliveryId
+        : null,
   };
 }

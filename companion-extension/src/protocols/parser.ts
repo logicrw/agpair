@@ -45,7 +45,9 @@ export function parseStructuredOutput(raw: string): ParsedOutput | null {
   if (!raw) return null;
 
   // Accept COMMITTED, EVIDENCE_PACK, BLOCKED as canonical; FAILED as legacy
-  const statusMatch = raw.match(/^STATUS:\s*(EVIDENCE_PACK|BLOCKED|COMMITTED|FAILED)\s*$/m);
+  const statusMatch = raw.match(
+    /^STATUS:\s*(EVIDENCE_PACK|BLOCKED|COMMITTED|FAILED)\s*$/m,
+  );
   if (!statusMatch) return null;
 
   let status = statusMatch[1] as TerminalStatus | "FAILED";
@@ -54,7 +56,7 @@ export function parseStructuredOutput(raw: string): ParsedOutput | null {
   if (status === "FAILED") {
     console.warn(
       `[parser] Deprecated STATUS: FAILED received — remapping to BLOCKED. ` +
-      `Update the agent to use COMMITTED (success) or BLOCKED (failure).`
+        `Update the agent to use COMMITTED (success) or BLOCKED (failure).`,
     );
     status = "BLOCKED";
   }
@@ -94,6 +96,8 @@ export function parseApprovalRequired(raw: string): { reason: string } | null {
 
   const reasonMatch = raw.match(/^REASON:\s*(.+)\s*$/m);
   return {
-    reason: reasonMatch ? reasonMatch[1].trim() : "Agent requested human approval",
+    reason: reasonMatch
+      ? reasonMatch[1].trim()
+      : "Agent requested human approval",
   };
 }

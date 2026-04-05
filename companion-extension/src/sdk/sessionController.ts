@@ -48,9 +48,7 @@ export interface SendPromptOptions {
 }
 
 export class SessionController {
-  constructor(
-    private readonly sdk: AntigravitySDK,
-  ) {}
+  constructor(private readonly sdk: AntigravitySDK) {}
 
   /**
    * Create a new background Cascade session.
@@ -74,13 +72,17 @@ export class SessionController {
     // and even pass focusSession(), but never materialise in the Antigravity UI.
     // Skipping directly to the interactive paths (3/4) which reliably open
     // real conversations. Re-enable once the LS phantom-ID issue is resolved.
-    console.log("[session] Paths 1/2 (LS createCascade) skipped — known phantom-ID issue");
+    console.log(
+      "[session] Paths 1/2 (LS createCascade) skipped — known phantom-ID issue",
+    );
 
     // ── Path 3: SDK cascade — DISABLED ─────────────────────────
     // cascade.createSession also returns phantom IDs (same underlying issue).
     // Skipping to Path 4 (direct vscode commands) which is the only verified
     // working path. Re-enable once phantom-ID issue is resolved.
-    console.log("[session] Path 3 (SDK cascade) skipped — same phantom-ID issue");
+    console.log(
+      "[session] Path 3 (SDK cascade) skipped — same phantom-ID issue",
+    );
 
     // ── Path 4: Direct vscode commands ────────────────────────
     // The only reliable path: bypass the SDK CascadeManager entirely.
@@ -93,12 +95,15 @@ export class SessionController {
       // Create a new conversation (switches UI, reliably works)
       await vscode.commands.executeCommand("antigravity.startNewConversation");
       // Wait for the UI to register the new conversation
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise((r) => setTimeout(r, 1500));
 
       // Send the prompt to the newly created conversation
-      await vscode.commands.executeCommand("antigravity.sendPromptToAgentPanel", prompt);
+      await vscode.commands.executeCommand(
+        "antigravity.sendPromptToAgentPanel",
+        prompt,
+      );
       // Wait for the prompt to be dispatched
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 500));
 
       // Best-effort session ID detection via diff.
       // If getSessions() can't detect the new session, generate a tracking ID
@@ -117,7 +122,9 @@ export class SessionController {
 
       if (!sessionId) {
         sessionId = `ag-cmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        console.log(`[session] getSessions() could not detect new session; using tracking ID: ${sessionId}`);
+        console.log(
+          `[session] getSessions() could not detect new session; using tracking ID: ${sessionId}`,
+        );
       }
 
       console.log(`[session] Direct commands succeeded: ${sessionId}`);
@@ -127,7 +134,7 @@ export class SessionController {
       console.warn(`[session] Path 4 failed: ${err.message}`);
     }
 
-      const msg = `All paths failed: ${errors.join(" | ")}`;
+    const msg = `All paths failed: ${errors.join(" | ")}`;
     console.error(`[session] ${msg}`);
     return { ok: false, session_id: "", error: msg };
   }
@@ -135,7 +142,9 @@ export class SessionController {
   private async snapshotSessionIds(): Promise<Set<string>> {
     try {
       const sessions = await this.sdk.cascade.getSessions();
-      const ids = new Set(sessions.map((session) => session.id).filter(Boolean));
+      const ids = new Set(
+        sessions.map((session) => session.id).filter(Boolean),
+      );
       console.log(`[session] Sessions before: ${ids.size} known`);
       return ids;
     } catch {
@@ -162,8 +171,13 @@ export class SessionController {
 
     // Path 2: Broadcast deletion
     try {
-      console.log(`[session] Path 2: execute broadcastConversationDeletion ${sessionId}...`);
-      await vscode.commands.executeCommand("antigravity.broadcastConversationDeletion", sessionId);
+      console.log(
+        `[session] Path 2: execute broadcastConversationDeletion ${sessionId}...`,
+      );
+      await vscode.commands.executeCommand(
+        "antigravity.broadcastConversationDeletion",
+        sessionId,
+      );
       return true;
     } catch (err: any) {
       errors.push(`Broadcast: ${err.message}`);
@@ -180,7 +194,11 @@ export class SessionController {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const sessions = await this.sdk.cascade.getSessions();
-        const freshSessionId = pickFreshSessionId(beforeIds, returnedId, sessions);
+        const freshSessionId = pickFreshSessionId(
+          beforeIds,
+          returnedId,
+          sessions,
+        );
         if (freshSessionId) {
           return freshSessionId;
         }
@@ -235,7 +253,10 @@ export class SessionController {
         return { ok };
       } catch (err: any) {
         console.warn(`[session] LS sendMessage failed: ${err.message}`);
-        if (String(err?.message ?? "").includes("CSRF") || String(err?.message ?? "").includes("403")) {
+        if (
+          String(err?.message ?? "").includes("CSRF") ||
+          String(err?.message ?? "").includes("403")
+        ) {
           try {
             const repaired = await this.tryRepairLsConnection();
             if (repaired) {
@@ -246,7 +267,9 @@ export class SessionController {
               return { ok };
             }
           } catch (repairErr: any) {
-            console.warn(`[session] LS sendMessage repair failed: ${repairErr.message}`);
+            console.warn(
+              `[session] LS sendMessage repair failed: ${repairErr.message}`,
+            );
           }
         }
       }
@@ -263,7 +286,10 @@ export class SessionController {
 
     // Fallback: sendPromptToAgentPanel (sends to active/visible panel)
     try {
-      await vscode.commands.executeCommand("antigravity.sendPromptToAgentPanel", prompt);
+      await vscode.commands.executeCommand(
+        "antigravity.sendPromptToAgentPanel",
+        prompt,
+      );
       return { ok: true };
     } catch (err: any) {
       return { ok: false, error: err.message };
@@ -305,10 +331,14 @@ export class SessionController {
     if (!connection) {
       return false;
     }
-    this.sdk.ls.setConnection(connection.port, connection.csrfToken, connection.useTls);
+    this.sdk.ls.setConnection(
+      connection.port,
+      connection.csrfToken,
+      connection.useTls,
+    );
     console.log(
       `[session] LS repaired: port=${connection.port} tls=${connection.useTls} ` +
-      `source=${connection.source} pid=${connection.pid}`,
+        `source=${connection.source} pid=${connection.pid}`,
     );
     return true;
   }

@@ -3,7 +3,10 @@ import * as assert from "node:assert/strict";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { removeWrittenMarkers, writeMarkerToDir } from "../bridge/discoveryMarkers";
+import {
+  removeWrittenMarkers,
+  writeMarkerToDir,
+} from "../bridge/discoveryMarkers";
 
 describe("discovery marker helpers", () => {
   const tempRoots: string[] = [];
@@ -50,8 +53,14 @@ describe("discovery marker helpers", () => {
 
     removeWrittenMarkers(writtenPaths);
 
-    assert.equal(fs.existsSync(path.join(root, ".agpair", "bridge_port")), false);
-    assert.equal(fs.existsSync(path.join(root, ".agpair", "bridge_auth_token")), false);
+    assert.equal(
+      fs.existsSync(path.join(root, ".agpair", "bridge_port")),
+      false,
+    );
+    assert.equal(
+      fs.existsSync(path.join(root, ".agpair", "bridge_auth_token")),
+      false,
+    );
     assert.deepEqual(writtenPaths, []);
   });
 });

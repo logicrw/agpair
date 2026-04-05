@@ -53,14 +53,19 @@ export class DelegationHeartbeatService {
   private readonly tracker: DelegationTaskTracker;
   private readonly intervalMs: number;
   private readonly outputChannel: { appendLine(message: string): void };
-  private readonly sendRunning: (reply: DelegationHeartbeatReply) => Promise<void>;
+  private readonly sendRunning: (
+    reply: DelegationHeartbeatReply,
+  ) => Promise<void>;
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private _running = false;
 
   constructor(options: DelegationHeartbeatServiceOptions) {
     this.tracker = options.tracker;
-    this.intervalMs = Math.max(options.intervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS, 1000);
+    this.intervalMs = Math.max(
+      options.intervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS,
+      1000,
+    );
     this.outputChannel = options.outputChannel;
     this.sendRunning = options.sendRunning;
   }
@@ -115,7 +120,12 @@ export class DelegationHeartbeatService {
 
     for (const task of pending) {
       try {
-        const body = buildHeartbeatBody(task.taskId, task.sessionId, task.ackedAt, now);
+        const body = buildHeartbeatBody(
+          task.taskId,
+          task.sessionId,
+          task.ackedAt,
+          now,
+        );
         await this.sendRunning({
           taskId: task.taskId,
           status: "RUNNING",

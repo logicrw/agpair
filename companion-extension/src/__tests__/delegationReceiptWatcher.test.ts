@@ -10,7 +10,9 @@ import { DelegationTaskTracker } from "../state/delegationTaskTracker";
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delegation-receipt-test-"));
+  const dir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "delegation-receipt-test-"),
+  );
   tempDirs.push(dir);
   return dir;
 }
@@ -135,7 +137,11 @@ describe("DelegationReceiptWatcher", () => {
     const receiptPath2 = DelegationReceiptWatcher.receiptPath(dir, "TASK-R2");
     fs.writeFileSync(
       receiptPath2,
-      JSON.stringify({ task_id: "TASK-R2", status: "EVIDENCE_PACK", body: "done" }),
+      JSON.stringify({
+        task_id: "TASK-R2",
+        status: "EVIDENCE_PACK",
+        body: "done",
+      }),
       "utf-8",
     );
 
@@ -164,7 +170,10 @@ describe("DelegationReceiptWatcher", () => {
       },
     });
 
-    const receiptPath = DelegationReceiptWatcher.receiptPath(dir, "TASK-RETRY-1");
+    const receiptPath = DelegationReceiptWatcher.receiptPath(
+      dir,
+      "TASK-RETRY-1",
+    );
     tracker.register({
       taskId: "TASK-RETRY-1",
       sessionId: "sess-retry-1",
@@ -182,19 +191,39 @@ describe("DelegationReceiptWatcher", () => {
 
     fs.writeFileSync(
       receiptPath,
-      JSON.stringify({ task_id: "TASK-RETRY-1", status: "EVIDENCE_PACK", body: "done" }),
+      JSON.stringify({
+        task_id: "TASK-RETRY-1",
+        status: "EVIDENCE_PACK",
+        body: "done",
+      }),
       "utf-8",
     );
 
     await watcher.poll();
     assert.equal(attempts.length, 1);
-    assert.equal(tracker.isTerminalSent("TASK-RETRY-1"), false, "must stay pending after failed send");
-    assert.equal(fs.existsSync(receiptPath), true, "receipt must remain for retry");
+    assert.equal(
+      tracker.isTerminalSent("TASK-RETRY-1"),
+      false,
+      "must stay pending after failed send",
+    );
+    assert.equal(
+      fs.existsSync(receiptPath),
+      true,
+      "receipt must remain for retry",
+    );
 
     await watcher.poll();
     assert.equal(attempts.length, 2);
-    assert.equal(tracker.isTerminalSent("TASK-RETRY-1"), true, "must mark terminal only after successful send");
-    assert.equal(fs.existsSync(receiptPath), false, "receipt should be cleaned after successful retry");
+    assert.equal(
+      tracker.isTerminalSent("TASK-RETRY-1"),
+      true,
+      "must mark terminal only after successful send",
+    );
+    assert.equal(
+      fs.existsSync(receiptPath),
+      false,
+      "receipt should be cleaned after successful retry",
+    );
     assert.ok(output.some((line) => /temporary send failure/.test(line)));
 
     watcher.dispose();
@@ -234,7 +263,11 @@ describe("DelegationReceiptWatcher", () => {
     // Wrong task_id in receipt
     fs.writeFileSync(
       receiptPath,
-      JSON.stringify({ task_id: "WRONG-ID", status: "EVIDENCE_PACK", body: "done" }),
+      JSON.stringify({
+        task_id: "WRONG-ID",
+        status: "EVIDENCE_PACK",
+        body: "done",
+      }),
       "utf-8",
     );
 
@@ -321,7 +354,11 @@ describe("DelegationReceiptWatcher", () => {
 
     fs.writeFileSync(
       receiptPath,
-      JSON.stringify({ task_id: "TASK-R5", status: "BLOCKED", body: "Cannot access API" }),
+      JSON.stringify({
+        task_id: "TASK-R5",
+        status: "BLOCKED",
+        body: "Cannot access API",
+      }),
       "utf-8",
     );
 
@@ -379,7 +416,10 @@ describe("DelegationReceiptWatcher", () => {
   it("recovers a pending delegated task after restart and still sends terminal receipt", async () => {
     const dir = makeTempDir();
     const statePath = path.join(dir, "delegation-state.json");
-    const receiptPath = DelegationReceiptWatcher.receiptPath(dir, "TASK-RECOVER-1");
+    const receiptPath = DelegationReceiptWatcher.receiptPath(
+      dir,
+      "TASK-RECOVER-1",
+    );
 
     const trackerBeforeRestart = new DelegationTaskTracker(statePath);
     trackerBeforeRestart.register({
@@ -400,7 +440,11 @@ describe("DelegationReceiptWatcher", () => {
 
     fs.writeFileSync(
       receiptPath,
-      JSON.stringify({ task_id: "TASK-RECOVER-1", status: "EVIDENCE_PACK", body: "recovered" }),
+      JSON.stringify({
+        task_id: "TASK-RECOVER-1",
+        status: "EVIDENCE_PACK",
+        body: "recovered",
+      }),
       "utf-8",
     );
 
@@ -483,7 +527,10 @@ describe("DelegationReceiptWatcher", () => {
       },
     });
 
-    const receiptPath = DelegationReceiptWatcher.receiptPath(dir, "TASK-COMMIT-1");
+    const receiptPath = DelegationReceiptWatcher.receiptPath(
+      dir,
+      "TASK-COMMIT-1",
+    );
     tracker.register({
       taskId: "TASK-COMMIT-1",
       sessionId: "sess-commit-1",
@@ -540,7 +587,10 @@ describe("DelegationReceiptWatcher", () => {
       },
     });
 
-    const receiptPath = DelegationReceiptWatcher.receiptPath(dir, "TASK-COMMIT-DUP");
+    const receiptPath = DelegationReceiptWatcher.receiptPath(
+      dir,
+      "TASK-COMMIT-DUP",
+    );
     tracker.register({
       taskId: "TASK-COMMIT-DUP",
       sessionId: "sess-commit-dup",
@@ -558,7 +608,11 @@ describe("DelegationReceiptWatcher", () => {
 
     fs.writeFileSync(
       receiptPath,
-      JSON.stringify({ task_id: "TASK-COMMIT-DUP", status: "COMMITTED", body: "done" }),
+      JSON.stringify({
+        task_id: "TASK-COMMIT-DUP",
+        status: "COMMITTED",
+        body: "done",
+      }),
       "utf-8",
     );
 
@@ -568,7 +622,11 @@ describe("DelegationReceiptWatcher", () => {
     // Write another receipt — shouldn't be picked up
     fs.writeFileSync(
       receiptPath,
-      JSON.stringify({ task_id: "TASK-COMMIT-DUP", status: "COMMITTED", body: "done again" }),
+      JSON.stringify({
+        task_id: "TASK-COMMIT-DUP",
+        status: "COMMITTED",
+        body: "done again",
+      }),
       "utf-8",
     );
 
@@ -618,7 +676,7 @@ describe("DelegationReceiptWatcher", () => {
         review_round: 0,
         status: "EVIDENCE_PACK",
         summary: "Done v1",
-        payload: { diff_stat: "+10 -5", validation: "passed" }
+        payload: { diff_stat: "+10 -5", validation: "passed" },
       }),
       "utf-8",
     );
@@ -652,7 +710,10 @@ describe("DelegationReceiptWatcher", () => {
       },
     });
 
-    const receiptPath = DelegationReceiptWatcher.receiptPath(dir, "TASK-V1-BLK");
+    const receiptPath = DelegationReceiptWatcher.receiptPath(
+      dir,
+      "TASK-V1-BLK",
+    );
     tracker.register({
       taskId: "TASK-V1-BLK",
       sessionId: "sess-v1-blk",
@@ -677,7 +738,7 @@ describe("DelegationReceiptWatcher", () => {
         review_round: 0,
         status: "BLOCKED",
         summary: "Blocked v1",
-        payload: { message: "Cannot access network" }
+        payload: { message: "Cannot access network" },
       }),
       "utf-8",
     );
@@ -709,7 +770,10 @@ describe("DelegationReceiptWatcher", () => {
       },
     });
 
-    const receiptPath = DelegationReceiptWatcher.receiptPath(dir, "TASK-V1-COM");
+    const receiptPath = DelegationReceiptWatcher.receiptPath(
+      dir,
+      "TASK-V1-COM",
+    );
     tracker.register({
       taskId: "TASK-V1-COM",
       sessionId: "sess-v1-com",
@@ -734,7 +798,7 @@ describe("DelegationReceiptWatcher", () => {
         review_round: 0,
         status: "COMMITTED",
         summary: "Committed v1",
-        payload: { commit_sha: "abc1234" }
+        payload: { commit_sha: "abc1234" },
       }),
       "utf-8",
     );
@@ -766,7 +830,10 @@ describe("DelegationReceiptWatcher", () => {
       },
     });
 
-    const receiptPath = DelegationReceiptWatcher.receiptPath(dir, "TASK-V1-MAL");
+    const receiptPath = DelegationReceiptWatcher.receiptPath(
+      dir,
+      "TASK-V1-MAL",
+    );
     tracker.register({
       taskId: "TASK-V1-MAL",
       sessionId: "sess-v1-mal",
@@ -1024,7 +1091,11 @@ describe("DelegationTaskTracker", () => {
     });
 
     tracker.markTerminal("T-REOPEN-1", "EVIDENCE_PACK", "round one");
-    const reopened = tracker.reopen("T-REOPEN-1", "RUNNING", "2026-01-01T00:10:00Z");
+    const reopened = tracker.reopen(
+      "T-REOPEN-1",
+      "RUNNING",
+      "2026-01-01T00:10:00Z",
+    );
 
     assert.equal(reopened, true);
     const task = tracker.get("T-REOPEN-1");

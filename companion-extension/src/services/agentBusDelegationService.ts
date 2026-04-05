@@ -14,7 +14,16 @@ import {
 
 export interface AgentBusDelegationReply {
   taskId: string;
-  status: "ACK" | "RUNNING" | "EVIDENCE_PACK" | "BLOCKED" | "COMMITTED" | "REVIEW_ACK" | "REVIEW_NACK" | "APPROVE_ACK" | "APPROVE_NACK";
+  status:
+    | "ACK"
+    | "RUNNING"
+    | "EVIDENCE_PACK"
+    | "BLOCKED"
+    | "COMMITTED"
+    | "REVIEW_ACK"
+    | "REVIEW_NACK"
+    | "APPROVE_ACK"
+    | "APPROVE_NACK";
   body: string;
 }
 
@@ -41,7 +50,9 @@ export class AgentBusDelegationService {
   private readonly outputChannel: { appendLine(message: string): void };
   private readonly sessionCtrl: SessionController;
   private readonly spawnFn: typeof childProcess.spawn;
-  private readonly sendReplyFn: (reply: AgentBusDelegationReply) => Promise<void>;
+  private readonly sendReplyFn: (
+    reply: AgentBusDelegationReply,
+  ) => Promise<void>;
   private readonly processedMessageIds = new Set<number>();
   private readonly tracker: DelegationTaskTracker;
   private readonly receiptWatcher: DelegationReceiptWatcher;
@@ -67,7 +78,11 @@ export class AgentBusDelegationService {
       staleAfterMs: options.staleAfterMs,
       outputChannel: this.outputChannel,
       sendTerminal: (taskId, status, body) =>
-        this.sendReplyFn({ taskId, status: status as "EVIDENCE_PACK" | "BLOCKED" | "COMMITTED", body }),
+        this.sendReplyFn({
+          taskId,
+          status: status as "EVIDENCE_PACK" | "BLOCKED" | "COMMITTED",
+          body,
+        }),
       sessionCtrl: this.sessionCtrl,
     });
 
@@ -94,7 +109,10 @@ export class AgentBusDelegationService {
   }
 
   /** Continuation statuses that should be routed into an existing session. */
-  private static readonly CONTINUATION_STATUSES = new Set(["REVIEW", "REVIEW_DELTA"]);
+  private static readonly CONTINUATION_STATUSES = new Set([
+    "REVIEW",
+    "REVIEW_DELTA",
+  ]);
 
   private async handleMessage(message: AgentBusMessage): Promise<void> {
     if (typeof message.id === "number") {
@@ -105,9 +123,10 @@ export class AgentBusDelegationService {
     }
 
     const status = typeof message.status === "string" ? message.status : "";
-    const taskId = typeof message.task_id === "string" && message.task_id.length > 0
-      ? message.task_id
-      : "";
+    const taskId =
+      typeof message.task_id === "string" && message.task_id.length > 0
+        ? message.task_id
+        : "";
 
     if (!taskId) {
       return; // no task_id — nothing to act on
@@ -144,7 +163,10 @@ export class AgentBusDelegationService {
         `[companion] retry/preempt same TASK ${taskId}: terminating old session ${sameTask.sessionId} before creating a fresh retry session...`,
       );
       await this.sessionCtrl.terminateSession(sameTask.sessionId);
-      this.tracker.abandon(taskId, `Superseded by fresh retry for task ${taskId}`);
+      this.tracker.abandon(
+        taskId,
+        `Superseded by fresh retry for task ${taskId}`,
+      );
     }
 
     const existingTask = this.tracker.getPendingForRepo(repoPath, taskId);
@@ -155,7 +177,10 @@ export class AgentBusDelegationService {
       // Terminate the old session explicitly
       await this.sessionCtrl.terminateSession(existingTask.sessionId);
       // Remove the old task from the tracker queue
-      this.tracker.abandon(existingTask.taskId, `Preempted by new task ${taskId}`);
+      this.tracker.abandon(
+        existingTask.taskId,
+        `Preempted by new task ${taskId}`,
+      );
     }
 
     const receiptPath = DelegationReceiptWatcher.receiptPath(
@@ -249,7 +274,8 @@ export class AgentBusDelegationService {
     status: string,
   ): Promise<void> {
     const tracked = this.tracker.get(taskId);
-    const replyBody = (detail: string) => buildContinuationReplyBody(detail, message.id);
+    const replyBody = (detail: string) =>
+      buildContinuationReplyBody(detail, message.id);
     if (!tracked) {
       this.outputChannel.appendLine(
         `[companion] ${status} for unknown task ${taskId} — sending REVIEW_NACK`,
@@ -257,7 +283,9 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "REVIEW_NACK",
-        body: replyBody(`Cannot continue: task ${taskId} is not tracked by this extension instance.`),
+        body: replyBody(
+          `Cannot continue: task ${taskId} is not tracked by this extension instance.`,
+        ),
       });
       return;
     }
@@ -269,7 +297,9 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "REVIEW_NACK",
-        body: replyBody(`Cannot continue: tracked task ${taskId} has no associated session.`),
+        body: replyBody(
+          `Cannot continue: tracked task ${taskId} has no associated session.`,
+        ),
       });
       return;
     }
@@ -281,7 +311,9 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "REVIEW_NACK",
-        body: replyBody(`Cannot continue synthetic session ${tracked.sessionId}. Please use --fresh-resume instead.`),
+        body: replyBody(
+          `Cannot continue synthetic session ${tracked.sessionId}. Please use --fresh-resume instead.`,
+        ),
       });
       return;
     }
@@ -294,10 +326,14 @@ export class AgentBusDelegationService {
     });
 
     try {
-      const result = await this.sessionCtrl.sendPrompt(tracked.sessionId, prompt, {
-        allowPanelFallback: false,
-        contextLabel: `delegated task ${taskId} (${status})`,
-      });
+      const result = await this.sessionCtrl.sendPrompt(
+        tracked.sessionId,
+        prompt,
+        {
+          allowPanelFallback: false,
+          contextLabel: `delegated task ${taskId} (${status})`,
+        },
+      );
       if (!result.ok) {
         throw new Error(result.error ?? "sendPrompt returned ok=false");
       }
@@ -308,7 +344,9 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "REVIEW_ACK",
-        body: replyBody(`Successfully sent ${status} prompt into session ${tracked.sessionId}`),
+        body: replyBody(
+          `Successfully sent ${status} prompt into session ${tracked.sessionId}`,
+        ),
       });
     } catch (err: any) {
       this.outputChannel.appendLine(
@@ -317,7 +355,9 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "REVIEW_NACK",
-        body: replyBody(`Failed to send ${status} into session ${tracked.sessionId}: ${err.message}`),
+        body: replyBody(
+          `Failed to send ${status} into session ${tracked.sessionId}: ${err.message}`,
+        ),
       });
     }
   }
@@ -331,7 +371,8 @@ export class AgentBusDelegationService {
     taskId: string,
   ): Promise<void> {
     const tracked = this.tracker.get(taskId);
-    const replyBody = (detail: string) => buildContinuationReplyBody(detail, message.id);
+    const replyBody = (detail: string) =>
+      buildContinuationReplyBody(detail, message.id);
     if (!tracked) {
       this.outputChannel.appendLine(
         `[companion] APPROVED for unknown task ${taskId} — sending APPROVE_NACK`,
@@ -339,7 +380,9 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "APPROVE_NACK",
-        body: replyBody(`Cannot commit: task ${taskId} is not tracked by this extension instance.`),
+        body: replyBody(
+          `Cannot commit: task ${taskId} is not tracked by this extension instance.`,
+        ),
       });
       return;
     }
@@ -351,7 +394,9 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "APPROVE_NACK",
-        body: replyBody(`Cannot commit: tracked task ${taskId} has no associated session.`),
+        body: replyBody(
+          `Cannot commit: tracked task ${taskId} has no associated session.`,
+        ),
       });
       return;
     }
@@ -363,7 +408,9 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "APPROVE_NACK",
-        body: replyBody(`Cannot commit synthetic session ${tracked.sessionId}. Please use --fresh-resume instead.`),
+        body: replyBody(
+          `Cannot commit synthetic session ${tracked.sessionId}. Please use --fresh-resume instead.`,
+        ),
       });
       return;
     }
@@ -375,10 +422,14 @@ export class AgentBusDelegationService {
     });
 
     try {
-      const result = await this.sessionCtrl.sendPrompt(tracked.sessionId, prompt, {
-        allowPanelFallback: false,
-        contextLabel: `delegated task ${taskId} (APPROVED)`,
-      });
+      const result = await this.sessionCtrl.sendPrompt(
+        tracked.sessionId,
+        prompt,
+        {
+          allowPanelFallback: false,
+          contextLabel: `delegated task ${taskId} (APPROVED)`,
+        },
+      );
       if (!result.ok) {
         throw new Error(result.error ?? "sendPrompt returned ok=false");
       }
@@ -389,7 +440,9 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "APPROVE_ACK",
-        body: replyBody(`Successfully sent APPROVED prompt into session ${tracked.sessionId}`),
+        body: replyBody(
+          `Successfully sent APPROVED prompt into session ${tracked.sessionId}`,
+        ),
       });
     } catch (err: any) {
       this.outputChannel.appendLine(
@@ -398,7 +451,9 @@ export class AgentBusDelegationService {
       await this.sendReplyFn({
         taskId,
         status: "APPROVE_NACK",
-        body: replyBody(`Failed to send APPROVED into session ${tracked.sessionId}: ${err.message}`),
+        body: replyBody(
+          `Failed to send APPROVED into session ${tracked.sessionId}: ${err.message}`,
+        ),
       });
     }
   }
@@ -465,14 +520,23 @@ export class AgentBusDelegationService {
           resolve();
           return;
         }
-        reject(new Error(stderr.trim() || `agent-bus send exited ${code ?? 1}`));
+        reject(
+          new Error(stderr.trim() || `agent-bus send exited ${code ?? 1}`),
+        );
       });
     });
   }
 }
 
-function buildContinuationReplyBody(detail: string, messageId: number | undefined): string {
-  if (typeof messageId !== "number" || !Number.isInteger(messageId) || messageId <= 0) {
+function buildContinuationReplyBody(
+  detail: string,
+  messageId: number | undefined,
+): string {
+  if (
+    typeof messageId !== "number" ||
+    !Number.isInteger(messageId) ||
+    messageId <= 0
+  ) {
     return detail;
   }
   return `reply_to_message_id=${messageId}\n${detail}`;

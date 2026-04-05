@@ -14,7 +14,11 @@
 import { describe, it, afterEach } from "node:test";
 import * as assert from "node:assert/strict";
 import * as http from "node:http";
-import { constantTimeEqual, createBridgeServer, MAX_BODY_BYTES } from "../bridge/httpServer";
+import {
+  constantTimeEqual,
+  createBridgeServer,
+  MAX_BODY_BYTES,
+} from "../bridge/httpServer";
 import { DelegationTaskTracker } from "../state/delegationTaskTracker";
 
 // ── Unit tests for constantTimeEqual ────────────────────────────
@@ -51,10 +55,19 @@ function makeStubConfig(authToken: string) {
   return {
     port: 0, // not used directly in tests
     authToken,
-    taskExecService: { runTask: async () => ({ ok: true }), continueTask: async () => ({ ok: true }) } as any,
-    healthService: { getHealth: () => ({ ok: true, status: "healthy" }) } as any,
+    taskExecService: {
+      runTask: async () => ({ ok: true }),
+      continueTask: async () => ({ ok: true }),
+    } as any,
+    healthService: {
+      getHealth: () => ({ ok: true, status: "healthy" }),
+    } as any,
     sessionStore: { get: () => null, remove: () => {} } as any,
-    eventStore: { getPending: () => [], markDeliveredByIds: () => 0, push: () => {} } as any,
+    eventStore: {
+      getPending: () => [],
+      markDeliveredByIds: () => 0,
+      push: () => {},
+    } as any,
   };
 }
 
@@ -72,33 +85,39 @@ function listenOnRandomPort(server: http.Server): Promise<number> {
   });
 }
 
-function httpRequest(port: number, options: {
-  method: string;
-  path: string;
-  headers?: Record<string, string>;
-  body?: string;
-}): Promise<{ status: number; body: any }> {
+function httpRequest(
+  port: number,
+  options: {
+    method: string;
+    path: string;
+    headers?: Record<string, string>;
+    body?: string;
+  },
+): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
-    const req = http.request({
-      hostname: "127.0.0.1",
-      port,
-      path: options.path,
-      method: options.method,
-      headers: {
-        "Content-Type": "application/json",
-        ...options.headers,
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: options.path,
+        method: options.method,
+        headers: {
+          "Content-Type": "application/json",
+          ...options.headers,
+        },
       },
-    }, (res) => {
-      let data = "";
-      res.on("data", (chunk: string) => (data += chunk));
-      res.on("end", () => {
-        try {
-          resolve({ status: res.statusCode || 0, body: JSON.parse(data) });
-        } catch {
-          resolve({ status: res.statusCode || 0, body: data });
-        }
-      });
-    });
+      (res) => {
+        let data = "";
+        res.on("data", (chunk: string) => (data += chunk));
+        res.on("end", () => {
+          try {
+            resolve({ status: res.statusCode || 0, body: JSON.parse(data) });
+          } catch {
+            resolve({ status: res.statusCode || 0, body: data });
+          }
+        });
+      },
+    );
     req.on("error", reject);
     if (options.body) req.write(options.body);
     req.end();

@@ -37,7 +37,10 @@ import { HealthService } from "./services/healthService";
 import { AgentBusWatchService } from "./services/agentBusWatchService";
 import { AgentBusDelegationService } from "./services/agentBusDelegationService";
 import { startBridgeServer, BridgeConfig } from "./bridge/httpServer";
-import { removeWrittenMarkers, writeMarkerToDir } from "./bridge/discoveryMarkers";
+import {
+  removeWrittenMarkers,
+  writeMarkerToDir,
+} from "./bridge/discoveryMarkers";
 import { resolveAuth } from "./bridge/authResolver";
 
 let bridgeServer: http.Server | null = null;
@@ -58,17 +61,31 @@ const eventStore = new PendingEventStore();
 /**
  * Extension activation — called by the Antigravity/VS Code host.
  */
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+export async function activate(
+  context: vscode.ExtensionContext,
+): Promise<void> {
   const config = vscode.workspace.getConfiguration("antigravityCompanion");
   const port = config.get<number>("bridgePort", 8765);
   const configuredToken = config.get<string>("bridgeToken", "");
   const insecureMode = config.get<boolean>("bridgeInsecure", false);
   const monitorInterval = config.get<number>("monitorIntervalMs", 3000);
   const trajectoryInterval = config.get<number>("trajectoryIntervalMs", 5000);
-  const agentBusWatchEnabled = config.get<boolean>("agentBusWatchEnabled", true);
-  const agentBusWatchInterval = config.get<number>("agentBusWatchIntervalMs", 1000);
-  const agentBusWatchCommand = config.get<string>("agentBusWatchCommand", "agent-bus");
-  const delegationTaskTimeoutMs = config.get<number>("delegationTaskTimeoutMs", 1800000);
+  const agentBusWatchEnabled = config.get<boolean>(
+    "agentBusWatchEnabled",
+    true,
+  );
+  const agentBusWatchInterval = config.get<number>(
+    "agentBusWatchIntervalMs",
+    1000,
+  );
+  const agentBusWatchCommand = config.get<string>(
+    "agentBusWatchCommand",
+    "agent-bus",
+  );
+  const delegationTaskTimeoutMs = config.get<number>(
+    "delegationTaskTimeoutMs",
+    1800000,
+  );
 
   // ── Resolve effective bridge auth ──────────────────────────
   const authResolution = await resolveAuth(
@@ -78,13 +95,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   const effectiveToken = authResolution.effectiveToken;
 
-  const outputChannel = vscode.window.createOutputChannel("Antigravity Companion");
+  const outputChannel = vscode.window.createOutputChannel(
+    "Antigravity Companion",
+  );
   context.subscriptions.push(outputChannel);
-  outputChannel.appendLine("[companion] Activating Antigravity Companion Extension...");
-  outputChannel.appendLine(`[companion] Bridge auth mode: ${authResolution.mode}`);
+  outputChannel.appendLine(
+    "[companion] Activating Antigravity Companion Extension...",
+  );
+  outputChannel.appendLine(
+    `[companion] Bridge auth mode: ${authResolution.mode}`,
+  );
 
-  const earlyWorkspacePaths = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
-  const wsSlug = crypto.createHash("sha256").update(earlyWorkspacePaths.sort().join("\n")).digest("hex").slice(0, 8);
+  const earlyWorkspacePaths =
+    vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
+  const wsSlug = crypto
+    .createHash("sha256")
+    .update(earlyWorkspacePaths.sort().join("\n"))
+    .digest("hex")
+    .slice(0, 8);
   const agpairDir = path.join(os.homedir(), ".agpair");
   delegationTracker = new DelegationTaskTracker(
     path.join(agpairDir, `delegation_tasks_code_${wsSlug}.json`),
@@ -97,11 +125,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   try {
     await sdk.initialize();
     sdkReady = true;
-    outputChannel.appendLine("[companion] AntigravitySDK initialized successfully.");
+    outputChannel.appendLine(
+      "[companion] AntigravitySDK initialized successfully.",
+    );
   } catch (err: any) {
     outputChannel.appendLine(
       `[companion] SDK initialization failed: ${err.message}. ` +
-      `Bridge will run in degraded mode (sdk_initialized=false).`
+        `Bridge will run in degraded mode (sdk_initialized=false).`,
     );
     // Don't throw — the bridge can still run in skeleton/degraded mode.
   }
@@ -112,20 +142,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const lsReady = await sdk.ls.initialize();
       if (lsReady) {
         outputChannel.appendLine(
-          `[companion] LS bridge ready (port=${sdk.ls.port}, csrf=${sdk.ls.hasCsrfToken ? "yes" : "no"}).`
+          `[companion] LS bridge ready (port=${sdk.ls.port}, csrf=${sdk.ls.hasCsrfToken ? "yes" : "no"}).`,
         );
       } else {
-        outputChannel.appendLine("[companion] LS bridge discovery failed. Using command-based fallback.");
+        outputChannel.appendLine(
+          "[companion] LS bridge discovery failed. Using command-based fallback.",
+        );
       }
     } catch (err: any) {
-      outputChannel.appendLine(`[companion] LS bridge init error: ${err.message}`);
+      outputChannel.appendLine(
+        `[companion] LS bridge init error: ${err.message}`,
+      );
     }
   }
 
   // ── Step 3: Create controllers and services ─────────────────
-  const sessionCtrl = sdkReady
-    ? new SessionController(sdk!)
-    : null;
+  const sessionCtrl = sdkReady ? new SessionController(sdk!) : null;
 
   monitorCtrl = sdkReady
     ? new MonitorController(sdk!, eventStore, sessionStore, delegationTracker)
@@ -138,11 +170,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   agentBusDelegationService = new AgentBusDelegationService({
     enabled: true,
     command: agentBusWatchCommand,
-    workspacePathsProvider: () => vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
+    workspacePathsProvider: () =>
+      vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ??
+      [],
     outputChannel,
     sessionCtrl: (sessionCtrl ?? {
       async createBackgroundSession() {
-        return { ok: false, session_id: "", error: "Antigravity SDK not initialized" };
+        return {
+          ok: false,
+          session_id: "",
+          error: "Antigravity SDK not initialized",
+        };
       },
     }) as SessionController,
     tracker: delegationTracker,
@@ -157,12 +195,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     enabled: agentBusWatchEnabled,
     command: agentBusWatchCommand,
     intervalMs: agentBusWatchInterval,
-    workspacePathsProvider: () => vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
+    workspacePathsProvider: () =>
+      vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ??
+      [],
     outputChannel,
     notify: (message: string) => {
       void vscode.window.showInformationMessage(message);
     },
-    onMessages: (messages) => agentBusDelegationService?.handleMessages(messages) ?? Promise.resolve(),
+    onMessages: (messages) =>
+      agentBusDelegationService?.handleMessages(messages) ?? Promise.resolve(),
     lockPath: path.join(agpairDir, `agent_bus_watch_code_${wsSlug}.lock.json`),
     inboxPath: path.join(agpairDir, `agent_bus_inbox_code_${wsSlug}.jsonl`),
   });
@@ -172,19 +213,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     sessionStore,
     extensionVersion,
     {
-      id: typeof context.extension?.id === "string" ? context.extension.id : null,
-      path: typeof context.extension?.extensionPath === "string" ? context.extension.extensionPath : null,
+      id:
+        typeof context.extension?.id === "string" ? context.extension.id : null,
+      path:
+        typeof context.extension?.extensionPath === "string"
+          ? context.extension.extensionPath
+          : null,
     },
-    () => vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
-    () => agentBusWatchService?.getStatus() ?? { running: false, mode: "disabled", pid: null },
-    () => agentBusDelegationService?.getDelegationStatus() ?? {
-      enabled: false,
-      receipt_watcher_running: false,
-      heartbeat_running: false,
-      heartbeat_interval_ms: 0,
-      receipt_dir: "",
-      tracker_summary: { total: 0, pending: 0, completed: 0, tasks: [] },
-    },
+    () =>
+      vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ??
+      [],
+    () =>
+      agentBusWatchService?.getStatus() ?? {
+        running: false,
+        mode: "disabled",
+        pid: null,
+      },
+    () =>
+      agentBusDelegationService?.getDelegationStatus() ?? {
+        enabled: false,
+        receipt_watcher_running: false,
+        heartbeat_running: false,
+        heartbeat_interval_ms: 0,
+        receipt_dir: "",
+        tracker_summary: { total: 0, pending: 0, completed: 0, tasks: [] },
+      },
     () => delegationTaskTimeoutMs,
   );
 
@@ -212,13 +265,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     activeBridgePort = actualPort;
     healthService.setBridgePort(actualPort);
     healthService.setBridgeAuthMode(authResolution.mode);
-    taskExecService.setBridgeContext({ port: actualPort, authToken: effectiveToken });
+    taskExecService.setBridgeContext({
+      port: actualPort,
+      authToken: effectiveToken,
+    });
     if (actualPort !== port) {
       outputChannel.appendLine(
-        `[companion] ⚠ Port ${port} was in use. Bridge bound to fallback port ${actualPort}.`
+        `[companion] ⚠ Port ${port} was in use. Bridge bound to fallback port ${actualPort}.`,
       );
     }
-    outputChannel.appendLine(`[companion] Bridge server started on http://127.0.0.1:${actualPort}`);
+    outputChannel.appendLine(
+      `[companion] Bridge server started on http://127.0.0.1:${actualPort}`,
+    );
 
     // Write port marker file for external discovery
     writeBridgePortMarker(actualPort);
@@ -231,14 +289,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (activeBridgePort > 0) {
           writeBridgePortMarker(activeBridgePort);
           writeBridgeAuthTokenMarker(effectiveToken);
-          outputChannel.appendLine("[companion] Workspace folders changed; refreshed bridge markers.");
+          outputChannel.appendLine(
+            "[companion] Workspace folders changed; refreshed bridge markers.",
+          );
         }
       }),
     );
   } catch (err: any) {
     outputChannel.appendLine(
       `[companion] ❌ Bridge failed to start: ${err.message}. ` +
-      `Extension is running but NOT serving HTTP. Close other Antigravity windows and reload.`
+        `Extension is running but NOT serving HTTP. Close other Antigravity windows and reload.`,
     );
   }
 
@@ -246,7 +306,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (monitorCtrl) {
     monitorCtrl.start(monitorInterval, trajectoryInterval);
     outputChannel.appendLine(
-      `[companion] Monitor started (uss=${monitorInterval}ms, traj=${trajectoryInterval}ms).`
+      `[companion] Monitor started (uss=${monitorInterval}ms, traj=${trajectoryInterval}ms).`,
     );
   }
 
@@ -307,7 +367,12 @@ const writtenMarkerPaths: string[] = [];
  * Write a discovery marker to a single directory.
  * @returns true if written successfully.
  */
-function writeDiscoveryMarker(dir: string, markerName: string, value: string, mode?: number): boolean {
+function writeDiscoveryMarker(
+  dir: string,
+  markerName: string,
+  value: string,
+  mode?: number,
+): boolean {
   return writeMarkerToDir({
     dir,
     markerName,
@@ -329,7 +394,9 @@ function writeBridgePortMarker(port: number): void {
   // Global marker
   const homeDir = os.homedir();
   if (writeDiscoveryMarker(homeDir, BRIDGE_PORT_MARKER, String(port))) {
-    console.log(`[companion] Wrote global port marker: ${path.join(homeDir, ".agpair", BRIDGE_PORT_MARKER)} = ${port}`);
+    console.log(
+      `[companion] Wrote global port marker: ${path.join(homeDir, ".agpair", BRIDGE_PORT_MARKER)} = ${port}`,
+    );
   } else {
     console.warn("[companion] Failed to write global port marker.");
   }
@@ -340,7 +407,9 @@ function writeBridgePortMarker(port: number): void {
     for (const folder of folders) {
       const wsPath = folder.uri.fsPath;
       if (writeDiscoveryMarker(wsPath, BRIDGE_PORT_MARKER, String(port))) {
-        console.log(`[companion] Wrote workspace port marker: ${wsPath}/.agpair/bridge_port = ${port}`);
+        console.log(
+          `[companion] Wrote workspace port marker: ${wsPath}/.agpair/bridge_port = ${port}`,
+        );
       }
     }
   }
@@ -351,9 +420,16 @@ function writeBridgeAuthTokenMarker(authToken: string): void {
     return;
   }
   const homeDir = os.homedir();
-  if (writeDiscoveryMarker(homeDir, BRIDGE_AUTH_TOKEN_MARKER, authToken, BRIDGE_AUTH_TOKEN_MODE)) {
+  if (
+    writeDiscoveryMarker(
+      homeDir,
+      BRIDGE_AUTH_TOKEN_MARKER,
+      authToken,
+      BRIDGE_AUTH_TOKEN_MODE,
+    )
+  ) {
     console.log(
-      `[companion] Wrote global auth marker: ${path.join(homeDir, ".agpair", BRIDGE_AUTH_TOKEN_MARKER)}`
+      `[companion] Wrote global auth marker: ${path.join(homeDir, ".agpair", BRIDGE_AUTH_TOKEN_MARKER)}`,
     );
   } else {
     console.warn("[companion] Failed to write global auth marker.");
@@ -363,8 +439,17 @@ function writeBridgeAuthTokenMarker(authToken: string): void {
   if (folders) {
     for (const folder of folders) {
       const wsPath = folder.uri.fsPath;
-      if (writeDiscoveryMarker(wsPath, BRIDGE_AUTH_TOKEN_MARKER, authToken, BRIDGE_AUTH_TOKEN_MODE)) {
-        console.log(`[companion] Wrote workspace auth marker: ${wsPath}/.agpair/${BRIDGE_AUTH_TOKEN_MARKER}`);
+      if (
+        writeDiscoveryMarker(
+          wsPath,
+          BRIDGE_AUTH_TOKEN_MARKER,
+          authToken,
+          BRIDGE_AUTH_TOKEN_MODE,
+        )
+      ) {
+        console.log(
+          `[companion] Wrote workspace auth marker: ${wsPath}/.agpair/${BRIDGE_AUTH_TOKEN_MARKER}`,
+        );
       }
     }
   }
@@ -375,17 +460,34 @@ function writeBridgeAuthTokenMarker(authToken: string): void {
  * Called from TaskExecutionService on /run_task to ensure the task's
  * workspace has a marker even if it's not a VS Code workspace folder.
  */
-export function writeWorkspaceBridgeMarker(repoPath: string, port: number): void {
+export function writeWorkspaceBridgeMarker(
+  repoPath: string,
+  port: number,
+): void {
   if (!repoPath) return;
   if (writeDiscoveryMarker(repoPath, BRIDGE_PORT_MARKER, String(port))) {
-    console.log(`[companion] Wrote repo port marker: ${repoPath}/.agpair/bridge_port = ${port}`);
+    console.log(
+      `[companion] Wrote repo port marker: ${repoPath}/.agpair/bridge_port = ${port}`,
+    );
   }
 }
 
-function writeWorkspaceBridgeAuthTokenMarker(repoPath: string, authToken: string): void {
+function writeWorkspaceBridgeAuthTokenMarker(
+  repoPath: string,
+  authToken: string,
+): void {
   if (!repoPath || !authToken) return;
-  if (writeDiscoveryMarker(repoPath, BRIDGE_AUTH_TOKEN_MARKER, authToken, BRIDGE_AUTH_TOKEN_MODE)) {
-    console.log(`[companion] Wrote repo auth marker: ${repoPath}/.agpair/${BRIDGE_AUTH_TOKEN_MARKER}`);
+  if (
+    writeDiscoveryMarker(
+      repoPath,
+      BRIDGE_AUTH_TOKEN_MARKER,
+      authToken,
+      BRIDGE_AUTH_TOKEN_MODE,
+    )
+  ) {
+    console.log(
+      `[companion] Wrote repo auth marker: ${repoPath}/.agpair/${BRIDGE_AUTH_TOKEN_MARKER}`,
+    );
   }
 }
 
@@ -412,9 +514,15 @@ function createSkeletonTaskExecService(
       const sessionId = `ag-skeleton-${Date.now()}`;
       return { ok: true, session_id: sessionId };
     },
-    async focusSession() { return false; },
-    async sendPrompt() { return { ok: false, error: "SDK not initialized" }; },
-    async sessionExists() { return false; },
+    async focusSession() {
+      return false;
+    },
+    async sendPrompt() {
+      return { ok: false, error: "SDK not initialized" };
+    },
+    async sessionExists() {
+      return false;
+    },
   } as any;
 
   return new TaskExecutionService(dummyCtrl, sessionStore, eventStore);

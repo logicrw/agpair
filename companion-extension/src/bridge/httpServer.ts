@@ -21,7 +21,10 @@ import * as crypto from "crypto";
 import { TaskSessionStore } from "../state/taskSessionStore";
 import { PendingEventStore, PendingEvent } from "../state/pendingEventStore";
 import type { DelegationTaskTracker } from "../state/delegationTaskTracker";
-import { canonicalizeReceiptV1, isTerminalReceiptStatus } from "../protocols/receipt";
+import {
+  canonicalizeReceiptV1,
+  isTerminalReceiptStatus,
+} from "../protocols/receipt";
 import { TaskExecutionService } from "../services/taskExecutionService";
 import { HealthService } from "../services/healthService";
 import { MonitorController } from "../sdk/monitorController";
@@ -123,14 +126,18 @@ function sendJson(res: http.ServerResponse, code: number, data: any): void {
  * @returns      The body string
  * @throws       Error with `statusCode = 413` when the limit is exceeded
  */
-function readBody(req: http.IncomingMessage, limit: number = MAX_BODY_BYTES): Promise<string> {
+function readBody(
+  req: http.IncomingMessage,
+  limit: number = MAX_BODY_BYTES,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = "";
     let bytes = 0;
     let exceeded = false;
     req.on("data", (chunk: Buffer | string) => {
       if (exceeded) return; // drain remaining chunks silently
-      const chunkBytes = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+      const chunkBytes =
+        typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
       bytes += chunkBytes;
       if (bytes > limit) {
         exceeded = true;
@@ -143,7 +150,7 @@ function readBody(req: http.IncomingMessage, limit: number = MAX_BODY_BYTES): Pr
     req.on("end", () => {
       if (exceeded) {
         const err: any = new Error(
-          `Request body exceeds maximum size of ${limit} bytes`
+          `Request body exceeds maximum size of ${limit} bytes`,
         );
         err.statusCode = 413;
         reject(err);
@@ -202,38 +209,49 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
         const body = JSON.parse(await readBody(req));
         const result = await taskExecService.runTask(body);
         if (result.ok && body.repo_path && config.onTaskDispatched) {
-          try { config.onTaskDispatched(body.repo_path); } catch { /* best-effort */ }
+          try {
+            config.onTaskDispatched(body.repo_path);
+          } catch {
+            /* best-effort */
+          }
         }
         sendJson(res, result.ok ? 200 : 500, result);
-
       } else if (method === "POST" && path === "/continue_task") {
         const body = JSON.parse(await readBody(req));
         const result = await taskExecService.continueTask(body);
         sendJson(res, result.ok ? 200 : 409, result);
-
       } else if (method === "POST" && path === "/cancel_task") {
         const body = JSON.parse(await readBody(req));
         sessionStore.remove(body.task_id, body.attempt_no);
-        const delegationReleased = delegationTracker?.abandon(
-          body.task_id,
-          "Cancelled via bridge /cancel_task",
-        ) ?? false;
+        const delegationReleased =
+          delegationTracker?.abandon(
+            body.task_id,
+            "Cancelled via bridge /cancel_task",
+          ) ?? false;
         sendJson(res, 200, {
           ok: true,
           task_id: body.task_id,
           message: "cancelled",
           delegation_released: delegationReleased,
         });
-
       } else if (method === "POST" && path === "/events/ack") {
         const body = JSON.parse(await readBody(req));
         if (!body.task_id || !Array.isArray(body.source_event_ids)) {
-          sendJson(res, 400, { ok: false, message: "task_id and source_event_ids[] required" });
+          sendJson(res, 400, {
+            ok: false,
+            message: "task_id and source_event_ids[] required",
+          });
           return;
         }
-        const acked = eventStore.markDeliveredByIds(body.task_id, body.source_event_ids);
-        sendJson(res, 200, { ok: true, task_id: body.task_id, acked_count: acked });
-
+        const acked = eventStore.markDeliveredByIds(
+          body.task_id,
+          body.source_event_ids,
+        );
+        sendJson(res, 200, {
+          ok: true,
+          task_id: body.task_id,
+          acked_count: acked,
+        });
       } else if (method === "POST" && path === "/write_receipt") {
         const body = JSON.parse(await readBody(req));
         if (
@@ -245,7 +263,8 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
         ) {
           sendJson(res, 400, {
             ok: false,
-            message: "task_id, attempt_no, review_round, status, and summary are required",
+            message:
+              "task_id, attempt_no, review_round, status, and summary are required",
           });
           return;
         }
@@ -255,11 +274,14 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
         if (body.status === "FAILED") {
           console.warn(
             `[bridge] /write_receipt: deprecated status FAILED received — remapping to BLOCKED. ` +
-            `task_id=${body.task_id}`
+              `task_id=${body.task_id}`,
           );
           effectiveStatus = "BLOCKED";
         }
-        if (!isTerminalReceiptStatus(effectiveStatus) || !validStatuses.includes(effectiveStatus)) {
+        if (
+          !isTerminalReceiptStatus(effectiveStatus) ||
+          !validStatuses.includes(effectiveStatus)
+        ) {
           sendJson(res, 400, {
             ok: false,
             message: `status must be one of: ${validStatuses.join(", ")}`,
@@ -267,7 +289,8 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
           return;
         }
         body.status = effectiveStatus;
-        const wantsStructuredV1 = body.schema_version === "1" || body.payload !== undefined;
+        const wantsStructuredV1 =
+          body.schema_version === "1" || body.payload !== undefined;
         if (wantsStructuredV1) {
           if (body.schema_version !== "1") {
             sendJson(res, 400, {
@@ -279,7 +302,8 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
           if (typeof body.payload !== "object" || body.payload === null) {
             sendJson(res, 400, {
               ok: false,
-              message: "payload must be a JSON object for schema_version=1 receipts",
+              message:
+                "payload must be a JSON object for schema_version=1 receipts",
             });
             return;
           }
@@ -295,13 +319,17 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
         if (!sess || !sess.repo_path) {
           sendJson(res, 409, {
             ok: false,
-            message: "No bound session for this task/attempt. Cannot determine receipt path.",
+            message:
+              "No bound session for this task/attempt. Cannot determine receipt path.",
           });
           return;
         }
         const repoPath = sess.repo_path;
         const receiptPath = MonitorController.outputFilePath(
-          repoPath, body.task_id, body.attempt_no, body.review_round
+          repoPath,
+          body.task_id,
+          body.attempt_no,
+          body.review_round,
         );
         try {
           const fs = require("fs");
@@ -362,7 +390,8 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
 
           console.log(`[bridge] Wrote receipt: ${receiptPath}`);
           sendJson(res, 200, {
-            ok: true, task_id: body.task_id,
+            ok: true,
+            task_id: body.task_id,
             receipt_path: receiptPath,
             message: "receipt written",
           });
@@ -373,37 +402,46 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
             message: "Failed to write receipt",
           });
         }
-
       } else if (method === "POST" && path === "/wake") {
         const body = JSON.parse(await readBody(req));
         if (!body.wake_id || !body.task_id || !body.reason) {
-          sendJson(res, 400, { ok: false, message: "wake_id, task_id, and reason required" });
+          sendJson(res, 400, {
+            ok: false,
+            message: "wake_id, task_id, and reason required",
+          });
           return;
         }
-        console.log(`[wake] wake_id=${body.wake_id} task=${body.task_id} reason=${body.reason}`);
+        console.log(
+          `[wake] wake_id=${body.wake_id} task=${body.task_id} reason=${body.reason}`,
+        );
         sendJson(res, 200, {
-          ok: true, wake_id: body.wake_id, task_id: body.task_id,
-          reason: body.reason, message: "wake acknowledged",
+          ok: true,
+          wake_id: body.wake_id,
+          task_id: body.task_id,
+          reason: body.reason,
+          message: "wake acknowledged",
         });
-
       } else if (method === "GET" && path === "/task_status") {
         const task_id = url.searchParams.get("task_id") || "";
-        const attempt_no = parseInt(url.searchParams.get("attempt_no") || "0", 10);
+        const attempt_no = parseInt(
+          url.searchParams.get("attempt_no") || "0",
+          10,
+        );
         const session = sessionStore.get(task_id, attempt_no);
         const pending = eventStore.getPending(task_id);
 
         sendJson(res, 200, {
-          ok: true, task_id, attempt_no,
+          ok: true,
+          task_id,
+          attempt_no,
           session_id: session?.session_id ?? null,
           session_state: session?.last_known_status ?? "unknown",
           last_step_count: session?.last_step_count ?? 0,
           last_heartbeat_at: session?.last_heartbeat_at ?? null,
           pending_events: pending,
         });
-
       } else if (method === "GET" && path === "/health") {
         sendJson(res, 200, healthService.getHealth());
-
       } else {
         sendJson(res, 404, { ok: false, message: "Not found" });
       }
@@ -413,7 +451,10 @@ export function createBridgeServer(config: BridgeConfig): http.Server {
         return;
       }
       if (err instanceof SyntaxError && err.message.includes("JSON")) {
-        sendJson(res, 400, { ok: false, message: "Invalid JSON in request body" });
+        sendJson(res, 400, {
+          ok: false,
+          message: "Invalid JSON in request body",
+        });
         return;
       }
       console.error(`[bridge] Unhandled request error:`, err);
@@ -439,7 +480,9 @@ export interface BridgeStartResult {
  * @returns Promise with the server and the actual bound port.
  * @throws Error if all ports are in use.
  */
-export async function startBridgeServer(config: BridgeConfig): Promise<BridgeStartResult> {
+export async function startBridgeServer(
+  config: BridgeConfig,
+): Promise<BridgeStartResult> {
   const server = createBridgeServer(config);
   let lastError: Error | null = null;
 
@@ -450,7 +493,7 @@ export async function startBridgeServer(config: BridgeConfig): Promise<BridgeSta
       if (attempt > 0) {
         console.warn(
           `[companion] Port ${config.port} was in use. ` +
-          `Bridge bound to fallback port ${port} instead.`
+            `Bridge bound to fallback port ${port} instead.`,
         );
       }
       console.log(`[companion] Bridge listening on http://127.0.0.1:${port}`);
@@ -467,7 +510,7 @@ export async function startBridgeServer(config: BridgeConfig): Promise<BridgeSta
 
   throw new Error(
     `Bridge failed to bind: ports ${config.port}-${config.port + MAX_PORT_RETRIES - 1} ` +
-    `all in use. Close other Antigravity windows. Last error: ${lastError?.message}`
+      `all in use. Close other Antigravity windows. Last error: ${lastError?.message}`,
   );
 }
 

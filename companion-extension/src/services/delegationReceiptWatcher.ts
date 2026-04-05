@@ -21,7 +21,10 @@
 import * as fs from "fs";
 import * as path from "path";
 
-import { parseDelegationReceipt, type DelegationReceipt } from "../protocols/receipt";
+import {
+  parseDelegationReceipt,
+  type DelegationReceipt,
+} from "../protocols/receipt";
 import type { DelegationTaskTracker } from "../state/delegationTaskTracker";
 import type { SessionController } from "../sdk/sessionController";
 
@@ -62,7 +65,8 @@ export class DelegationReceiptWatcher {
     this.receiptDir = options.receiptDir;
     this.pollIntervalMs = Math.max(options.pollIntervalMs, 500);
     const rawStale = options.staleAfterMs ?? 0;
-    this.staleAfterMs = Number.isFinite(rawStale) && rawStale > 0 ? rawStale : 0;
+    this.staleAfterMs =
+      Number.isFinite(rawStale) && rawStale > 0 ? rawStale : 0;
 
     if (this.staleAfterMs === 0) {
       options.outputChannel.appendLine(
@@ -140,11 +144,12 @@ export class DelegationReceiptWatcher {
           let positivelyLost = false;
           if (
             this.sessionCtrl &&
-            typeof (this.sessionCtrl as any).hasPositiveEvidenceOfLoss === "function"
+            typeof (this.sessionCtrl as any).hasPositiveEvidenceOfLoss ===
+              "function"
           ) {
-            positivelyLost = await (this.sessionCtrl as any).hasPositiveEvidenceOfLoss(
-              task.sessionId,
-            );
+            positivelyLost = await (
+              this.sessionCtrl as any
+            ).hasPositiveEvidenceOfLoss(task.sessionId);
           }
 
           if (positivelyLost || this.isTaskStale(task, nowMsProvider())) {
@@ -235,9 +240,12 @@ export class DelegationReceiptWatcher {
    * the original prompt. Returns true if recovery was initiated (task reopened
    * with a fresh session), false if recovery is not possible or exhausted.
    */
-  private async trySessionRecovery(
-    task: { taskId: string; sessionId: string; taskBody?: string | null; receiptPath: string },
-  ): Promise<boolean> {
+  private async trySessionRecovery(task: {
+    taskId: string;
+    sessionId: string;
+    taskBody?: string | null;
+    receiptPath: string;
+  }): Promise<boolean> {
     if (!this.sessionCtrl || !task.taskBody) {
       return false;
     }
@@ -259,10 +267,13 @@ export class DelegationReceiptWatcher {
       );
       await this.sessionCtrl.terminateSession(task.sessionId);
 
-      const result = await this.sessionCtrl.createBackgroundSession(task.taskBody, {
-        allowInteractiveFallback: true,
-        contextLabel: `delegation recovery ${task.taskId}`,
-      });
+      const result = await this.sessionCtrl.createBackgroundSession(
+        task.taskBody,
+        {
+          allowInteractiveFallback: true,
+          contextLabel: `delegation recovery ${task.taskId}`,
+        },
+      );
       if (!result.ok || !result.session_id) {
         this.outputChannel.appendLine(
           `[companion] session-recovery: failed to create new session for ${task.taskId}: ${result.error ?? "unknown"}`,
@@ -320,7 +331,10 @@ export class DelegationReceiptWatcher {
     body: string,
     receiptPath: string | null,
   ): Promise<boolean> {
-    if (this.tracker.isTerminalSent(taskId) || this.inFlightTerminalTaskIds.has(taskId)) {
+    if (
+      this.tracker.isTerminalSent(taskId) ||
+      this.inFlightTerminalTaskIds.has(taskId)
+    ) {
       this.outputChannel.appendLine(
         `[companion] delegation-receipt-watcher: terminal already sent for ${taskId}, skipping duplicate.`,
       );
@@ -343,7 +357,9 @@ export class DelegationReceiptWatcher {
     this.tracker.markPendingTerminalInflight(taskId);
 
     // Step 3: attempt transport delivery with stable delivery identity
-    const wireBody = deliveryId ? wrapBodyWithDeliveryId(body, deliveryId) : body;
+    const wireBody = deliveryId
+      ? wrapBodyWithDeliveryId(body, deliveryId)
+      : body;
     this.inFlightTerminalTaskIds.add(taskId);
     try {
       await this.sendTerminal(taskId, status, wireBody);
@@ -383,12 +399,19 @@ export class DelegationReceiptWatcher {
    * desktop-side duplicates.
    */
   private async retryPendingTerminalDelivery(taskId: string): Promise<boolean> {
-    if (this.tracker.isTerminalSent(taskId) || this.inFlightTerminalTaskIds.has(taskId)) {
+    if (
+      this.tracker.isTerminalSent(taskId) ||
+      this.inFlightTerminalTaskIds.has(taskId)
+    ) {
       return false;
     }
 
     const task = this.tracker.get(taskId);
-    if (!task || !task.pendingTerminalStatus || task.pendingTerminalBody == null) {
+    if (
+      !task ||
+      !task.pendingTerminalStatus ||
+      task.pendingTerminalBody == null
+    ) {
       return false;
     }
 
@@ -397,11 +420,15 @@ export class DelegationReceiptWatcher {
       this.tracker.markPendingTerminalDelivered(taskId);
       this.outputChannel.appendLine(
         `[companion] delegation-receipt-watcher: ${taskId} had inflight delivery marker ` +
-        `(set at ${task.pendingTerminalInflightAt}) — marking delivered without resending ` +
-        `(crash-after-send recovery).`,
+          `(set at ${task.pendingTerminalInflightAt}) — marking delivered without resending ` +
+          `(crash-after-send recovery).`,
       );
       if (task.receiptPath) {
-        try { fs.unlinkSync(task.receiptPath); } catch { /* best effort */ }
+        try {
+          fs.unlinkSync(task.receiptPath);
+        } catch {
+          /* best effort */
+        }
       }
       return false; // did not send — already assumed delivered
     }
@@ -409,7 +436,10 @@ export class DelegationReceiptWatcher {
     // ── Normal retry: no inflight marker → send was never attempted ──
     this.tracker.markPendingTerminalInflight(taskId);
     const wireBody = task.pendingTerminalDeliveryId
-      ? wrapBodyWithDeliveryId(task.pendingTerminalBody, task.pendingTerminalDeliveryId)
+      ? wrapBodyWithDeliveryId(
+          task.pendingTerminalBody,
+          task.pendingTerminalDeliveryId,
+        )
       : task.pendingTerminalBody;
     this.inFlightTerminalTaskIds.add(taskId);
     try {
@@ -419,7 +449,11 @@ export class DelegationReceiptWatcher {
         `[companion] delegation-receipt-watcher: retry sent ${task.pendingTerminalStatus} for ${taskId} via agent-bus.`,
       );
       if (task.receiptPath) {
-        try { fs.unlinkSync(task.receiptPath); } catch { /* best effort */ }
+        try {
+          fs.unlinkSync(task.receiptPath);
+        } catch {
+          /* best effort */
+        }
       }
       return true;
     } catch (err: any) {

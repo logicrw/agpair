@@ -19,7 +19,10 @@ export interface DiscoveredLsConnection {
   source: "live-rpc-port" | "extension-server-port";
 }
 
-export function extractCliArg(commandLine: string, name: string): string | null {
+export function extractCliArg(
+  commandLine: string,
+  name: string,
+): string | null {
   const equalsMatch = commandLine.match(new RegExp(`--${name}=([^\\s"]+)`));
   if (equalsMatch) {
     return equalsMatch[1];
@@ -42,9 +45,17 @@ export function parseLsProcessLine(line: string): LsProcessInfo | null {
   if (!Number.isFinite(pid) || !csrfToken) {
     return null;
   }
-  const extensionServerPortRaw = extractCliArg(trimmed, "extension_server_port");
-  const extensionServerPort = extensionServerPortRaw ? parseInt(extensionServerPortRaw, 10) : null;
-  const extensionServerCsrfToken = extractCliArg(trimmed, "extension_server_csrf_token");
+  const extensionServerPortRaw = extractCliArg(
+    trimmed,
+    "extension_server_port",
+  );
+  const extensionServerPort = extensionServerPortRaw
+    ? parseInt(extensionServerPortRaw, 10)
+    : null;
+  const extensionServerCsrfToken = extractCliArg(
+    trimmed,
+    "extension_server_csrf_token",
+  );
   return {
     pid,
     csrfToken,
@@ -57,7 +68,10 @@ export function parseLsProcessLine(line: string): LsProcessInfo | null {
   };
 }
 
-export function selectLsProcessInfo(psOutput: string, workspaceHint = ""): LsProcessInfo | null {
+export function selectLsProcessInfo(
+  psOutput: string,
+  workspaceHint = "",
+): LsProcessInfo | null {
   const parsed = psOutput
     .split("\n")
     .map((line) => parseLsProcessLine(line))
@@ -66,7 +80,9 @@ export function selectLsProcessInfo(psOutput: string, workspaceHint = ""): LsPro
     return null;
   }
   if (workspaceHint) {
-    const hinted = parsed.find((entry) => entry.commandLine.includes(workspaceHint));
+    const hinted = parsed.find((entry) =>
+      entry.commandLine.includes(workspaceHint),
+    );
     if (hinted) {
       return hinted;
     }
@@ -85,7 +101,11 @@ export function parseListeningPorts(lsofOutput: string): number[] {
   return Array.from(ports).sort((a, b) => a - b);
 }
 
-async function probeRpcPort(port: number, csrfToken: string, useTls: boolean): Promise<boolean> {
+async function probeRpcPort(
+  port: number,
+  csrfToken: string,
+  useTls: boolean,
+): Promise<boolean> {
   const transport = useTls ? https : http;
   const protocol = useTls ? "https" : "http";
   return new Promise((resolve) => {
@@ -115,7 +135,9 @@ async function probeRpcPort(port: number, csrfToken: string, useTls: boolean): P
   });
 }
 
-export async function discoverLiveLsConnection(workspaceHint = ""): Promise<DiscoveredLsConnection | null> {
+export async function discoverLiveLsConnection(
+  workspaceHint = "",
+): Promise<DiscoveredLsConnection | null> {
   if (process.platform === "win32") {
     return null;
   }
@@ -125,7 +147,10 @@ export async function discoverLiveLsConnection(workspaceHint = ""): Promise<Disc
   try {
     ({ stdout: psOutput } = await execFile(
       "sh",
-      ["-lc", "ps -eo pid,args 2>/dev/null | grep language_server | grep csrf_token | grep -v grep"],
+      [
+        "-lc",
+        "ps -eo pid,args 2>/dev/null | grep language_server | grep csrf_token | grep -v grep",
+      ],
       { encoding: "utf8", timeout: 5000 },
     ));
   } catch {
@@ -174,7 +199,13 @@ export async function discoverLiveLsConnection(workspaceHint = ""): Promise<Disc
   }
 
   if (processInfo.extensionServerPort && processInfo.extensionServerCsrfToken) {
-    if (await probeRpcPort(processInfo.extensionServerPort, processInfo.extensionServerCsrfToken, true)) {
+    if (
+      await probeRpcPort(
+        processInfo.extensionServerPort,
+        processInfo.extensionServerCsrfToken,
+        true,
+      )
+    ) {
       return {
         pid: processInfo.pid,
         port: processInfo.extensionServerPort,
@@ -183,7 +214,13 @@ export async function discoverLiveLsConnection(workspaceHint = ""): Promise<Disc
         source: "extension-server-port",
       };
     }
-    if (await probeRpcPort(processInfo.extensionServerPort, processInfo.extensionServerCsrfToken, false)) {
+    if (
+      await probeRpcPort(
+        processInfo.extensionServerPort,
+        processInfo.extensionServerCsrfToken,
+        false,
+      )
+    ) {
       return {
         pid: processInfo.pid,
         port: processInfo.extensionServerPort,

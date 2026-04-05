@@ -74,7 +74,10 @@ export class HealthService {
     private readonly monitor: MonitorController | null,
     private readonly sessionStore: TaskSessionStore,
     private readonly version: string,
-    private readonly extensionMetadata: { id: string | null; path: string | null } = {
+    private readonly extensionMetadata: {
+      id: string | null;
+      path: string | null;
+    } = {
       id: null,
       path: null,
     },
@@ -109,7 +112,8 @@ export class HealthService {
     const watchStatus = this.agentBusWatchStatusProvider();
     const delegationStatus = this.agentBusDelegationStatusProvider();
     const rawStaleTimeout = this.delegationTimeoutMsProvider();
-    const isStaleGuardDegraded = !Number.isFinite(rawStaleTimeout) || rawStaleTimeout <= 0;
+    const isStaleGuardDegraded =
+      !Number.isFinite(rawStaleTimeout) || rawStaleTimeout <= 0;
     const actualStaleTimeoutMs = isStaleGuardDegraded ? 0 : rawStaleTimeout;
 
     return {

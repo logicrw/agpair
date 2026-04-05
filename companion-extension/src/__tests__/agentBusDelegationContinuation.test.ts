@@ -14,7 +14,10 @@ function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "delegation-cont-test-"));
 }
 
-function registerPendingTask(tracker: DelegationTaskTracker, taskId: string): void {
+function registerPendingTask(
+  tracker: DelegationTaskTracker,
+  taskId: string,
+): void {
   tracker.register({
     taskId,
     sessionId: `sess-${taskId}`,
@@ -58,7 +61,12 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
     });
 
     await service.handleMessages([
-      { id: 1, task_id: "TASK-REV-ACK", status: "REVIEW", body: "Please fix this." },
+      {
+        id: 1,
+        task_id: "TASK-REV-ACK",
+        status: "REVIEW",
+        body: "Please fix this.",
+      },
     ]);
 
     assert.equal(replies.length, 1);
@@ -92,7 +100,12 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
     });
 
     await service.handleMessages([
-      { id: 2, task_id: "TASK-REV-NACK", status: "REVIEW", body: "Please fix this." },
+      {
+        id: 2,
+        task_id: "TASK-REV-NACK",
+        status: "REVIEW",
+        body: "Please fix this.",
+      },
     ]);
 
     assert.equal(replies.length, 1);
@@ -185,7 +198,9 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
       },
     });
 
-    await service.handleMessages([{ id: 5, task_id: "UNTRACKED-TASK", status: "REVIEW", body: "Fix it." }]);
+    await service.handleMessages([
+      { id: 5, task_id: "UNTRACKED-TASK", status: "REVIEW", body: "Fix it." },
+    ]);
 
     assert.equal(replies.length, 1);
     assert.equal(replies[0].status, "REVIEW_NACK");
@@ -225,7 +240,9 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
       },
     });
 
-    await service.handleMessages([{ id: 6, task_id: "NO-SESSION-TASK", status: "REVIEW", body: "Fix it." }]);
+    await service.handleMessages([
+      { id: 6, task_id: "NO-SESSION-TASK", status: "REVIEW", body: "Fix it." },
+    ]);
 
     assert.equal(replies.length, 1);
     assert.equal(replies[0].status, "REVIEW_NACK");
@@ -248,7 +265,9 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
       },
     });
 
-    await service.handleMessages([{ id: 7, task_id: "UNTRACKED-TASK", status: "APPROVED", body: "LGTM." }]);
+    await service.handleMessages([
+      { id: 7, task_id: "UNTRACKED-TASK", status: "APPROVED", body: "LGTM." },
+    ]);
 
     assert.equal(replies.length, 1);
     assert.equal(replies[0].status, "APPROVE_NACK");
@@ -288,7 +307,9 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
       },
     });
 
-    await service.handleMessages([{ id: 8, task_id: "NO-SESSION-TASK", status: "APPROVED", body: "LGTM." }]);
+    await service.handleMessages([
+      { id: 8, task_id: "NO-SESSION-TASK", status: "APPROVED", body: "LGTM." },
+    ]);
 
     assert.equal(replies.length, 1);
     assert.equal(replies[0].status, "APPROVE_NACK");
@@ -331,7 +352,9 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
       },
     });
 
-    await service.handleMessages([{ id: 9, task_id: "SYNTH-TASK-REV", status: "REVIEW", body: "Fix it." }]);
+    await service.handleMessages([
+      { id: 9, task_id: "SYNTH-TASK-REV", status: "REVIEW", body: "Fix it." },
+    ]);
 
     assert.equal(replies.length, 1);
     assert.equal(replies[0].status, "REVIEW_NACK");
@@ -375,7 +398,9 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
       },
     });
 
-    await service.handleMessages([{ id: 10, task_id: "SYNTH-TASK-APP", status: "APPROVED", body: "LGTM." }]);
+    await service.handleMessages([
+      { id: 10, task_id: "SYNTH-TASK-APP", status: "APPROVED", body: "LGTM." },
+    ]);
 
     assert.equal(replies.length, 1);
     assert.equal(replies[0].status, "APPROVE_NACK");
@@ -397,7 +422,7 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
         },
         async terminateSession() {
           return true;
-        }
+        },
       } as any,
       tracker,
       receiptDir: makeTempDir(),
@@ -406,12 +431,14 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
       },
     });
 
-    await service.handleMessages([{ id: 11, task_id: "PHANTOM-TASK-START", status: "TASK", body: "Do it." }]);
+    await service.handleMessages([
+      { id: 11, task_id: "PHANTOM-TASK-START", status: "TASK", body: "Do it." },
+    ]);
 
     assert.equal(replies.length, 1);
     assert.equal(replies[0].status, "BLOCKED");
     assert.match(replies[0].body, /phantom ID/);
-    
+
     // Should NOT be tracked
     const tracked = tracker.get("PHANTOM-TASK-START");
     assert.equal(tracked, undefined);

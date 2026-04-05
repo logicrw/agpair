@@ -21,8 +21,12 @@ export interface DelegationReceipt {
   body: string;
 }
 
-export function isTerminalReceiptStatus(value: unknown): value is TerminalReceiptStatus {
-  return value === "EVIDENCE_PACK" || value === "BLOCKED" || value === "COMMITTED";
+export function isTerminalReceiptStatus(
+  value: unknown,
+): value is TerminalReceiptStatus {
+  return (
+    value === "EVIDENCE_PACK" || value === "BLOCKED" || value === "COMMITTED"
+  );
 }
 
 export function canonicalizeReceiptV1(receipt: TerminalReceiptV1): string {
@@ -37,7 +41,10 @@ export function canonicalizeReceiptV1(receipt: TerminalReceiptV1): string {
   });
 }
 
-export function parseDelegationReceipt(raw: string, expectedTaskId: string): DelegationReceipt | null {
+export function parseDelegationReceipt(
+  raw: string,
+  expectedTaskId: string,
+): DelegationReceipt | null {
   try {
     const parsed = JSON.parse(raw);
     const taskId = parsed?.task_id;
@@ -49,7 +56,7 @@ export function parseDelegationReceipt(raw: string, expectedTaskId: string): Del
 
     if (status === "FAILED") {
       console.warn(
-        `[receipt] Deprecated STATUS: FAILED received in receipt — remapping to BLOCKED.`
+        `[receipt] Deprecated STATUS: FAILED received in receipt — remapping to BLOCKED.`,
       );
       status = "BLOCKED";
     }

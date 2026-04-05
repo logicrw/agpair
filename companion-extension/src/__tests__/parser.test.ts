@@ -17,7 +17,10 @@
 
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
-import { parseStructuredOutput, parseApprovalRequired } from "../protocols/parser";
+import {
+  parseStructuredOutput,
+  parseApprovalRequired,
+} from "../protocols/parser";
 
 describe("parseStructuredOutput", () => {
   it("parses EVIDENCE_PACK", () => {
@@ -81,17 +84,19 @@ describe("parseStructuredOutput", () => {
 
     const result = parseStructuredOutput(raw);
     assert.ok(result);
-    assert.equal(result.status, "BLOCKED", "legacy FAILED must be remapped to BLOCKED");
+    assert.equal(
+      result.status,
+      "BLOCKED",
+      "legacy FAILED must be remapped to BLOCKED",
+    );
     assert.equal(result.task_id, "task-legacy");
     assert.equal(result.summary, "Compilation error");
   });
 
   it("returns null on missing STATUS", () => {
-    const raw = [
-      "TASK_ID: task-001",
-      "ATTEMPT_NO: 1",
-      "REVIEW_ROUND: 0",
-    ].join("\n");
+    const raw = ["TASK_ID: task-001", "ATTEMPT_NO: 1", "REVIEW_ROUND: 0"].join(
+      "\n",
+    );
 
     assert.equal(parseStructuredOutput(raw), null);
   });

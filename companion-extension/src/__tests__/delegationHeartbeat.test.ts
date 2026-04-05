@@ -55,7 +55,11 @@ describe("DelegationHeartbeatService", () => {
       intervalMs: 60000, // won't auto-fire; we call tick() manually
       outputChannel: { appendLine: () => undefined },
       sendRunning: async (reply) => {
-        sent.push({ taskId: reply.taskId, status: reply.status, body: reply.body });
+        sent.push({
+          taskId: reply.taskId,
+          status: reply.status,
+          body: reply.body,
+        });
       },
     });
 
@@ -75,7 +79,11 @@ describe("DelegationHeartbeatService", () => {
     assert.ok(t1.lastHeartbeatAt);
     assert.notEqual(t1.lastHeartbeatAt, null);
     // lastActivityAt should be unchanged from registration
-    assert.equal(t1.lastActivityAt, "2026-01-01T00:00:00Z", "heartbeat must NOT update lastActivityAt");
+    assert.equal(
+      t1.lastActivityAt,
+      "2026-01-01T00:00:00Z",
+      "heartbeat must NOT update lastActivityAt",
+    );
 
     hb.dispose();
   });
@@ -206,7 +214,12 @@ describe("Heartbeat integration scenarios", () => {
     });
 
     await service.handleMessages([
-      { id: 77, task_id: "TASK-STRICT", status: "TASK", body: "Goal:\nStay headless." },
+      {
+        id: 77,
+        task_id: "TASK-STRICT",
+        status: "TASK",
+        body: "Goal:\nStay headless.",
+      },
     ]);
 
     assert.deepEqual(capturedOptions, {
@@ -257,21 +270,51 @@ describe("Heartbeat integration scenarios", () => {
 
     try {
       await service.handleMessages([
-        { id: 101, task_id: "TASK-SAME-ID", status: "TASK", body: "Goal:\nFirst attempt." },
+        {
+          id: 101,
+          task_id: "TASK-SAME-ID",
+          status: "TASK",
+          body: "Goal:\nFirst attempt.",
+        },
       ]);
       await service.handleMessages([
-        { id: 102, task_id: "TASK-SAME-ID", status: "TASK", body: "Goal:\nFresh retry." },
+        {
+          id: 102,
+          task_id: "TASK-SAME-ID",
+          status: "TASK",
+          body: "Goal:\nFresh retry.",
+        },
       ]);
 
       assert.deepEqual(created, ["sess-old-1", "sess-new-2"]);
-      assert.deepEqual(terminated, ["sess-old-1"], "retry should terminate the old tracked session");
-      assert.equal(replies.filter((r) => r.status === "ACK").length, 2, "both attempts should ACK");
+      assert.deepEqual(
+        terminated,
+        ["sess-old-1"],
+        "retry should terminate the old tracked session",
+      );
+      assert.equal(
+        replies.filter((r) => r.status === "ACK").length,
+        2,
+        "both attempts should ACK",
+      );
 
       const tracked = tracker.get("TASK-SAME-ID");
       assert.ok(tracked, "task should remain tracked");
-      assert.equal(tracked.sessionId, "sess-new-2", "tracker must point at the fresh retry session");
-      assert.equal(tracked.terminalSentAt, null, "fresh retry must remain pending");
-      assert.equal(tracker.pendingCount(), 1, "old pending entry must be replaced, not duplicated");
+      assert.equal(
+        tracked.sessionId,
+        "sess-new-2",
+        "tracker must point at the fresh retry session",
+      );
+      assert.equal(
+        tracked.terminalSentAt,
+        null,
+        "fresh retry must remain pending",
+      );
+      assert.equal(
+        tracker.pendingCount(),
+        1,
+        "old pending entry must be replaced, not duplicated",
+      );
     } finally {
       service.dispose();
     }
@@ -306,7 +349,12 @@ describe("Heartbeat integration scenarios", () => {
     });
 
     await service.handleMessages([
-      { id: 1, task_id: "TASK-INT-1", status: "TASK", body: "Goal:\nDo something." },
+      {
+        id: 1,
+        task_id: "TASK-INT-1",
+        status: "TASK",
+        body: "Goal:\nDo something.",
+      },
     ]);
 
     // Verify ACK
@@ -319,7 +367,11 @@ describe("Heartbeat integration scenarios", () => {
       intervalMs: 60000,
       outputChannel: { appendLine: () => undefined },
       sendRunning: async (reply) => {
-        replies.push({ taskId: reply.taskId, status: reply.status, body: reply.body });
+        replies.push({
+          taskId: reply.taskId,
+          status: reply.status,
+          body: reply.body,
+        });
       },
     });
 
@@ -349,7 +401,11 @@ describe("Heartbeat integration scenarios", () => {
       "utf-8",
     );
 
-    const terminalSent: Array<{ taskId: string; status: string; body: string }> = [];
+    const terminalSent: Array<{
+      taskId: string;
+      status: string;
+      body: string;
+    }> = [];
     const watcher = new DelegationReceiptWatcher({
       tracker,
       receiptDir: dir,
@@ -379,9 +435,15 @@ describe("Heartbeat integration scenarios", () => {
   it("stale task without receipt still terminal-BLOCKEDs (heartbeat does not prevent timeout)", async () => {
     const dir = makeTempDir();
     const tracker = new DelegationTaskTracker();
-    const terminalSent: Array<{ taskId: string; status: string; body: string }> = [];
+    const terminalSent: Array<{
+      taskId: string;
+      status: string;
+      body: string;
+    }> = [];
 
-    registerPendingTask(tracker, "TASK-STALE-HB", { ackedAt: "2026-01-01T00:00:00Z" });
+    registerPendingTask(tracker, "TASK-STALE-HB", {
+      ackedAt: "2026-01-01T00:00:00Z",
+    });
 
     const watcher = new DelegationReceiptWatcher({
       tracker,
@@ -411,10 +473,16 @@ describe("Heartbeat integration scenarios", () => {
     const dir = makeTempDir();
     const tracker = new DelegationTaskTracker();
     const hbSent: Array<{ taskId: string; status: string }> = [];
-    const terminalSent: Array<{ taskId: string; status: string; body: string }> = [];
+    const terminalSent: Array<{
+      taskId: string;
+      status: string;
+      body: string;
+    }> = [];
 
     // Register task acked at T=0
-    registerPendingTask(tracker, "TASK-HB-STALE", { ackedAt: "2026-01-01T00:00:00Z" });
+    registerPendingTask(tracker, "TASK-HB-STALE", {
+      ackedAt: "2026-01-01T00:00:00Z",
+    });
 
     // Create heartbeat service
     const hb = new DelegationHeartbeatService({
@@ -437,8 +505,11 @@ describe("Heartbeat integration scenarios", () => {
 
     // Verify heartbeat did NOT update lastActivityAt
     const task = tracker.get("TASK-HB-STALE")!;
-    assert.equal(task.lastActivityAt, "2026-01-01T00:00:00Z",
-      "heartbeat must not refresh lastActivityAt");
+    assert.equal(
+      task.lastActivityAt,
+      "2026-01-01T00:00:00Z",
+      "heartbeat must not refresh lastActivityAt",
+    );
     assert.ok(task.lastHeartbeatAt, "lastHeartbeatAt should be set");
 
     // Now stale timeout should still BLOCK despite heartbeats having fired
@@ -476,10 +547,16 @@ describe("Heartbeat integration scenarios", () => {
   it("positively lost session triggers cleanup/recovery earlier than stale timeout", async () => {
     const dir = makeTempDir();
     const tracker = new DelegationTaskTracker();
-    const terminalSent: Array<{ taskId: string; status: string; body: string }> = [];
+    const terminalSent: Array<{
+      taskId: string;
+      status: string;
+      body: string;
+    }> = [];
 
     // Register task acked at T=0
-    registerPendingTask(tracker, "TASK-LOST-EARLY", { ackedAt: "2026-01-01T00:00:00Z" });
+    registerPendingTask(tracker, "TASK-LOST-EARLY", {
+      ackedAt: "2026-01-01T00:00:00Z",
+    });
 
     const watcher = new DelegationReceiptWatcher({
       tracker,
@@ -493,7 +570,7 @@ describe("Heartbeat integration scenarios", () => {
       sessionCtrl: {
         async hasPositiveEvidenceOfLoss() {
           return true; // Fake positive loss detection
-        }
+        },
       } as any,
     });
 
@@ -514,10 +591,16 @@ describe("Heartbeat integration scenarios", () => {
   it("synthetic or ambiguous session falls back to normal stale timeout", async () => {
     const dir = makeTempDir();
     const tracker = new DelegationTaskTracker();
-    const terminalSent: Array<{ taskId: string; status: string; body: string }> = [];
+    const terminalSent: Array<{
+      taskId: string;
+      status: string;
+      body: string;
+    }> = [];
 
     // Register task acked at T=0
-    registerPendingTask(tracker, "TASK-STALE-AMBIG", { ackedAt: "2026-01-01T00:00:00Z" });
+    registerPendingTask(tracker, "TASK-STALE-AMBIG", {
+      ackedAt: "2026-01-01T00:00:00Z",
+    });
 
     const watcher = new DelegationReceiptWatcher({
       tracker,
@@ -531,7 +614,7 @@ describe("Heartbeat integration scenarios", () => {
       sessionCtrl: {
         async hasPositiveEvidenceOfLoss() {
           return false; // Ambiguous or synthetic, no positive proof
-        }
+        },
       } as any,
     });
 
@@ -539,7 +622,11 @@ describe("Heartbeat integration scenarios", () => {
     await watcher.poll(() => Date.parse("2026-01-01T00:00:05Z"));
 
     // Task must NOT be blown away yet, because we lack positive proof and it's not stale
-    assert.equal(terminalSent.length, 0, "must not cleanup early for ambiguous state");
+    assert.equal(
+      terminalSent.length,
+      0,
+      "must not cleanup early for ambiguous state",
+    );
 
     // Poll at T=65s — AFTER the 60s stale window
     await watcher.poll(() => Date.parse("2026-01-01T00:01:05Z"));
@@ -588,7 +675,12 @@ describe("Heartbeat integration scenarios", () => {
     });
 
     await service.handleMessages([
-      { id: 500, task_id: "TASK-REOPEN-HB", status: "REVIEW", body: "Fix the bug." },
+      {
+        id: 500,
+        task_id: "TASK-REOPEN-HB",
+        status: "REVIEW",
+        body: "Fix the bug.",
+      },
     ]);
 
     // Task should be reopened
@@ -636,7 +728,11 @@ describe("Heartbeat integration scenarios", () => {
         async createBackgroundSession() {
           throw new Error("should not be called");
         },
-        async sendPrompt(_sessionId: string, _prompt: string, options?: unknown) {
+        async sendPrompt(
+          _sessionId: string,
+          _prompt: string,
+          options?: unknown,
+        ) {
           capturedOptions = options ?? null;
           return { ok: true };
         },
@@ -649,7 +745,12 @@ describe("Heartbeat integration scenarios", () => {
     });
 
     await service.handleMessages([
-      { id: 88, task_id: "TASK-REVIEW-STRICT", status: "REVIEW", body: "Keep it headless." },
+      {
+        id: 88,
+        task_id: "TASK-REVIEW-STRICT",
+        status: "REVIEW",
+        body: "Keep it headless.",
+      },
     ]);
 
     assert.deepEqual(capturedOptions, {
@@ -688,7 +789,12 @@ describe("Heartbeat integration scenarios", () => {
     });
 
     await service.handleMessages([
-      { id: 700, task_id: "TASK-APPROVED-STRUCT", status: "APPROVED", body: "Commit it." },
+      {
+        id: 700,
+        task_id: "TASK-APPROVED-STRUCT",
+        status: "APPROVED",
+        body: "Commit it.",
+      },
     ]);
 
     assert.match(capturedPrompt, /"schema_version": "1"/);
@@ -773,7 +879,9 @@ describe("Heartbeat health output", () => {
     assert.equal(status.enabled, true);
 
     // Tracker summary includes lastHeartbeatAt
-    const taskSummary = status.tracker_summary.tasks.find((t) => t.taskId === "TASK-HEALTH-HB");
+    const taskSummary = status.tracker_summary.tasks.find(
+      (t) => t.taskId === "TASK-HEALTH-HB",
+    );
     assert.ok(taskSummary);
     assert.equal(taskSummary!.lastHeartbeatAt, null); // not yet heartbeated
 
@@ -794,7 +902,9 @@ describe("Heartbeat health output", () => {
     await hb.tick();
 
     const summary = tracker.getSummary();
-    const taskSummary = summary.tasks.find((t) => t.taskId === "TASK-HEALTH-HB2");
+    const taskSummary = summary.tasks.find(
+      (t) => t.taskId === "TASK-HEALTH-HB2",
+    );
     assert.ok(taskSummary);
     assert.ok(taskSummary!.lastHeartbeatAt);
     assert.notEqual(taskSummary!.lastHeartbeatAt, null);
@@ -849,7 +959,9 @@ describe("DelegationTaskTracker heartbeat fields", () => {
     registerPendingTask(tracker, "TASK-TH-PERSIST");
     tracker.touchHeartbeat("TASK-TH-PERSIST", "2026-01-01T02:00:00Z");
 
-    const restored = new DelegationTaskTracker(statePath).get("TASK-TH-PERSIST")!;
+    const restored = new DelegationTaskTracker(statePath).get(
+      "TASK-TH-PERSIST",
+    )!;
     assert.equal(restored.lastHeartbeatAt, "2026-01-01T02:00:00Z");
 
     fs.rmSync(dir, { recursive: true, force: true });

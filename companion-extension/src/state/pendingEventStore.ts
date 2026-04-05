@@ -20,7 +20,11 @@ export class PendingEventStore {
 
   push(task_id: string, event: PendingEvent): void {
     const list = this.events.get(task_id) || [];
-    if (list.some((existing) => existing.source_event_id === event.source_event_id)) {
+    if (
+      list.some(
+        (existing) => existing.source_event_id === event.source_event_id,
+      )
+    ) {
       return;
     }
     list.push(event);

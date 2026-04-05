@@ -109,7 +109,11 @@ describe("receipt protocol helpers", () => {
 
   it("remaps legacy FAILED to BLOCKED", () => {
     const parsed = parseDelegationReceipt(
-      JSON.stringify({ task_id: "TASK-1", status: "FAILED", body: "Legacy fail" }),
+      JSON.stringify({
+        task_id: "TASK-1",
+        status: "FAILED",
+        body: "Legacy fail",
+      }),
       "TASK-1",
     );
     assert.ok(parsed);
