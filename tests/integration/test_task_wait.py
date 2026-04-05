@@ -610,7 +610,7 @@ def test_task_start_auto_wait_exits_0_when_terminal(tmp_path: Path, monkeypatch)
 def test_task_help_shows_wait_options():
     """All dispatch commands should show --wait/--no-wait."""
     runner = CliRunner()
-    for cmd in ("start", "continue", "approve", "reject", "retry"):
+    for cmd in ("start", "retry"):
         result = runner.invoke(app, ["task", cmd, "--help"])
         assert result.exit_code == 0, f"{cmd} --help failed"
         stdout = click.unstyle(result.stdout)

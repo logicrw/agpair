@@ -21,12 +21,6 @@ class FakePullBus:
     def send_task(self, *args, **kwargs):
         self.sent_messages.append(("send_task", args, kwargs))
 
-    def send_review(self, *args, **kwargs):
-        self.sent_messages.append(("send_review", args, kwargs))
-
-    def send_approved(self, *args, **kwargs):
-        self.sent_messages.append(("send_approved", args, kwargs))
-
 
 def make_paths(tmp_path: Path) -> AppPaths:
     return AppPaths.from_root(tmp_path / ".agpair")
@@ -101,62 +95,7 @@ def test_review_then_commit_policy_rejects_committed_before_approval(tmp_path: P
     assert "COMMITTED not permitted" in rows[0].body
 
 
-def test_review_then_commit_policy_allows_evidence_pack_and_then_commit_after_approval(tmp_path: Path) -> None:
-    from agpair.daemon.loop import run_once
 
-    paths = seed_task(tmp_path, completion_policy="review_then_commit")
-    repo = TaskRepository(paths.db_path)
-    repo.mark_acked(task_id="TASK-1", session_id="session-123")
-    
-    bus = FakePullBus(
-        [
-            {
-                "id": 1,
-                "task_id": "TASK-1",
-                "status": "EVIDENCE_PACK",
-                "body": "{}",
-            }
-        ]
-    )
-
-    run_once(paths, now=datetime(2026, 3, 21, 12, 0, tzinfo=UTC), bus=bus)
-
-    task = repo.get_task("TASK-1")
-    assert task is not None
-    assert task.phase == "evidence_ready"
-
-    # Now approve it
-    bus2 = FakePullBus(
-        [
-            {
-                "id": 2,
-                "task_id": "TASK-1",
-                "status": "APPROVE_ACK",
-                "body": "{}",
-            }
-        ]
-    )
-    run_once(paths, now=datetime(2026, 3, 21, 12, 1, tzinfo=UTC), bus=bus2)
-    
-    task = repo.get_task("TASK-1")
-    assert task.is_approved is True
-    
-    # Now commit should work
-    bus3 = FakePullBus(
-        [
-            {
-                "id": 3,
-                "task_id": "TASK-1",
-                "status": "COMMITTED",
-                "body": "{}",
-            }
-        ]
-    )
-    run_once(paths, now=datetime(2026, 3, 21, 12, 2, tzinfo=UTC), bus=bus3)
-    
-    task = repo.get_task("TASK-1")
-    assert task.phase == "committed"
-    assert task.terminal_source == "receipt"
 
 
 def test_repo_evidence_fallback(tmp_path: Path, monkeypatch) -> None:

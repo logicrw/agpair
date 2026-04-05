@@ -40,12 +40,6 @@ class FakePullBus:
     def send_task(self, *args, **kwargs):
         self.sent_messages.append(("send_task", args, kwargs))
 
-    def send_review(self, *args, **kwargs):
-        self.sent_messages.append(("send_review", args, kwargs))
-
-    def send_approved(self, *args, **kwargs):
-        self.sent_messages.append(("send_approved", args, kwargs))
-
 
 class EmptyBus(FakePullBus):
     def __init__(self) -> None:

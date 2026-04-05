@@ -34,8 +34,6 @@ VALID_STATUSES = (
     "ACK",
     "EVIDENCE_PACK",
     "BLOCKED",
-    "REVIEW",
-    "APPROVED",
     "COMMITTED",
     "NEXT",
 )

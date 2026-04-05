@@ -121,8 +121,8 @@ export class DelegationTaskTracker {
   /**
    * Re-open a previously terminal task for a continuation round.
    * Clears the terminal markers and heartbeat timestamp so the receipt
-   * watcher can emit another EVIDENCE_PACK / BLOCKED after REVIEW or
-   * REVIEW_DELTA is applied, and the heartbeat loop can resume cleanly.
+   * watcher can emit another EVIDENCE_PACK / BLOCKED after the task is
+   * reopened, and the heartbeat loop can resume cleanly.
    */
   reopen(
     taskId: string,

@@ -1,7 +1,6 @@
 """Tests for the premature-intervention liveness guard.
 
 Covers:
-  - `task continue` blocked on active acked task, allowed with --force
   - `task retry` blocked on active acked task, allowed with --force
   - `task abandon` blocked on active acked task, allowed with --force
   - Liveness classification (silent / active_via_heartbeat / active_via_workspace / active_via_both)
@@ -116,65 +115,6 @@ def test_classify_stale_signals_are_silent(tmp_path: Path) -> None:
     assert is_task_live(task) is False
 
 
-# ---------------------------------------------------------------------------
-# 2. task continue blocked on live acked task, allowed with --force
-# ---------------------------------------------------------------------------
-
-
-def test_continue_blocked_on_live_acked_task(tmp_path: Path, monkeypatch) -> None:
-    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
-    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
-    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
-    repo = _seed_acked_task(tmp_path)
-    _make_live_via_heartbeat(repo, "TASK-LG1")
-
-    result = CliRunner().invoke(app, [
-        "task", "continue", "TASK-LG1", "--body", "fix it", "--no-wait",
-    ])
-    assert result.exit_code == 1
-    assert "Refused" in (result.stderr or "")
-    assert "--force" in (result.stderr or "")
-    # No bus call should have been made
-    assert read_calls(calls_path) == []
-
-
-def test_continue_allowed_with_force_on_live_acked_task(tmp_path: Path, monkeypatch) -> None:
-    def mock_send(*args, send_fn=None, **kwargs):
-        if send_fn: send_fn()
-    monkeypatch.setattr("agpair.cli.task._send_semantic_or_exit", mock_send)
-    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
-    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
-    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
-    repo = _seed_acked_task(tmp_path)
-    _make_live_via_heartbeat(repo, "TASK-LG1")
-
-    result = CliRunner().invoke(app, [
-        "task", "continue", "TASK-LG1", "--body", "fix it", "--force", "--no-wait",
-    ])
-    assert result.exit_code == 0
-    assert len(read_calls(calls_path)) > 0
-
-
-def test_continue_allowed_on_silent_acked_task(tmp_path: Path, monkeypatch) -> None:
-    """No guard when task has no recent liveness signals."""
-    def mock_send(*args, send_fn=None, **kwargs):
-        if send_fn: send_fn()
-    monkeypatch.setattr("agpair.cli.task._send_semantic_or_exit", mock_send)
-    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
-    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
-    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
-    _seed_acked_task(tmp_path)
-
-    result = CliRunner().invoke(app, [
-        "task", "continue", "TASK-LG1", "--body", "fix it", "--no-wait",
-    ])
-    assert result.exit_code == 0
 
 
 # ---------------------------------------------------------------------------
@@ -601,26 +541,6 @@ def test_retry_dispatch_resets_workspace_activity(tmp_path: Path) -> None:
     assert updated.phase == "new"
 
 
-# ---------------------------------------------------------------------------
-# 10. Guard uses workspace activity from heartbeat-only scenario
-# ---------------------------------------------------------------------------
-
-
-def test_continue_blocked_by_workspace_activity_alone(tmp_path: Path, monkeypatch) -> None:
-    """Even without heartbeat, workspace activity alone blocks continue."""
-    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
-    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
-    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
-    repo = _seed_acked_task(tmp_path)
-    _make_live_via_workspace(repo, "TASK-LG1")
-
-    result = CliRunner().invoke(app, [
-        "task", "continue", "TASK-LG1", "--body", "fix", "--no-wait",
-    ])
-    assert result.exit_code == 1
-    assert "Refused" in (result.stderr or "")
 
 
 # ---------------------------------------------------------------------------
@@ -630,7 +550,7 @@ def test_continue_blocked_by_workspace_activity_alone(tmp_path: Path, monkeypatc
 
 def test_force_flag_in_help() -> None:
     runner = CliRunner()
-    for cmd in ("continue", "retry", "abandon"):
+    for cmd in ("retry", "abandon"):
         result = runner.invoke(app, ["task", cmd, "--help"])
         assert result.exit_code == 0, f"{cmd} --help failed"
         assert "--force" in click.unstyle(result.stdout), f"{cmd} missing --force"

@@ -32,12 +32,6 @@ class AgentBusClient:
         full_body = f"repo_path: {repo_path}\n\n{body}"
         return self._send(task_id=task_id, status=messages.TASK, body=full_body)
 
-    def send_review(self, *, task_id: str, body: str) -> int:
-        return self._send(task_id=task_id, status=messages.REVIEW, body=body)
-
-    def send_approved(self, *, task_id: str, body: str) -> int:
-        return self._send(task_id=task_id, status=messages.APPROVED, body=body)
-
     def pull_receipts(self, *, task_id: str | None = None, limit: int = 20) -> list[dict]:
         argv = [
             self.executable,

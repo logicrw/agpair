@@ -643,54 +643,20 @@ describe("Heartbeat integration scenarios", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("REVIEW / APPROVED reopen still allows heartbeat before the next terminal", async () => {
+  it("reopened tasks still allow heartbeat before the next terminal", async () => {
     const tracker = new DelegationTaskTracker();
-    const replies: Array<{ taskId: string; status: string }> = [];
 
     registerPendingTask(tracker, "TASK-REOPEN-HB");
-    // Mark terminal first
     tracker.markTerminal("TASK-REOPEN-HB", "EVIDENCE_PACK", "round one");
     assert.ok(tracker.isTerminalSent("TASK-REOPEN-HB"));
 
-    // Simulate REVIEW reopen
-    const service = new AgentBusDelegationService({
-      enabled: true,
-      command: "agent-bus",
-      workspacePathsProvider: () => ["/tmp/repo"],
-      outputChannel: { appendLine: () => undefined },
-      sessionCtrl: {
-        async createBackgroundSession() {
-          throw new Error("should not be called");
-        },
-        async sendPrompt() {
-          return { ok: true };
-        },
-      } as any,
-      tracker,
-      receiptDir: makeTempDir(),
-      receiptPollIntervalMs: 60000,
-      heartbeatIntervalMs: 60000,
-      sendReply: async ({ taskId, status }: AgentBusDelegationReply) => {
-        replies.push({ taskId, status });
-      },
-    });
+    tracker.reopen("TASK-REOPEN-HB", "RUNNING");
 
-    await service.handleMessages([
-      {
-        id: 500,
-        task_id: "TASK-REOPEN-HB",
-        status: "REVIEW",
-        body: "Fix the bug.",
-      },
-    ]);
-
-    // Task should be reopened
     const reopened = tracker.get("TASK-REOPEN-HB")!;
     assert.equal(reopened.status, "RUNNING");
     assert.equal(reopened.terminalSentAt, null);
-    assert.equal(reopened.lastHeartbeatAt, null); // cleared on reopen
+    assert.equal(reopened.lastHeartbeatAt, null);
 
-    // Now heartbeat should work
     const hbReplies: Array<{ taskId: string; status: string }> = [];
     const hb = new DelegationHeartbeatService({
       tracker,
@@ -711,100 +677,6 @@ describe("Heartbeat integration scenarios", () => {
     assert.ok(afterHb.lastHeartbeatAt);
 
     hb.dispose();
-    service.dispose();
-  });
-
-  it("REVIEW continuation forbids prompt-panel fallback", async () => {
-    const tracker = new DelegationTaskTracker();
-    let capturedOptions: unknown = null;
-
-    registerPendingTask(tracker, "TASK-REVIEW-STRICT");
-
-    const service = new AgentBusDelegationService({
-      enabled: true,
-      command: "agent-bus",
-      workspacePathsProvider: () => ["/tmp/repo"],
-      outputChannel: { appendLine: () => undefined },
-      sessionCtrl: {
-        async createBackgroundSession() {
-          throw new Error("should not be called");
-        },
-        async sendPrompt(
-          _sessionId: string,
-          _prompt: string,
-          options?: unknown,
-        ) {
-          capturedOptions = options ?? null;
-          return { ok: true };
-        },
-      } as any,
-      tracker,
-      receiptDir: makeTempDir(),
-      receiptPollIntervalMs: 60000,
-      heartbeatIntervalMs: 60000,
-      sendReply: async () => undefined,
-    });
-
-    await service.handleMessages([
-      {
-        id: 88,
-        task_id: "TASK-REVIEW-STRICT",
-        status: "REVIEW",
-        body: "Keep it headless.",
-      },
-    ]);
-
-    assert.deepEqual(capturedOptions, {
-      allowPanelFallback: false,
-      contextLabel: "delegated task TASK-REVIEW-STRICT (REVIEW)",
-    });
-
-    service.dispose();
-  });
-
-  it("APPROVED prompt asks for structured COMMITTED payload", async () => {
-    const tracker = new DelegationTaskTracker();
-    let capturedPrompt = "";
-
-    registerPendingTask(tracker, "TASK-APPROVED-STRUCT");
-
-    const service = new AgentBusDelegationService({
-      enabled: true,
-      command: "agent-bus",
-      workspacePathsProvider: () => ["/tmp/repo"],
-      outputChannel: { appendLine: () => undefined },
-      sessionCtrl: {
-        async createBackgroundSession() {
-          throw new Error("should not be called");
-        },
-        async sendPrompt(_sessionId: string, prompt: string) {
-          capturedPrompt = prompt;
-          return { ok: true };
-        },
-      } as any,
-      tracker,
-      receiptDir: makeTempDir(),
-      receiptPollIntervalMs: 60000,
-      heartbeatIntervalMs: 60000,
-      sendReply: async () => undefined,
-    });
-
-    await service.handleMessages([
-      {
-        id: 700,
-        task_id: "TASK-APPROVED-STRUCT",
-        status: "APPROVED",
-        body: "Commit it.",
-      },
-    ]);
-
-    assert.match(capturedPrompt, /"schema_version": "1"/);
-    assert.match(capturedPrompt, /"status": "COMMITTED"/);
-    assert.match(capturedPrompt, /"commit_sha"/);
-    assert.match(capturedPrompt, /"changed_files"/);
-    assert.match(capturedPrompt, /"residual_risks"/);
-
-    service.dispose();
   });
 
   it("restart / restored pending tasks can resume heartbeat behavior", async () => {

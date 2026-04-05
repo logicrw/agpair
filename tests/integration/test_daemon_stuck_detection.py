@@ -19,12 +19,6 @@ class EmptyBus:
     def send_task(self, *args, **kwargs):
         self.sent_messages.append(("send_task", args, kwargs))
 
-    def send_review(self, *args, **kwargs):
-        self.sent_messages.append(("send_review", args, kwargs))
-
-    def send_approved(self, *args, **kwargs):
-        self.sent_messages.append(("send_approved", args, kwargs))
-
 
 def make_paths(tmp_path: Path) -> AppPaths:
     return AppPaths.from_root(tmp_path / ".agpair")

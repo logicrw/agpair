@@ -20,8 +20,7 @@
  * regardless of how many heartbeats were sent.
  *
  * The loop stops automatically once a task reaches terminal state, and
- * restarts cleanly when a reopened task (REVIEW / APPROVED) re-enters
- * the pending path.
+ * restarts cleanly when a task is reopened and re-enters the pending path.
  *
  * Heartbeat MUST NOT:
  *   - Count as terminal anywhere

@@ -354,16 +354,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                     exec_instance = get_executor(current_task.executor_backend)
                     if exec_instance:
                         exec_instance.cleanup(current_task.antigravity_session_id)
-            elif status == messages.REVIEW_ACK:
-                journal.append(task_id, "daemon", "review_ack", clean_body)
-            elif status == messages.REVIEW_NACK:
-                journal.append(task_id, "daemon", "review_nack", clean_body)
-            elif status == messages.APPROVE_ACK:
-                if current_task:
-                    tasks.mark_approved(task_id=task_id)
-                journal.append(task_id, "daemon", "approve_ack", clean_body)
-            elif status == messages.APPROVE_NACK:
-                journal.append(task_id, "daemon", "approve_nack", clean_body)
+
             else:
                 journal.append(task_id, "daemon", "receipt_ignored", f"{status}: {body}", "invalid")
         except (TaskNotFoundError, IllegalTransitionError):

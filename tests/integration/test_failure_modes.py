@@ -25,12 +25,6 @@ class FakeBus:
     def send_task(self, *args, **kwargs):
         self.sent_messages.append(("send_task", args, kwargs))
 
-    def send_review(self, *args, **kwargs):
-        self.sent_messages.append(("send_review", args, kwargs))
-
-    def send_approved(self, *args, **kwargs):
-        self.sent_messages.append(("send_approved", args, kwargs))
-
 
 def make_paths(tmp_path: Path) -> AppPaths:
     return AppPaths.from_root(tmp_path / ".agpair")
@@ -98,28 +92,7 @@ def test_stale_receipt_is_ignored(tmp_path: Path) -> None:
     assert task.last_receipt_id == "10"
 
 
-def test_invalid_continuation_target_fails_closed(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    paths, repo = seed_task(tmp_path)
 
-    result = CliRunner().invoke(app, ["task", "approve", "TASK-1", "--body", "ship it"])
-
-    assert result.exit_code == 1
-    task = repo.get_task("TASK-1")
-    assert task is not None
-    assert task.phase == "new"
-
-
-def test_invalid_reject_target_fails_closed(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    _paths, repo = seed_task(tmp_path)
-
-    result = CliRunner().invoke(app, ["task", "reject", "TASK-1", "--body", "needs more work"])
-
-    assert result.exit_code == 1
-    task = repo.get_task("TASK-1")
-    assert task is not None
-    assert task.phase == "new"
 
 
 def test_retry_exhaustion_stops_automatic_recovery(tmp_path: Path) -> None:
