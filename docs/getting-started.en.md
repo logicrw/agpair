@@ -62,7 +62,7 @@ cd ..
 
 Reload the Antigravity window after installing. The extension activates on startup.
 
-> **Security note**: The bridge listens on `127.0.0.1` only. By default, it is secured with an auto-generated bearer token stored in VS Code's SecretStorage — no manual configuration is needed. Mutating endpoints (`/run_task`, `/continue_task`, `/write_receipt`, etc.) require a valid `Authorization: Bearer <token>` header; read-only endpoints (`/health`, `/task_status`) are accessible without auth so that `agpair doctor` works out of the box. For local debugging, you can disable auth by setting `antigravityCompanion.bridgeInsecure = true` in IDE settings — this is not recommended for normal use. Request bodies are limited to 1 MiB.
+> **Security note**: The bridge listens on `127.0.0.1` only. By default, it is secured with an auto-generated bearer token stored in VS Code's SecretStorage — no manual configuration is needed. Mutating endpoints (`/run_task`, `/write_receipt`, etc.) require a valid `Authorization: Bearer <token>` header; read-only endpoints (`/health`, `/task_status`) are accessible without auth so that `agpair doctor` works out of the box. For local debugging, you can disable auth by setting `antigravityCompanion.bridgeInsecure = true` in IDE settings — this is not recommended for normal use. Request bodies are limited to 1 MiB.
 
 ## Step 2: Confirm agent-bus is available
 
@@ -181,27 +181,12 @@ created_at: 2026-03-24T10:00:00Z
 
 After reviewing `task logs`, pick exactly one:
 
-```bash
-# Continue in the same session
-agpair task continue <TASK_ID> --body "Please address the remaining issue."
-
-# Approve and commit
-agpair task approve <TASK_ID> --body "Approved. Commit and return COMMITTED."
-
-# Reject but stay in the same session
-agpair task reject <TASK_ID> --body "Not ready. Fix the evidence gap."
-
 # Retry with a fresh executor session
 agpair task retry <TASK_ID> --body "Retry with a fresh session."
 
 # Stop tracking locally (does not notify Antigravity)
 agpair task abandon <TASK_ID> --reason "No longer needed."
 ```
-
-**When to `continue` vs `retry`:**
-
-- **`continue`** — the session is still healthy, just needs another round
-- **`retry`** — the session is broken, stuck, or not worth continuing
 
 ## Step 8: Using agpair with your AI coding agent (the normal workflow)
 
@@ -232,7 +217,7 @@ The Antigravity window for this repo is not ready. Confirm the correct repo is o
 
 ### `BLOCKED`
 
-The current attempt failed. Inspect with `agpair task logs <TASK_ID>`, then decide: `continue` the same session or `retry` with a fresh one.
+The current attempt failed. Inspect with `agpair task logs <TASK_ID>`, then decide whether to `retry` with a fresh session.
 
 ## Optional: Auto-start daemon on login
 

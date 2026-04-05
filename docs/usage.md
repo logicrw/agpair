@@ -1,11 +1,11 @@
 # agpair Usage
 
-`agpair` is a small pairing tool, not a full orchestrator.
+`agpair` is a durable task lifecycle layer for multiple executors.
 
 Use it when:
-- Your AI coding agent is the main reviewer and controller
-- Antigravity is the executor
-- you want light mechanical automation without turning the tool into a second brain
+- Your AI coding agent is the main controller
+- You are using Antigravity, Codex CLI, or Gemini CLI as the executor
+- You want light mechanical automation without turning the tool into a second brain
 
 ## Environment
 
@@ -138,9 +138,11 @@ agpair task start \
 
 Current backend policy summary:
 
-- `antigravity`: interactive IDE executor, strongest same-session semantics
-- `codex`: CLI executor, `fresh_resume_first`
-- `gemini`: CLI executor, currently more conservative about continuation
+- `antigravity`: interactive IDE executor
+- `codex`: CLI executor
+- `gemini`: CLI executor
+
+Note: all executors use fresh sessions for retries.
 
 By default, `task start` blocks until the task reaches a terminal phase.
 To return immediately after dispatch:
@@ -190,23 +192,6 @@ All task-changing commands support the same wait controls:
 agpair task status TASK-SMOKE-001
 agpair task logs TASK-SMOKE-001
 ```
-
-### Continue a task in the same Antigravity session
-
-```bash
-agpair task continue TASK-SMOKE-001 --body "Address the remaining diff issue."
-```
-
-Like `task start`, this waits by default. Add `--no-wait` if you only want to send the message.
-
-### Approve or reject
-
-```bash
-agpair task approve TASK-SMOKE-001 --body "Approved. Commit and return COMMITTED."
-agpair task reject  TASK-SMOKE-001 --body "Not ready. Fix the failing evidence."
-```
-
-Both commands wait by default. `approve` specifically waits for `committed`, `blocked`, `stuck`, or `abandoned`.
 
 ### Fresh retry
 
@@ -262,7 +247,7 @@ When the watchdog triggers, the message will tell you to run
 
 ### Auto-wait options
 
-All dispatching commands (`start`, `continue`, `approve`, `reject`, `retry`) accept:
+All dispatching commands (`start`, `retry`) accept:
 
 | Flag | Default | Notes |
 |------|---------|-------|

@@ -33,7 +33,7 @@ That is the gap `agpair` fills.
 
 - **persistent task state** instead of relying on chat context alone
 - **structured receipts** (`ACK`, `EVIDENCE_PACK`, `BLOCKED`, `COMMITTED`) instead of guessing from free text
-- **controller semantics** like `continue / approve / reject / retry`
+- **controller semantics** like `retry`
 - **watchdog and health checks** for long-running work
 - **executor flexibility** so the same control plane can drive Antigravity, Codex CLI, and Gemini CLI without rewriting the workflow
 - **lower token burn** in long workflows because state lives in SQLite/journal/receipts instead of being re-explained in every chat turn
@@ -45,7 +45,7 @@ Without `agpair`, a controller agent has to keep a growing amount of workflow st
 - which task is currently active
 - which tasks are already complete
 - what the previous executor returned
-- which tasks need retry / continue / approval
+- which tasks need retry
 - whether the latest result was a true success, a block, or just partial evidence
 
 That gets expensive and brittle fast.
@@ -207,7 +207,7 @@ What already works:
 
 - `agent-bus`-based task dispatch with auto-wait
 - Local SQLite-backed task / receipt / journal state
-- Continuation flow: `continue`, `approve`, `reject`, `retry`, `abandon` (with explicit ACK/NACK hardening)
+- Continuation flow: `retry`, `abandon` (with explicit ACK/NACK hardening)
 - Standalone `task wait` with configurable timeout/interval
 - Streaming `task watch` for continuous progress observation until terminal phase
 - Daemon with receipt ingestion, session continuity, and stuck detection
@@ -219,12 +219,10 @@ What already works:
 - Minimal persistent task dependency, concurrency, setup/teardown hook metadata, and localized spotlight testing hints for controller execution planning
 - Internal `ExecutorAdapter` abstraction extended to expose a stable `backend_id` (`antigravity` / `codex_cli` / `gemini_cli`), now visible in read-only info (e.g., `task status --json` and `doctor`) for transparency.
 - `task start --executor codex` and `task start --executor gemini` as first-class entry points, with both CLI-backed executors now flowing through dispatch / poll / canonical terminal receipt synthesis
-- Added formal Continuation Capability Matrix to encode policy for backends (e.g., `same_session` for Antigravity, `fresh_resume_first` for Codex CLI, and conservative/limited continuation for Gemini), visible in `task status --json`.
 - Added formal Executor Safety Metadata to encode fail-closed execution postures (e.g., `is_mutating`, `is_concurrency_safe`, `requires_human_interaction`), enforcing explicit capability signals from backend adapters.
-- Implemented `fresh_resume_first` path for review/approval flows, allowing Codex-backed tasks to seamlessly carry over feedback via a fresh dispatch.
 - Automatic closeout for eligible `evidence_ready` tasks when strong repo-side commit evidence exists but a final terminal receipt never arrived
 - Background daemon stdout/stderr now persist to `~/.agpair/daemon.stdout.log` and `~/.agpair/daemon.stderr.log`
-- Gemini CLI executor support is now wired into the lifecycle, while continuation remains conservative by design.
+- Gemini CLI executor support is now wired into the lifecycle.
 
 ### Why teams end up liking it
 
@@ -289,7 +287,7 @@ agpair consumes `code -> desktop` receipts. If another desktop-side watcher is a
 
 ### One controller per task
 
-You can open multiple agent windows, but avoid having two windows send `continue / approve / reject / retry` for the **same** `TASK_ID`. Rule: one active task → one main agent window.
+You can open multiple agent windows, but avoid having two windows send `retry` for the **same** `TASK_ID`. Rule: one active task → one main agent window.
 
 ### The daemon is not a second brain
 
@@ -301,7 +299,7 @@ Run `agpair doctor` when starting a new task, switching repos, restarting the da
 
 ### Bridge security
 
-The companion extension's HTTP bridge listens on `127.0.0.1` only. **By default, the bridge is secured with an auto-generated bearer token** stored in VS Code's SecretStorage. Mutating endpoints (`/run_task`, `/continue_task`, `/write_receipt`, etc.) require a valid `Authorization: Bearer <token>` header; read-only endpoints (`/health`, `/task_status`) remain accessible without authentication so that `agpair doctor` works out of the box.
+The companion extension's HTTP bridge listens on `127.0.0.1` only. **By default, the bridge is secured with an auto-generated bearer token** stored in VS Code's SecretStorage. Mutating endpoints (`/run_task`, `/write_receipt`, etc.) require a valid `Authorization: Bearer <token>` header; read-only endpoints (`/health`, `/task_status`) remain accessible without authentication so that `agpair doctor` works out of the box.
 
 The token is generated automatically on first activation and persisted securely — no manual configuration is needed for normal use. You can override the token via the `antigravityCompanion.bridgeToken` IDE setting. For local debugging only, you can disable auth entirely by setting `antigravityCompanion.bridgeInsecure = true` — **this is not recommended for normal use** as it allows any local process to call mutating bridge endpoints. Request bodies are limited to 1 MiB.
 
@@ -331,7 +329,7 @@ The Antigravity window for this repo is not ready. Confirm the correct repo is o
 
 ### `BLOCKED`
 
-The current attempt did not complete. Run `agpair task logs <TASK_ID>` to inspect, then decide whether to `continue` the same session or `retry` with a fresh one. By default, logs filter out transient operational chatter; use `--all` to view the full history.
+The current attempt did not complete. Run `agpair task logs <TASK_ID>` to inspect, then decide whether to `retry` with a fresh session. By default, logs filter out transient operational chatter; use `--all` to view the full history.
 
 ## License
 
