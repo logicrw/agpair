@@ -509,4 +509,36 @@ describe("AgentBusDelegationService Continuation ACKs", () => {
 
     service.dispose();
   });
+
+  it("builds review continuation prompt that asks for EVIDENCE_PACK instead of COMMITTED", async () => {
+    const tracker = new DelegationTaskTracker();
+    registerPendingTask(tracker, "TASK-REV-PROMPT");
+    let capturedPrompt = "";
+
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async sendPrompt(sessionId: string, prompt: string) {
+          capturedPrompt = prompt;
+          return { ok: true };
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      sendReply: async () => {},
+    });
+
+    await service.handleMessages([
+      { task_id: "TASK-REV-PROMPT", status: "REVIEW", body: "Needs more work." },
+    ]);
+
+    assert.equal(capturedPrompt.includes('Codex/Claude Code review continuation (REVIEW) for TASK-REV-PROMPT'), true);
+    assert.equal(capturedPrompt.includes('status=EVIDENCE_PACK or BLOCKED'), true);
+    assert.equal(capturedPrompt.includes('COMMITTED'), false);
+
+    service.dispose();
+  });
 });
