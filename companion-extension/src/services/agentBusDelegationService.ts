@@ -379,7 +379,7 @@ function buildDelegationPrompt(input: {
 }): string {
   const brief = input.body.trim();
   return [
-    "You are the Antigravity executor for a Codex/Claude Code-reviewed implementation task.",
+    "You are an executor for a delegated implementation task.",
     `Operate only inside this workspace: ${input.repoPath}`,
     "",
     "Execution contract:",
