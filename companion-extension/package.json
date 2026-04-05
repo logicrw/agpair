@@ -73,11 +73,12 @@
   },
   "scripts": {
     "compile": "tsc",
-    "build": "node esbuild.js",
+    "build": "node esbuild.js && rsync -a --delete dist/ ~/.antigravity/extensions/logicrw.antigravity-companion-extension-1.0.0/dist/ 2>/dev/null || true",
     "build:prod": "node esbuild.js --production",
     "dev": "tsc --watch",
     "package": "npm run build:prod && npx -y @vscode/vsce package",
     "dev:install": "npm run package && antigravity --install-extension antigravity-companion-extension-1.0.0.vsix",
+    "deploy": "npm run build && rsync -a --delete dist/ ~/.antigravity/extensions/logicrw.antigravity-companion-extension-1.0.0/dist/",
     "test": "npm run compile && node --test dist/__tests__/*.js"
   },
   "devDependencies": {
