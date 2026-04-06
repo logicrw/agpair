@@ -120,7 +120,8 @@ def test_codex_executor_cancel(tmp_path):
     pid_file = tmp_path / "pid.txt"
     pid_file.write_text("12345", encoding="utf-8")
     
-    with mock.patch("os.killpg") as mock_killpg:
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=True), \
+         mock.patch("os.killpg") as mock_killpg:
         executor.cancel("task-123", str(tmp_path))
         mock_killpg.assert_called_once()
 
@@ -152,5 +153,4 @@ def test_codex_executor_dispatch_closes_fds_on_popen_error():
 
     mock_stdout_fh.close.assert_called_once()
     mock_stderr_fh.close.assert_called_once()
-
 

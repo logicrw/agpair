@@ -53,14 +53,25 @@ def _git_status_porcelain(repo_path: str) -> str:
 
 
 def _is_process_alive(pid: int | None) -> bool:
-    """检查进程是否还活着。"""
+    """检查对应进程组里是否还有非-zombie 进程存活。"""
     if not pid:
         return False
     try:
         os.kill(pid, 0)  # signal 0 = 探测，不实际发信号
-        return True
     except (ProcessLookupError, PermissionError):
         return False
+    try:
+        status_output = subprocess.check_output(
+            ["ps", "-o", "stat=", "-g", str(pid)],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return True
+    statuses = [line.strip() for line in status_output.splitlines() if line.strip()]
+    if not statuses:
+        return False
+    return any(not status.startswith("Z") for status in statuses)
 
 
 def _now_iso() -> str:
@@ -173,6 +184,8 @@ exit $RC
             "is_worktree_dirty": False,
             "final_summary": None,
             "error_summary": None,
+            "termination_requested_at": None,
+            "termination_signal": None,
             "updated_at": _now_iso(),
         }
         _atomic_write_state(temp_dir / "state.json", state)
@@ -255,11 +268,16 @@ exit $RC
         is_done, receipt = self._arbitrate(state, task_id, attempt_no, temp_dir)
 
         # ========= 终态自动清理 =========
-        if is_done:
-            arbitration_rc = self._ensure_process_dead(state, temp_dir)
+        if is_done and state.get("is_process_alive"):
+            still_alive, arbitration_rc = self._ensure_process_dead(state, temp_dir)
             if arbitration_rc is not None and state.get("arbitration_rc") is None:
                 state["arbitration_rc"] = arbitration_rc
-            self._clean_git_locks(state.get("repo_path"))
+            state["is_process_alive"] = still_alive
+            state["updated_at"] = _now_iso()
+            _atomic_write_state(temp_dir / "state.json", state)
+            if still_alive:
+                return TaskState(is_done=False, receipt=None)
+        if is_done:
             state["is_process_alive"] = False
             
         state["updated_at"] = _now_iso()
@@ -400,33 +418,44 @@ exit $RC
         except Exception:
             return 0
 
-    def _ensure_process_dead(self, state: dict, temp_dir: pathlib.Path) -> int | None:
-        """确保进程组完全终止。返回用于仲裁的 shell 风格退出码。"""
+    def _ensure_process_dead(self, state: dict, temp_dir: pathlib.Path) -> tuple[bool, int | None]:
+        """请求终止进程组，不在主循环里阻塞等待。返回 (still_alive, arbitration_rc)。"""
         pgid = state.get("pgid") or state.get("pid")
         if not pgid:
-            return None
+            return False, None
 
-        try:
-            os.killpg(pgid, signal.SIGTERM)
-            logger.info("Sent SIGTERM to process group %d", pgid)
-        except (ProcessLookupError, PermissionError):
-            return None
+        if not _is_process_alive(pgid):
+            return False, state.get("arbitration_rc")
 
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            if not _is_process_alive(pgid):
-                return 128 + signal.SIGTERM
-            time.sleep(0.5)
+        termination_requested_at = state.get("termination_requested_at")
+        termination_signal = state.get("termination_signal")
+
+        if not termination_requested_at:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+                logger.info("Sent SIGTERM to process group %d", pgid)
+            except (ProcessLookupError, PermissionError):
+                return False, None
+            state["termination_requested_at"] = _now_iso()
+            state["termination_signal"] = "SIGTERM"
+            return True, 128 + signal.SIGTERM
+
+        if termination_signal == "SIGKILL":
+            return True, 128 + signal.SIGKILL
+        if _seconds_since(termination_requested_at) < 5:
+            return True, 128 + signal.SIGTERM
 
         try:
             os.killpg(pgid, signal.SIGKILL)
             logger.warning("Sent SIGKILL to process group %d (SIGTERM timed out)", pgid)
         except (ProcessLookupError, PermissionError):
-            return None
-        return 128 + signal.SIGKILL
+            return False, None
+        state["termination_requested_at"] = _now_iso()
+        state["termination_signal"] = "SIGKILL"
+        return True, 128 + signal.SIGKILL
 
     def _clean_git_locks(self, repo_path: str | None) -> None:
-        """清理被杀进程可能残留的 .git 锁文件。"""
+        """手动清理明确确认已失效的 .git 锁文件。默认不自动调用。"""
         if not repo_path:
             return
         git_dir = pathlib.Path(repo_path) / ".git"
@@ -438,22 +467,21 @@ exit $RC
                 pass
 
     def cancel(self, task_id: str, session_id: str) -> None:
-        """取消任务：杀进程 + 清锁。"""
+        """取消任务：请求终止进程组，并持久化终止状态。"""
         temp_dir = pathlib.Path(session_id)
         if not temp_dir.exists():
             return
 
         state = _read_state(temp_dir)
-        arbitration_rc = self._ensure_process_dead(state, temp_dir)
-        self._clean_git_locks(state.get("repo_path"))
+        still_alive, arbitration_rc = self._ensure_process_dead(state, temp_dir)
 
-        state["arbitration_rc"] = arbitration_rc or 128 + signal.SIGTERM
-        state["is_process_alive"] = False
+        state["arbitration_rc"] = arbitration_rc or state.get("arbitration_rc") or 128 + signal.SIGTERM
+        state["is_process_alive"] = still_alive
         state["updated_at"] = _now_iso()
         _atomic_write_state(temp_dir / "state.json", state)
 
     def cleanup(self, session_id: str) -> None:
-        """清理临时目录。前置条件：进程已死。"""
+        """终态清理：必要时同步等待并强制结束进程，然后删除临时目录。"""
         if not session_id:
             return
         temp_dir = pathlib.Path(session_id)
@@ -463,7 +491,20 @@ exit $RC
             return
 
         state = _read_state(temp_dir)
-        if _is_process_alive(state.get("pid")):
-            self._ensure_process_dead(state, temp_dir)
+        pgid = state.get("pgid") or state.get("pid")
+        if _is_process_alive(pgid):
+            deadline = time.monotonic() + 6.0
+            while True:
+                still_alive, arbitration_rc = self._ensure_process_dead(state, temp_dir)
+                if arbitration_rc is not None:
+                    state["arbitration_rc"] = arbitration_rc
+                state["is_process_alive"] = still_alive
+                state["updated_at"] = _now_iso()
+                _atomic_write_state(temp_dir / "state.json", state)
+                if not still_alive:
+                    break
+                if time.monotonic() >= deadline:
+                    return
+                time.sleep(0.1)
 
         shutil.rmtree(temp_dir, ignore_errors=True)

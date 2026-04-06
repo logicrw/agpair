@@ -1,7 +1,7 @@
 import json
 from unittest import mock
 
-from agpair.executors.local_cli import LocalCLIExecutor
+from agpair.executors.local_cli import LocalCLIExecutor, _is_process_alive
 from agpair.models import ContinuationCapability
 
 
@@ -138,7 +138,7 @@ def test_poll_marks_post_commit_hang_arbitration_in_state_json(tmp_path):
          mock.patch("agpair.executors.local_cli._git_diff_stat", return_value=" 1 file changed, 1 insertion(+)"), \
          mock.patch("agpair.executors.local_cli._git_status_porcelain", return_value=""), \
          mock.patch("agpair.executors.local_cli._seconds_since", return_value=31), \
-         mock.patch.object(executor, "_ensure_process_dead", return_value=128 + 15) as ensure_dead, \
+         mock.patch.object(executor, "_ensure_process_dead", return_value=(False, 128 + 15)) as ensure_dead, \
          mock.patch.object(executor, "_clean_git_locks") as clean_locks:
         state = executor.poll("TASK-LOCAL-HANG", str(tmp_path))
 
@@ -147,10 +147,100 @@ def test_poll_marks_post_commit_hang_arbitration_in_state_json(tmp_path):
     assert state.receipt["status"] == "COMMITTED"
     assert state.receipt["payload"]["arbitration"] == "post_commit_hang"
     ensure_dead.assert_called_once()
-    clean_locks.assert_called_once_with("/fake/repo")
+    clean_locks.assert_not_called()
 
     persisted = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
     assert persisted["has_committed"] is True
     assert persisted["current_head"] == "def456"
     assert persisted["is_process_alive"] is False
     assert persisted["arbitration_rc"] == 128 + 15
+
+
+def test_poll_does_not_clean_git_locks_on_normal_success(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    (tmp_path / "rc.txt").write_text("0", encoding="utf-8")
+    (tmp_path / "last_msg.txt").write_text("All done.", encoding="utf-8")
+
+    with mock.patch.object(executor, "_clean_git_locks") as clean_locks:
+        state = executor.poll("TASK-LOCAL-SAFE", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is True
+    clean_locks.assert_not_called()
+
+
+def test_ensure_process_dead_requests_sigterm_without_sleeping(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    state = {"pid": 1234, "pgid": 1234}
+
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=True), \
+         mock.patch("agpair.executors.local_cli.os.killpg") as killpg, \
+         mock.patch("agpair.executors.local_cli.time.sleep") as sleep:
+        alive_after, arbitration_rc = executor._ensure_process_dead(state, tmp_path)
+
+    assert alive_after is True
+    assert arbitration_rc == 128 + 15
+    assert state["termination_signal"] == "SIGTERM"
+    assert state["termination_requested_at"]
+    killpg.assert_called_once()
+    sleep.assert_not_called()
+
+
+def test_ensure_process_dead_escalates_to_sigkill_after_grace(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    state = {
+        "pid": 1234,
+        "pgid": 1234,
+        "termination_signal": "SIGTERM",
+        "termination_requested_at": "2026-04-06T00:00:00Z",
+    }
+
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=True), \
+         mock.patch("agpair.executors.local_cli._seconds_since", return_value=6), \
+         mock.patch("agpair.executors.local_cli.os.killpg") as killpg:
+        alive_after, arbitration_rc = executor._ensure_process_dead(state, tmp_path)
+
+    assert alive_after is True
+    assert arbitration_rc == 128 + 9
+    assert state["termination_signal"] == "SIGKILL"
+    killpg.assert_called_once()
+
+
+def test_is_process_alive_treats_zombie_as_dead():
+    with mock.patch("agpair.executors.local_cli.os.kill"), \
+         mock.patch("agpair.executors.local_cli.subprocess.check_output", return_value="Z+\n"):
+        assert _is_process_alive(4321) is False
+
+
+def test_is_process_alive_treats_live_child_in_same_group_as_alive():
+    with mock.patch("agpair.executors.local_cli.os.kill"), \
+         mock.patch("agpair.executors.local_cli.subprocess.check_output", return_value="Z+\nS\n"):
+        assert _is_process_alive(4321) is True
+
+
+def test_cleanup_waits_for_exit_and_removes_temp_dir(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    session_dir = tmp_path / "agpair_dummy_cleanup"
+    session_dir.mkdir()
+    (session_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "pid": 1234,
+                "pgid": 1234,
+                "termination_requested_at": None,
+                "termination_signal": None,
+                "arbitration_rc": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with mock.patch("agpair.executors.local_cli._is_process_alive", side_effect=[True, True, False]), \
+         mock.patch.object(executor, "_ensure_process_dead", side_effect=[(True, 128 + 15), (False, 128 + 9)]) as ensure_dead, \
+         mock.patch("agpair.executors.local_cli.time.sleep") as sleep:
+        executor.cleanup(str(session_dir))
+
+    assert not session_dir.exists()
+    assert ensure_dead.call_count == 2
+    sleep.assert_called()

@@ -329,8 +329,6 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                     from agpair.executors import get_executor
                     exec_instance = get_executor(current_task.executor_backend)
                     if exec_instance:
-                        if is_local_cli_backend(current_task.executor_backend):
-                            exec_instance.cancel(current_task.task_id, current_task.antigravity_session_id)
                         exec_instance.cleanup(current_task.antigravity_session_id)
             elif status == messages.BLOCKED:
                 reason = clean_body or "blocked"
@@ -342,8 +340,6 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                     from agpair.executors import get_executor
                     exec_instance = get_executor(current_task.executor_backend)
                     if exec_instance:
-                        if is_local_cli_backend(current_task.executor_backend):
-                            exec_instance.cancel(current_task.task_id, current_task.antigravity_session_id)
                         exec_instance.cleanup(current_task.antigravity_session_id)
             elif status == messages.COMMITTED:
                 policy = current_task.completion_policy if current_task else "direct_commit"
@@ -357,8 +353,6 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                     from agpair.executors import get_executor
                     exec_instance = get_executor(current_task.executor_backend)
                     if exec_instance:
-                        if is_local_cli_backend(current_task.executor_backend):
-                            exec_instance.cancel(current_task.task_id, current_task.antigravity_session_id)
                         exec_instance.cleanup(current_task.antigravity_session_id)
 
             else:

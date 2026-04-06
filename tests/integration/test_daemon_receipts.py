@@ -198,7 +198,7 @@ def test_daemon_ingests_structured_committed_receipt_preserves_payload(tmp_path:
     assert parsed["payload"]["commit_sha"] == "abc1234"
 
 
-def test_daemon_cancels_local_cli_before_cleanup_on_terminal_receipt(tmp_path: Path, monkeypatch) -> None:
+def test_daemon_cleans_up_local_cli_terminal_receipt_without_extra_cancel(tmp_path: Path, monkeypatch) -> None:
     from agpair.daemon.loop import run_once
     from agpair.executors.base import TaskState
 
@@ -242,7 +242,6 @@ def test_daemon_cancels_local_cli_before_cleanup_on_terminal_receipt(tmp_path: P
     run_once(paths, now=datetime(2026, 3, 21, 12, 5, tzinfo=UTC), bus=FakePullBus([]))
 
     assert fake_executor.calls == [
-        ("cancel", "TASK-1", "session-local-123"),
         ("cleanup", "session-local-123"),
     ]
 
