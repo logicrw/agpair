@@ -172,11 +172,30 @@ class GeminiExecutor(ExecutorAdapter):
                             except ValueError:
                                 detected_at = time.time()
                             if time.time() - detected_at > 30:
-                                logger.warning(f"Gemini hang timeout reached for {task_id}, force killing. Treating as timeout/failure (RC=124).")
+                                # Check if the commit has real content
+                                diff_stat = subprocess.check_output(
+                                    ["git", "diff", "--stat", f"{start_head}..{curr_head}"],
+                                    cwd=repo_path_str, text=True, stderr=subprocess.DEVNULL,
+                                ).strip()
+                                has_real_commit = bool(diff_stat)
                                 self.cancel(task_id, session_id)
-                                task_ref.rc_file.write_text("124", encoding="utf-8")
+                                if has_real_commit:
+                                    logger.warning(
+                                        "Gemini process hung after commit for %s, force killed. "
+                                        "Commit has real changes (%d lines in diff), treating as success (RC=0).",
+                                        task_id, diff_stat.count("\n") + 1,
+                                    )
+                                    task_ref.rc_file.write_text("0", encoding="utf-8")
+                                    retcode = 0
+                                else:
+                                    logger.warning(
+                                        "Gemini process hung after empty commit for %s, force killed. "
+                                        "Treating as timeout/failure (RC=124).",
+                                        task_id,
+                                    )
+                                    task_ref.rc_file.write_text("124", encoding="utf-8")
+                                    retcode = 124
                                 is_done = True
-                                retcode = 124
                 except Exception as e:
                     logger.debug("Failed to check git head for gemini watchdog: %s", e)
 
