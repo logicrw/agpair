@@ -41,6 +41,29 @@ def _git_diff_stat(repo_path: str, start: str, end: str) -> str:
         return ""
 
 
+def _git_log_grep_task_id(repo_path: str, start: str, end: str, task_id: str) -> bool:
+    """检查 start..end 之间是否存在 commit message 包含 task_id 的提交。
+
+    用于多任务同 repo 场景的 commit 归属验证，防止 Task B 的提交被 Task A 误认。
+    """
+    import re as _re
+    try:
+        result = subprocess.check_output(
+            ["git", "log", "--format=%H%x00%B", f"--grep={task_id}", f"{start}..{end}"],
+            cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+        if not result:
+            return False
+        # 严格验证：commit message 中必须包含完整 task_id（word boundary）
+        for entry in result.split("\n\n"):
+            parts = entry.split("\x00", 1)
+            if len(parts) == 2 and _re.search(rf"\b{_re.escape(task_id)}\b", parts[1]):
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def _git_status_porcelain(repo_path: str) -> str:
     """获取工作区未提交修改（git status --porcelain）。"""
     try:
@@ -52,13 +75,35 @@ def _git_status_porcelain(repo_path: str) -> str:
         return ""
 
 
-def _is_process_alive(pid: int | None) -> bool:
+def _get_process_start_time(pid: int) -> float | None:
+    """获取进程的启动时间（epoch seconds），用于防止 PID 回收误判。"""
+    try:
+        output = subprocess.check_output(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        if not output:
+            return None
+        from datetime import datetime
+        # macOS/Linux ps lstart format: "Mon Apr  6 13:49:00 2026"
+        dt = datetime.strptime(output, "%a %b %d %H:%M:%S %Y")
+        return dt.timestamp()
+    except Exception:
+        return None
+
+
+def _is_process_alive(pid: int | None, *, expected_start_time: float | None = None) -> bool:
     """检查对应进程组里是否还有非-zombie 进程存活。
 
     Uses ``os.killpg(pgid, 0)`` for cross-platform group liveness check,
     then falls back to ``ps`` to filter out zombie-only groups.
     macOS ``ps -g`` filters by *group leader* (not process group), so we
     use ``pgrep -g <pgid>`` which works consistently on both platforms.
+
+    If *expected_start_time* is provided, validates the PID hasn't been
+    recycled by comparing actual process start time (guards against stale
+    PIDs after daemon restarts).
     """
     if not pid:
         return False
@@ -67,6 +112,13 @@ def _is_process_alive(pid: int | None) -> bool:
         os.killpg(pid, 0)
     except (ProcessLookupError, PermissionError):
         return False
+    # Guard against PID recycling: verify the process started at the expected time.
+    if expected_start_time is not None:
+        actual_start = _get_process_start_time(pid)
+        if actual_start is not None and abs(actual_start - expected_start_time) > 3:
+            logger.info("PID %d start time mismatch (expected=%.0f, actual=%.0f) — PID was recycled.",
+                        pid, expected_start_time, actual_start)
+            return False
     # Slow path: exclude zombie-only groups via pgrep (cross-platform).
     try:
         status_output = subprocess.check_output(
@@ -252,6 +304,7 @@ exit $RC
 
         state["pid"] = process.pid
         state["pgid"] = process.pid
+        state["process_start_time"] = time.time()
         _atomic_write_state(temp_dir / "state.json", state)
 
         return DispatchResult(session_id=str(temp_dir))
@@ -268,7 +321,8 @@ exit $RC
 
         # ========= 第一层：进程级 liveness =========
         pid = state.get("pid")
-        process_alive = _is_process_alive(pid) if pid else False
+        expected_start_time = state.get("process_start_time")
+        process_alive = _is_process_alive(pid, expected_start_time=expected_start_time) if pid else False
         state["is_process_alive"] = process_alive
 
         # ========= 第二层：退出码检测 =========
@@ -294,6 +348,12 @@ exit $RC
                 # 检查是否有实质性提交
                 diff_stat = _git_diff_stat(repo_path, start_head, current_head)
                 has_real_commit = bool(diff_stat)
+                # 多任务同 repo 保护：验证 commit 归属
+                if has_real_commit and task_id:
+                    owns_commit = _git_log_grep_task_id(repo_path, start_head, current_head, task_id)
+                    if not owns_commit:
+                        logger.info("Commit detected for %s but no matching task_id in commit messages; ignoring.", task_id)
+                        has_real_commit = False
                 state["has_committed"] = has_real_commit
 
                 if has_real_commit and not state.get("commit_detected_at"):
@@ -304,8 +364,14 @@ exit $RC
                 porcelain = _git_status_porcelain(repo_path)
                 state["is_worktree_dirty"] = bool(porcelain)
 
-        # ========= 仲裁决策 =========
-        is_done, receipt = self._arbitrate(state, task_id, attempt_no, temp_dir)
+        # ========= 仲裁决策（使用缓存避免重复计算）=========
+        cached_receipt = state.get("cached_receipt")
+        if cached_receipt and state.get("cached_is_done"):
+            # 上一轮已经仲裁完成，但进程还没死，现在重新检查进程状态
+            is_done = True
+            receipt = cached_receipt
+        else:
+            is_done, receipt = self._arbitrate(state, task_id, attempt_no, temp_dir)
 
         # ========= 终态自动清理 =========
         if is_done and state.get("is_process_alive"):
@@ -314,11 +380,17 @@ exit $RC
                 state["arbitration_rc"] = arbitration_rc
             state["is_process_alive"] = still_alive
             state["updated_at"] = _now_iso()
-            _atomic_write_state(temp_dir / "state.json", state)
             if still_alive:
+                # 缓存仲裁结果，下次 poll 无需重新计算
+                state["cached_receipt"] = receipt
+                state["cached_is_done"] = True
+                _atomic_write_state(temp_dir / "state.json", state)
                 return TaskState(is_done=False, receipt=None)
+            _atomic_write_state(temp_dir / "state.json", state)
         if is_done:
             state["is_process_alive"] = False
+            state.pop("cached_receipt", None)
+            state.pop("cached_is_done", None)
         if not state.get("is_process_alive"):
             _reap_child_process(pid)
 
@@ -524,7 +596,14 @@ exit $RC
                 )
             except ValueError:
                 started_at_epoch = None
-        for lock in git_dir.glob("*.lock"):
+        for lock in git_dir.rglob("*.lock"):
+            # 跳过 worktrees 子目录中的锁文件（属于其他 worktree）
+            try:
+                relative = lock.relative_to(git_dir)
+                if str(relative).startswith("worktrees"):
+                    continue
+            except ValueError:
+                continue
             try:
                 if started_at_epoch is not None and lock.stat().st_mtime + 1 < started_at_epoch:
                     continue
@@ -558,7 +637,10 @@ exit $RC
         state = _read_state(temp_dir)
         still_alive, arbitration_rc = self._ensure_process_dead(state, temp_dir)
 
-        state["arbitration_rc"] = arbitration_rc or state.get("arbitration_rc") or 128 + signal.SIGTERM
+        if arbitration_rc is not None:
+            state["arbitration_rc"] = arbitration_rc
+        elif state.get("arbitration_rc") is None:
+            state["arbitration_rc"] = 128 + signal.SIGTERM
         state["is_process_alive"] = still_alive
         state["updated_at"] = _now_iso()
         _atomic_write_state(temp_dir / "state.json", state)

@@ -1,7 +1,7 @@
 import json
 from unittest import mock
 
-from agpair.executors.local_cli import LocalCLIExecutor, _is_process_alive
+from agpair.executors.local_cli import LocalCLIExecutor, _is_process_alive, _get_process_start_time
 from agpair.models import ContinuationCapability
 
 
@@ -136,6 +136,7 @@ def test_poll_marks_post_commit_hang_arbitration_in_state_json(tmp_path):
     with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=True), \
          mock.patch("agpair.executors.local_cli._git_head", return_value="def456"), \
          mock.patch("agpair.executors.local_cli._git_diff_stat", return_value=" 1 file changed, 1 insertion(+)"), \
+         mock.patch("agpair.executors.local_cli._git_log_grep_task_id", return_value=True), \
          mock.patch("agpair.executors.local_cli._git_status_porcelain", return_value=""), \
          mock.patch("agpair.executors.local_cli._seconds_since", return_value=31), \
          mock.patch.object(executor, "_ensure_process_dead", return_value=(False, 128 + 15)) as ensure_dead, \
@@ -329,3 +330,114 @@ def test_is_process_alive_batches_child_status_checks():
         assert _is_process_alive(4321) is True
 
     assert check_output.call_args_list[2].args[0] == ["ps", "-o", "stat=", "-p", "4321,5678,6789"]
+
+
+def test_is_process_alive_detects_pid_recycling():
+    """When expected_start_time doesn't match actual, PID was recycled."""
+    with mock.patch("agpair.executors.local_cli.os.killpg"), \
+         mock.patch("agpair.executors.local_cli._get_process_start_time", return_value=9999999.0):
+        # expected_start_time=1000.0, actual=9999999.0 → mismatch → dead
+        assert _is_process_alive(4321, expected_start_time=1000.0) is False
+
+
+def test_is_process_alive_allows_matching_start_time():
+    """When expected_start_time roughly matches, treat as same process."""
+    with mock.patch("agpair.executors.local_cli.os.killpg"), \
+         mock.patch("agpair.executors.local_cli._get_process_start_time", return_value=1000.5), \
+         mock.patch("agpair.executors.local_cli.subprocess.check_output", return_value="S\n"):
+        # expected_start_time=1000.0, actual=1000.5 → within tolerance → alive
+        assert _is_process_alive(4321, expected_start_time=1000.0) is True
+
+
+def test_poll_ignores_commit_from_another_task(tmp_path):
+    """When another task committed to the same repo, this task should NOT claim it."""
+    executor = DummyLocalCLIExecutor()
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "pid": 1234,
+                "pgid": 1234,
+                "started_at": "2026-04-06T00:00:00Z",
+                "repo_path": "/fake/repo",
+                "start_head": "abc123",
+                "current_head": None,
+                "exit_code": None,
+                "arbitration_rc": None,
+                "is_process_alive": True,
+                "has_committed": False,
+                "commit_detected_at": None,
+                "is_worktree_dirty": False,
+                "final_summary": None,
+                "error_summary": None,
+                "updated_at": "2026-04-06T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=True), \
+         mock.patch("agpair.executors.local_cli._git_head", return_value="def456"), \
+         mock.patch("agpair.executors.local_cli._git_diff_stat", return_value=" 1 file changed, 1 insertion(+)"), \
+         mock.patch("agpair.executors.local_cli._git_log_grep_task_id", return_value=False):
+        state = executor.poll("TASK-A", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is False  # Still running, commit belongs to another task
+    persisted = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    assert persisted["has_committed"] is False
+
+
+def test_poll_uses_cached_receipt_on_second_poll_during_process_death(tmp_path):
+    """When arbitration result is cached from a previous poll where process was dying,
+    the second poll should reuse the cached receipt without re-running arbitration."""
+    executor = DummyLocalCLIExecutor()
+    cached_receipt = {
+        "schema_version": "1",
+        "task_id": "TASK-CACHE",
+        "attempt_no": 1,
+        "review_round": 0,
+        "status": "COMMITTED",
+        "summary": "Committed via cache test",
+        "payload": {"exit_code": 0, "arbitration": "post_commit_hang"},
+    }
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "pid": 1234,
+                "pgid": 1234,
+                "started_at": "2026-04-06T00:00:00Z",
+                "repo_path": "/fake/repo",
+                "start_head": "abc123",
+                "current_head": "def456",
+                "exit_code": None,
+                "arbitration_rc": None,
+                "is_process_alive": False,  # Process died since last poll
+                "has_committed": True,
+                "commit_detected_at": "2026-04-06T00:00:30Z",
+                "is_worktree_dirty": False,
+                "final_summary": None,
+                "error_summary": None,
+                "updated_at": "2026-04-06T00:00:35Z",
+                "cached_receipt": cached_receipt,
+                "cached_is_done": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=False), \
+         mock.patch("agpair.executors.local_cli._git_head", return_value="def456"), \
+         mock.patch.object(executor, "_arbitrate", side_effect=AssertionError("should use cache")):
+        state = executor.poll("TASK-CACHE", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is True
+    assert state.receipt["status"] == "COMMITTED"
+    assert state.receipt["summary"] == "Committed via cache test"
+
+    # Verify cache is cleared after successful completion
+    persisted = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    assert "cached_receipt" not in persisted
+    assert "cached_is_done" not in persisted
