@@ -6,6 +6,7 @@ import logging
 import pathlib
 import subprocess
 import tempfile
+import time
 import typing
 
 from agpair.executors.base import DispatchResult, ExecutorAdapter, TaskState
@@ -62,7 +63,16 @@ class CodexExecutor(ExecutorAdapter):
         last_msg_file = temp_dir / "last_msg.txt"
         rc_file = temp_dir / "rc.txt"
         pid_file = temp_dir / "pid.txt"
-        
+
+        repo_path_file = temp_dir / "repo_path.txt"
+        repo_path_file.write_text(repo_path, encoding="utf-8")
+        start_head_file = temp_dir / "start_head.txt"
+        try:
+            head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_path, text=True, stderr=subprocess.DEVNULL).strip()
+            start_head_file.write_text(head, encoding="utf-8")
+        except Exception:
+            pass
+
         cmd = [
             self.codex_bin,
             "exec",
@@ -75,7 +85,7 @@ class CodexExecutor(ExecutorAdapter):
         ]
 
         cmd_str = " ".join(shlex.quote(str(x)) for x in cmd)
-        wrapper_cmd = ["sh", "-c", f"echo $$ > {shlex.quote(str(pid_file))} ; {cmd_str} ; RC=$? ; echo $RC > {shlex.quote(str(rc_file))} ; exit $RC"]
+        wrapper_cmd = ["sh", "-c", f"echo $$ > {shlex.quote(str(pid_file))} ; {cmd_str} < /dev/null ; RC=$? ; echo $RC > {shlex.quote(str(rc_file))} ; exit $RC"]
 
         stdout_fh = stdout_file.open("w", encoding="utf-8")
         stderr_fh = stderr_file.open("w", encoding="utf-8")
@@ -144,6 +154,50 @@ class CodexExecutor(ExecutorAdapter):
                 retcode = int(rc_file.read_text(encoding="utf-8").strip())
             except ValueError:
                 retcode = 1
+        else:
+            repo_path_file = temp_dir / "repo_path.txt"
+            start_head_file = temp_dir / "start_head.txt"
+            detected_file = temp_dir / "commit_detected.txt"
+
+            if repo_path_file.exists() and start_head_file.exists():
+                repo_path_str = repo_path_file.read_text(encoding="utf-8").strip()
+                start_head = start_head_file.read_text(encoding="utf-8").strip()
+                try:
+                    curr_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_path_str, text=True, stderr=subprocess.DEVNULL).strip()
+                    if curr_head and curr_head != start_head:
+                        if not detected_file.exists():
+                            detected_file.write_text(str(time.time()), encoding="utf-8")
+                        else:
+                            try:
+                                detected_at = float(detected_file.read_text(encoding="utf-8").strip())
+                            except ValueError:
+                                detected_at = time.time()
+                            if time.time() - detected_at > 30:
+                                diff_stat = subprocess.check_output(
+                                    ["git", "diff", "--stat", f"{start_head}..{curr_head}"],
+                                    cwd=repo_path_str, text=True, stderr=subprocess.DEVNULL,
+                                ).strip()
+                                has_real_commit = bool(diff_stat)
+                                self.cancel(task_id, session_id)
+                                if has_real_commit:
+                                    logger.warning(
+                                        "Codex process hung after commit for %s, force killed. "
+                                        "Commit has real changes (%d lines in diff), treating as success (RC=0).",
+                                        task_id, diff_stat.count("\n") + 1,
+                                    )
+                                    rc_file.write_text("0", encoding="utf-8")
+                                    retcode = 0
+                                else:
+                                    logger.warning(
+                                        "Codex process hung after empty commit for %s, force killed. "
+                                        "Treating as timeout/failure (RC=124).",
+                                        task_id,
+                                    )
+                                    rc_file.write_text("124", encoding="utf-8")
+                                    retcode = 124
+                                is_done = True
+                except Exception as e:
+                    logger.debug("Failed to check git head for codex watchdog: %s", e)
 
         events_count = 0
         if is_done and task_ref.stdout_file.exists():
