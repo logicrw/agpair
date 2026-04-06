@@ -154,7 +154,7 @@ Set up one monitoring loop per task. All loops run in background concurrently.
 | `acked` | Keep monitoring — not done yet |
 | `evidence_ready` | Executor finished and committed — proceed to Completion Gate |
 | `committed` | Same as `evidence_ready` — proceed to Completion Gate |
-| `blocked` | Evaluate: retry same executor, or fallback to next executor |
+| `blocked` | **Clean up first**: kill old executor process + any watch/polling for the old task. Then retry or fallback to next executor. |
 | `stuck` | Wait for auto-recovery; if it transitions to `blocked`, retry or fallback |
 | `abandoned` | Start fresh with next executor if work still needed |
 
