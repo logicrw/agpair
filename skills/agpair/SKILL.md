@@ -1,26 +1,23 @@
 ---
 name: agpair
-description: "Use when delegating coding tasks to external executors (Antigravity, Codex, Gemini) — multi-file changes, mechanically clear work, or parallel worktree execution."
+description: "Delegate coding tasks to external AI executors (Codex, Gemini, Antigravity). Use for: multi-file changes, mechanically clear work, or parallel worktree execution. Triggers: 'delegate this', 'dispatch to codex', 'run this in gemini', 'start a task', 'parallel execution', 'agpair'."
 ---
 
 # agpair
 
-Task lifecycle layer for delegating coding work to executors. Handles health checks, dispatch, monitoring, retry. Does **not** replace planning or code review.
+Task lifecycle layer for delegating coding work to executors. Handles dispatch, monitoring, and result handling. Does **not** replace planning or code review.
 
 ## When to Delegate
 
-**Default: delegate.** If a task involves writing or modifying code, delegate it unless there's a specific reason not to. Do not wait for the user to ask.
-
-Only work directly when:
-
-- the change is a single-line fix or trivial edit
-- you need to explore code before knowing what to change
-- the task requires interactive judgment mid-execution
+**Default: delegate.** If a task involves writing or modifying code, delegate it unless:
+- The change is a single-line fix or trivial edit.
+- You need to explore code before knowing what to change.
+- The task requires interactive judgment mid-execution.
 
 ## Executor Selection
 
-Worktree/parallel task → Codex → Gemini (never Antigravity — it can't see dynamic worktrees).
-Single-worktree task → Antigravity → Codex → Gemini.
+- **Worktree/parallel tasks:** `codex` → `gemini` (Fallback order). *Never use Antigravity for dynamic worktrees.*
+- **Single-worktree tasks:** `antigravity` → `codex` → `gemini`.
 
 | Executor | Strengths | Use when |
 |----------|-----------|----------|
@@ -28,38 +25,26 @@ Single-worktree task → Antigravity → Codex → Gemini.
 | `codex` | Thorough, runs tests reliably | Worktree tasks; or Antigravity unavailable |
 | `gemini` | Alternative perspective | Alongside Codex; or Codex unavailable |
 
-Do not retry the same executor twice for the same failure.
+## Workflow Checklist
 
-## Flow
+Copy and check off these items in your scratchpad during execution:
 
-### 1. Preflight
+- [ ] **1. Preflight:** Run `agpair doctor --repo-path <path>` and `agpair daemon status`.
+- [ ] **2. Write Brief:** Create a self-contained brief using the template. The executor cannot ask clarifying questions.
+- [ ] **3. Dispatch:** Run `agpair task start --repo-path <path> --executor <name> --body "<brief>" --no-wait`.
+- [ ] **4. Monitor:** Set up the background polling loop immediately (do not wait for the user).
+- [ ] **5. Completion Gate:** Verify physical git evidence and tests before reporting success.
 
-```bash
-agpair doctor --repo-path <absolute-repo-path>
-agpair daemon status
-```
+## Monitoring
 
-Do not dispatch if `desktop_reader_conflict=true` or `repo_bridge_session_ready=false` (Antigravity only).
+**Antigravity:** `agpair task watch <TASK_ID>` (with `run_in_background=true`).
 
-### 2. Dispatch
-
-```bash
-agpair task start --repo-path <path> --executor <executor> --body "<task brief>" --no-wait
-```
-
-### 3. Monitoring
-
-Immediately after dispatch, set up background monitoring. Do not wait for the user to ask.
-
-**Antigravity:** `agpair task watch <TASK_ID>` with `run_in_background=true`. Restart if it times out while task is still `acked`.
-
-**Codex / Gemini:** Do not use `watch` (wastes tokens). Use a polling loop:
+**Codex / Gemini:** Do NOT use `watch` (wastes tokens). Use this polling loop with `run_in_background=true`:
 
 ```bash
 task_id="<TASK_ID>"
 while true; do
   task_phase=$(agpair task status "$task_id" 2>/dev/null | grep '^phase:' | awk '{print $2}')
-  # zsh: do NOT use `status` as variable name — it's read-only
   if [[ "$task_phase" == "evidence_ready" || "$task_phase" == "committed" || "$task_phase" == "blocked" || "$task_phase" == "abandoned" ]]; then
     echo "AGPAIR_TERMINAL: task=$task_id phase=$task_phase"
     break
@@ -68,102 +53,90 @@ while true; do
 done
 ```
 
-Run with `run_in_background=true`. One loop per task for parallel tasks.
-
-### 4. Phase handling
-
 | Phase | Action |
 |-------|--------|
 | `acked` | Keep monitoring |
 | `evidence_ready` / `committed` | Proceed to Completion Gate |
 | `blocked` | Stop monitoring. Retry with next executor. |
-| `stuck` | Wait for auto-recovery; if → `blocked`, retry |
-| `abandoned` | Start fresh if work still needed |
+| `stuck` | Wait for auto-recovery. If it transitions to `blocked`, retry. |
+| `abandoned` | Start fresh if work is still needed |
 
-## Task Scoping
+## Task Scoping & Briefs
 
-**Core principle: one task should contain as much work as possible.** Do not split unless forced to.
+A brief must be completely self-sufficient. **One task = maximum work for one logical goal.** Do not split unless forced to (e.g. parallel worktrees or hard data dependency).
 
-Each task = one session = one commit. The executor cannot ask follow-up questions, so the brief must be completely self-contained.
+### Brief Template
 
-### Do not split when:
+```
+Goal:         [What the code should do after this task]
+Non-goals:    [What to explicitly NOT change]
+Scope:        [Exact file paths and function names]
+Invariants:   [What must NOT break]
+Required changes:
+  - [Exact file path → specific change description including before/after behavior]
+Forbidden shortcuts:
+  - [What the executor must NOT do]
+Required evidence:
+  - [Validation command: e.g., cd project && npm test]
+Exit criteria:
+  - [Concrete condition for "done"]
+  - [Suggested commit message]
+```
 
-- changes touch multiple files but serve one logical goal
-- the task is large but all steps are clearly specified
+### Example Brief
 
-### Split only when:
-
-- different languages where failure in one wastes the other
-- hard data dependency (step B needs step A committed first)
-- separate worktrees for parallel execution
-
-## Writing Briefs
-
-### Must include
-
-- **Exact file paths** — not "the config file" but `src/sdk/sessionController.ts`
-- **Specific functions or line references** when targeting existing code
-- **Before/after behavior** — what the code does now vs what it should do
-- **Validation commands** — e.g., `cd project && npm test`
-- **Commit message suggestion**
-
-### Must avoid
-
-- Ambiguous scope ("clean up the code")
-- Implicit context the executor can't see
-- Multiple unrelated goals
-
-### Template
-
-Every brief should include: `Goal` · `Non-goals` · `Scope` · `Invariants` · `Required changes` · `Forbidden shortcuts` · `Required evidence` · `Exit criteria`
+```
+Goal: Fix _is_process_alive() to work on macOS where ps -g has different semantics.
+Non-goals: Do not change the termination protocol.
+Scope: agpair/executors/local_cli.py — function _is_process_alive()
+Invariants: All 28 tests in test_local_cli_executor.py must still pass.
+Required changes:
+  - L60: Replace os.kill() with os.killpg()
+  - L64-65: Replace ps -g with ps -p for leader, then pgrep -g for group
+Forbidden shortcuts:
+  - Do not use platform.system() branching — find a cross-platform approach
+Required evidence:
+  - python -m pytest tests/unit/test_local_cli_executor.py -v
+Exit criteria:
+  - All tests pass. Commit: "fix: cross-platform process group liveness check"
+```
 
 ## Executor-Specific Rules
 
 Never include one executor's rules in another's brief.
 
-### Antigravity only
+### Antigravity
 
-Prepend this block to the task body:
+When dispatching to `antigravity`, prepend this exact block to the task body:
 
 ```text
-## Execution Rules (highest priority)
+## Execution Rules
 1. Wrap every shell command with timeout: timeout 15 <command>
-2. Syntax checks only — never import project modules or start services:
-   Python:  timeout 10 python3 -m py_compile <file>
-   Node.js: timeout 10 node --check <file>
-   Go:      timeout 10 go vet ./...
-   Other:   skip syntax checks entirely — do not improvise
+2. Syntax checks only — never import project modules or start services
 3. Do not run integration tests or start services
 4. If timeout fires (exit code 124), skip that step and continue — do not retry
 5. After all work is done, git commit directly — no external approval needed
-6. Do NOT use shell/terminal for read-only operations (grep, find, cat, ls) OR file/directory
-   creation (mkdir, touch, echo >). Use IDE built-in tools instead (grep_search, file_search,
-   view_file, create_file, edit_file). Only use shell for: syntax checks, git operations,
-   and explicitly required build commands.
+6. Use IDE built-in tools (grep_search, view_file, etc.) for read-only filesystem operations. Only use shell for syntax checks and git/build commands.
 ```
 
 ### Codex / Gemini
 
-Do not include Antigravity execution rules or agent-bus commands. Task body should contain only the brief template sections.
+Do not include Antigravity rules. They run as CLI processes. Just provide the brief block.
 
-## Parallelism
+## Completion Gate
 
-Parallelize across worktrees, not inside one. Avoid multiple active tasks in the same worktree.
+Before reporting a task as done, verify:
+- [ ] Terminal state confirmed: `git -C <repo-path> log --oneline -1` shows the commit.
+- [ ] Diff reviewed: `git -C <repo-path> diff HEAD~1` matches intent.
+- [ ] Tests pass: ran the validation command from the brief.
+- [ ] Orphan tasks cleared: daemon handles cleanup automatically.
+*(Note: If receipt payload shows `verification: unverified`, you must run git log manually).*
 
 ## Anti-Patterns
 
 | Thought | Reality |
 |---------|---------|
-| "I'll split this into 5 small tasks for safety" | Over-splitting wastes sessions. One task = maximum work for one logical goal. |
-| "I'll use `watch` for Codex" | `watch` wastes tokens for CLI executors. Use polling loop. |
-| "Worktree task can go to Antigravity" | Antigravity can't see dynamic worktrees. Use Codex/Gemini. |
-| "The executor will figure out what I mean" | It can't ask questions. Brief must be self-sufficient. |
-
-## Completion Gate
-
-Before reporting a task as done:
-
-- task reached terminal state in repo reality (`git log`)
-- evidence reviewed (test results, diff)
-- no pending tasks hanging for the same worktree
-- process cleanup is automatic (daemon handles cancel→cleanup)
+| "I'll split this into 5 small tasks" | Over-splitting wastes sessions. One task = maximum work for one logical goal. |
+| "I'll use `watch` for Codex" | `watch` wastes tokens for CLI executors. Use the polling loop script. |
+| "Worktree task to Antigravity" | Antigravity can't see dynamic worktrees. Use Codex/Gemini. |
+| "The executor will figure it out" | It can't ask questions. Brief must be explicit and self-sufficient. |
