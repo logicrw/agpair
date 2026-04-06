@@ -91,6 +91,7 @@ def run_once(
         timeout_seconds=timeout_seconds,
         skip_task_ids=touched_task_ids | watchdog_task_ids,
     )
+    cleaned_sessions = sweep_local_cli_sessions(paths, skip_task_ids=touched_task_ids)
     health: dict = {
         "running": True,
         "last_tick_at": to_iso(current),
@@ -98,6 +99,7 @@ def run_once(
         "auto_closed_from_repo": auto_closed,
         "watchdog_recommended": watchdog_count,
         "stuck_marked": stuck,
+        "local_sessions_cleaned": cleaned_sessions,
     }
     if bus_errors:
         health["bus_errors"] = bus_errors
@@ -326,10 +328,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 tasks.mark_evidence_ready(task_id=task_id, last_receipt_id=message_id)
                 journal.append(task_id, "daemon", "evidence_ready", journal_body)
                 if current_task and current_task.antigravity_session_id:
-                    from agpair.executors import get_executor
-                    exec_instance = get_executor(current_task.executor_backend)
-                    if exec_instance:
-                        exec_instance.cleanup(current_task.antigravity_session_id)
+                    _cleanup_local_cli_session(tasks, current_task)
             elif status == messages.BLOCKED:
                 reason = clean_body or "blocked"
                 if structured_receipt is not None:
@@ -337,10 +336,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 tasks.mark_blocked(task_id=task_id, reason=reason)
                 journal.append(task_id, "daemon", "blocked", journal_body)
                 if current_task and current_task.antigravity_session_id:
-                    from agpair.executors import get_executor
-                    exec_instance = get_executor(current_task.executor_backend)
-                    if exec_instance:
-                        exec_instance.cleanup(current_task.antigravity_session_id)
+                    _cleanup_local_cli_session(tasks, current_task)
             elif status == messages.COMMITTED:
                 policy = current_task.completion_policy if current_task else "direct_commit"
                 is_approved = current_task.is_approved if current_task else False
@@ -350,10 +346,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 tasks.mark_committed(task_id=task_id, last_receipt_id=message_id, terminal_source="receipt")
                 journal.append(task_id, "daemon", "committed", journal_body)
                 if current_task and current_task.antigravity_session_id:
-                    from agpair.executors import get_executor
-                    exec_instance = get_executor(current_task.executor_backend)
-                    if exec_instance:
-                        exec_instance.cleanup(current_task.antigravity_session_id)
+                    _cleanup_local_cli_session(tasks, current_task)
 
             else:
                 journal.append(task_id, "daemon", "receipt_ignored", f"{status}: {body}", "invalid")
@@ -383,14 +376,46 @@ def mark_stuck_tasks(
         tasks.recommend_retry(task_id=task.task_id, retry_count=task.retry_count)
         journal.append(task.task_id, "daemon", "stuck", "retry recommended after timeout")
         if task.antigravity_session_id:
-            from agpair.executors import get_executor
-            exec_instance = get_executor(task.executor_backend)
-            if exec_instance:
-                # cleanup() is self-contained: it handles process termination
-                # (SIGTERM→SIGKILL) internally before removing the temp dir.
-                exec_instance.cleanup(task.antigravity_session_id)
+            _cleanup_local_cli_session(tasks, task)
         count += 1
     return count
+
+
+def _cleanup_local_cli_session(tasks: TaskRepository, task) -> bool:
+    from agpair.executors import get_executor, is_local_cli_backend
+
+    session_id = task.antigravity_session_id
+    if not session_id or not is_local_cli_backend(task.executor_backend):
+        return False
+    exec_instance = get_executor(task.executor_backend)
+    if not exec_instance:
+        return False
+    exec_instance.cleanup(session_id)
+    session_path = Path(session_id)
+    if session_path.name.startswith("agpair_") and not session_path.exists():
+        try:
+            tasks.clear_session_id(task_id=task.task_id)
+        except TaskNotFoundError:
+            return False
+        return True
+    return False
+
+
+def sweep_local_cli_sessions(
+    paths: AppPaths,
+    *,
+    skip_task_ids: set[str] | None = None,
+) -> int:
+    """Continue best-effort cleanup for terminal local CLI sessions without blocking the tick."""
+    tasks = TaskRepository(paths.db_path)
+    excluded = skip_task_ids or set()
+    cleaned = 0
+    for task in tasks.list_local_cli_cleanup_candidates(limit=500):
+        if task.task_id in excluded:
+            continue
+        if _cleanup_local_cli_session(tasks, task):
+            cleaned += 1
+    return cleaned
 
 
 def mark_watchdog_tasks(

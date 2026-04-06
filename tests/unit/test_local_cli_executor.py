@@ -243,11 +243,89 @@ def test_cleanup_waits_for_exit_and_removes_temp_dir(tmp_path):
         encoding="utf-8",
     )
 
-    with mock.patch("agpair.executors.local_cli._is_process_alive", side_effect=[True, True, False]), \
-         mock.patch.object(executor, "_ensure_process_dead", side_effect=[(True, 128 + 15), (False, 128 + 9)]) as ensure_dead, \
-         mock.patch("agpair.executors.local_cli.time.sleep") as sleep:
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=False), \
+         mock.patch.object(executor, "_ensure_process_dead") as ensure_dead, \
+         mock.patch.object(executor, "_clean_git_locks") as clean_locks:
         executor.cleanup(str(session_dir))
 
     assert not session_dir.exists()
-    assert ensure_dead.call_count == 2
-    sleep.assert_called()
+    ensure_dead.assert_not_called()
+    clean_locks.assert_not_called()
+
+
+def test_cleanup_does_not_block_or_remove_dir_while_process_still_alive(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    session_dir = tmp_path / "agpair_dummy_cleanup_running"
+    session_dir.mkdir()
+    (session_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "pid": 1234,
+                "pgid": 1234,
+                "started_at": "2026-04-06T00:00:00Z",
+                "termination_requested_at": None,
+                "termination_signal": None,
+                "arbitration_rc": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=True), \
+         mock.patch.object(executor, "_ensure_process_dead", return_value=(True, 128 + 15)) as ensure_dead, \
+         mock.patch("agpair.executors.local_cli.time.sleep", side_effect=AssertionError("cleanup must not sleep")):
+        executor.cleanup(str(session_dir))
+
+    assert session_dir.exists()
+    ensure_dead.assert_called_once()
+    persisted = json.loads((session_dir / "state.json").read_text(encoding="utf-8"))
+    assert persisted["is_process_alive"] is True
+    assert persisted["arbitration_rc"] == 128 + 15
+
+
+def test_poll_skips_git_status_while_process_is_still_running(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "pid": 1234,
+                "pgid": 1234,
+                "started_at": "2026-04-06T00:00:00Z",
+                "repo_path": "/fake/repo",
+                "start_head": "abc123",
+                "current_head": None,
+                "exit_code": None,
+                "arbitration_rc": None,
+                "is_process_alive": True,
+                "has_committed": False,
+                "commit_detected_at": None,
+                "is_worktree_dirty": False,
+                "final_summary": None,
+                "error_summary": None,
+                "updated_at": "2026-04-06T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=True), \
+         mock.patch("agpair.executors.local_cli._git_head", return_value="abc123"), \
+         mock.patch("agpair.executors.local_cli._git_status_porcelain", side_effect=AssertionError("running poll must not call git status")):
+        state = executor.poll("TASK-LOCAL-RUNNING", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is False
+
+
+def test_is_process_alive_batches_child_status_checks():
+    with mock.patch("agpair.executors.local_cli.os.killpg"), \
+         mock.patch("agpair.executors.local_cli.subprocess.check_output", side_effect=[
+             "Z+\n",  # ps -p: leader is zombie
+             "4321\n5678\n6789\n",  # pgrep -g: leader + children
+             "Z+\nS\nZ\n",  # ps -p combined child statuses
+         ]) as check_output:
+        assert _is_process_alive(4321) is True
+
+    assert check_output.call_args_list[2].args[0] == ["ps", "-o", "stat=", "-p", "4321,5678,6789"]

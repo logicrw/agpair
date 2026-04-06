@@ -246,6 +246,78 @@ def test_daemon_cleans_up_local_cli_terminal_receipt_without_extra_cancel(tmp_pa
     ]
 
 
+def test_daemon_sweeps_terminal_local_cli_sessions_until_removed(tmp_path: Path, monkeypatch) -> None:
+    from agpair.daemon.loop import run_once
+
+    paths = seed_task(tmp_path)
+    repo = TaskRepository(paths.db_path)
+    session_dir = tmp_path / "agpair_codex_cli_TASK-1_cleanup"
+    session_dir.mkdir()
+    with connect(paths.db_path) as conn:
+        conn.execute(
+            "UPDATE tasks SET executor_backend=?, antigravity_session_id=?, phase=? WHERE task_id=?",
+            ("codex_cli", str(session_dir), "committed", "TASK-1"),
+        )
+        conn.commit()
+
+    class FakeExecutor:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def cleanup(self, session_id: str) -> None:
+            self.calls.append(session_id)
+            Path(session_id).rmdir()
+
+    fake_executor = FakeExecutor()
+    monkeypatch.setattr("agpair.executors.get_executor", lambda backend_id, **kwargs: fake_executor)
+
+    run_once(paths, now=datetime(2026, 3, 21, 12, 6, tzinfo=UTC), bus=FakePullBus([]))
+
+    task = repo.get_task("TASK-1")
+    assert task is not None
+    assert task.antigravity_session_id is None
+    assert fake_executor.calls == [str(session_dir)]
+
+
+def test_daemon_sweep_uses_session_filtered_query_instead_of_phase_scans(tmp_path: Path, monkeypatch) -> None:
+    from agpair.daemon.loop import sweep_local_cli_sessions
+
+    paths = seed_task(tmp_path)
+    repo = TaskRepository(paths.db_path)
+    session_dir = tmp_path / "agpair_codex_cli_TASK-1_cleanup_filtered"
+    session_dir.mkdir()
+    with connect(paths.db_path) as conn:
+        conn.execute(
+            "UPDATE tasks SET executor_backend=?, antigravity_session_id=?, phase=? WHERE task_id=?",
+            ("codex_cli", str(session_dir), "committed", "TASK-1"),
+        )
+        conn.commit()
+
+    class FakeExecutor:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def cleanup(self, session_id: str) -> None:
+            self.calls.append(session_id)
+            Path(session_id).rmdir()
+
+    fake_executor = FakeExecutor()
+    monkeypatch.setattr("agpair.executors.get_executor", lambda backend_id, **kwargs: fake_executor)
+
+    def fail_list_tasks(*args, **kwargs):
+        raise AssertionError("sweep_local_cli_sessions should not phase-scan via list_tasks")
+
+    monkeypatch.setattr("agpair.storage.tasks.TaskRepository.list_tasks", fail_list_tasks)
+
+    cleaned = sweep_local_cli_sessions(paths)
+
+    task = repo.get_task("TASK-1")
+    assert cleaned == 1
+    assert task is not None
+    assert task.antigravity_session_id is None
+    assert fake_executor.calls == [str(session_dir)]
+
+
 def test_blocked_reason_from_receipt_prefers_payload_message_when_summary_empty() -> None:
     receipt = StructuredTerminalReceipt(
         schema_version="1",

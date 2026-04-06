@@ -247,6 +247,18 @@ class TaskRepository:
             (activity_at, utcnow_iso(), task_id),
         )
 
+    def clear_session_id(self, *, task_id: str) -> None:
+        """Clear a finished task's local executor session mapping."""
+        self._update(
+            task_id,
+            """
+            UPDATE tasks
+            SET antigravity_session_id=NULL, updated_at=?
+            WHERE task_id=?
+            """,
+            (utcnow_iso(), task_id),
+        )
+
     def recommend_retry(self, *, task_id: str, retry_count: int | None = None) -> None:
         now = utcnow_iso()
         if retry_count is None:
@@ -388,6 +400,21 @@ class TaskRepository:
         with connect(self.db_path) as conn:
             rows = conn.execute(sql, params).fetchall()
         return [self._task_from_row(row) for row in rows]
+
+    def list_local_cli_cleanup_candidates(self, *, limit: int = 100) -> list[TaskRecord]:
+        """List terminal tasks that still have a local CLI session to clean up."""
+        terminal_phases = ("evidence_ready", "committed", "blocked", "stuck", "abandoned")
+        placeholders = ",".join("?" for _ in terminal_phases)
+        return self._query_tasks(
+            f"""
+            SELECT * FROM tasks
+            WHERE phase IN ({placeholders})
+              AND antigravity_session_id IS NOT NULL
+            ORDER BY updated_at DESC, task_id DESC
+            LIMIT ?
+            """,
+            (*terminal_phases, limit),
+        )
 
     def _update(self, task_id: str, sql: str, params: tuple[object, ...]) -> None:
         with connect(self.db_path) as conn:

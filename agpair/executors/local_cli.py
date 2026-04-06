@@ -92,19 +92,13 @@ def _is_process_alive(pid: int | None) -> bool:
             child_pids = [p.strip() for p in children_output.splitlines() if p.strip()]
             if len(child_pids) <= 1:
                 return False  # only the zombie leader itself
-            # Check if any child is non-zombie.
-            for cpid in child_pids:
-                try:
-                    cs = subprocess.check_output(
-                        ["ps", "-o", "stat=", "-p", cpid],
-                        text=True,
-                        stderr=subprocess.DEVNULL,
-                    ).strip()
-                    if cs and not cs.startswith("Z"):
-                        return True
-                except Exception:
-                    pass
-            return False
+            child_status_output = subprocess.check_output(
+                ["ps", "-o", "stat=", "-p", ",".join(child_pids)],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            child_statuses = [line.strip() for line in child_status_output.splitlines() if line.strip()]
+            return any(not status.startswith("Z") for status in child_statuses)
         except Exception:
             return False
     return True
@@ -129,6 +123,16 @@ def _strip_ansi(text: str) -> str:
     """移除 ANSI escape codes。"""
     import re
     return re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
+
+
+def _reap_child_process(pid: int | None) -> None:
+    """Best-effort reap for finished wrapper processes to avoid zombie buildup."""
+    if not pid:
+        return
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except (ChildProcessError, OSError):
+        pass
 
 
 def _atomic_write_state(state_path: pathlib.Path, state: dict) -> None:
@@ -292,10 +296,10 @@ exit $RC
                 has_real_commit = bool(diff_stat)
                 state["has_committed"] = has_real_commit
 
-                if not state.get("commit_detected_at"):
+                if has_real_commit and not state.get("commit_detected_at"):
                     state["commit_detected_at"] = _now_iso()
 
-            if not state.get("has_committed"):
+            if not state.get("has_committed") and (exit_code is not None or not process_alive):
                 # 检查工作区是否有未提交修改
                 porcelain = _git_status_porcelain(repo_path)
                 state["is_worktree_dirty"] = bool(porcelain)
@@ -315,7 +319,9 @@ exit $RC
                 return TaskState(is_done=False, receipt=None)
         if is_done:
             state["is_process_alive"] = False
-            
+        if not state.get("is_process_alive"):
+            _reap_child_process(pid)
+
         state["updated_at"] = _now_iso()
         _atomic_write_state(temp_dir / "state.json", state)
 
@@ -461,6 +467,7 @@ exit $RC
             return False, None
 
         if not _is_process_alive(pgid):
+            _reap_child_process(state.get("pid"))
             return False, state.get("arbitration_rc")
 
         termination_requested_at = state.get("termination_requested_at")
@@ -498,13 +505,45 @@ exit $RC
         state["termination_signal"] = "SIGKILL"
         return True, 128 + signal.SIGKILL
 
-    def _clean_git_locks(self, repo_path: str | None) -> None:
-        """手动清理明确确认已失效的 .git 锁文件。默认不自动调用。"""
+    def _clean_git_locks(self, repo_path: str | None, *, started_at: str | None = None) -> None:
+        """仅在确认锁文件无人持有且更可能由本任务遗留时清理 git 锁。"""
         if not repo_path:
             return
         git_dir = pathlib.Path(repo_path) / ".git"
+        if not git_dir.exists():
+            return
+        started_at_epoch: float | None = None
+        if started_at:
+            from datetime import datetime, timezone
+
+            try:
+                started_at_epoch = (
+                    datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                    .astimezone(timezone.utc)
+                    .timestamp()
+                )
+            except ValueError:
+                started_at_epoch = None
         for lock in git_dir.glob("*.lock"):
             try:
+                if started_at_epoch is not None and lock.stat().st_mtime + 1 < started_at_epoch:
+                    continue
+                try:
+                    result = subprocess.run(
+                        ["lsof", str(lock)],
+                        capture_output=True,
+                        text=True,
+                        stderr=subprocess.DEVNULL,
+                        timeout=2,
+                    )
+                except FileNotFoundError:
+                    continue
+                except (subprocess.SubprocessError, OSError):
+                    continue
+                if result.returncode == 0 and result.stdout.strip():
+                    continue
+                if result.returncode not in {0, 1}:
+                    continue
                 lock.unlink()
                 logger.info("Removed stale git lock: %s", lock)
             except OSError:
@@ -525,7 +564,7 @@ exit $RC
         _atomic_write_state(temp_dir / "state.json", state)
 
     def cleanup(self, session_id: str) -> None:
-        """终态清理：必要时同步等待并强制结束进程，然后删除临时目录。"""
+        """终态清理：单步推进终止流程；仅在进程确认退出后删除临时目录。"""
         if not session_id:
             return
         temp_dir = pathlib.Path(session_id)
@@ -537,23 +576,16 @@ exit $RC
         state = _read_state(temp_dir)
         pgid = state.get("pgid") or state.get("pid")
         if _is_process_alive(pgid):
-            deadline = time.monotonic() + 6.0
-            while True:
-                still_alive, arbitration_rc = self._ensure_process_dead(state, temp_dir)
-                if arbitration_rc is not None:
-                    state["arbitration_rc"] = arbitration_rc
-                state["is_process_alive"] = still_alive
-                state["updated_at"] = _now_iso()
-                _atomic_write_state(temp_dir / "state.json", state)
-                if not still_alive:
-                    break
-                if time.monotonic() >= deadline:
-                    logger.warning(
-                        "cleanup: process group %d did not exit within 6s deadline, "
-                        "force-removing temp dir %s anyway",
-                        pgid, temp_dir,
-                    )
-                    break
-                time.sleep(0.1)
+            still_alive, arbitration_rc = self._ensure_process_dead(state, temp_dir)
+            if arbitration_rc is not None:
+                state["arbitration_rc"] = arbitration_rc
+            state["is_process_alive"] = still_alive
+            state["updated_at"] = _now_iso()
+            _atomic_write_state(temp_dir / "state.json", state)
+            if still_alive:
+                return
 
+        _reap_child_process(state.get("pid"))
+        if state.get("termination_signal") == "SIGKILL":
+            self._clean_git_locks(state.get("repo_path"), started_at=state.get("started_at"))
         shutil.rmtree(temp_dir, ignore_errors=True)
