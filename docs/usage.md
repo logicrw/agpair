@@ -142,6 +142,13 @@ Current backend policy summary:
 - `codex`: CLI executor
 - `gemini`: CLI executor
 
+Local CLI approval modes can be adjusted with environment variables:
+
+- `AGPAIR_CODEX_APPROVAL_MODE=default|full_auto|bypass_all`
+  Default: `bypass_all`
+- `AGPAIR_GEMINI_APPROVAL_MODE=default|auto_edit|yolo`
+  Default: `yolo`
+
 Note: all executors use fresh sessions for retries.
 
 By default, `task start` blocks until the task reaches a terminal phase.

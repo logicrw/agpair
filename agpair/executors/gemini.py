@@ -1,7 +1,17 @@
 from __future__ import annotations
+import os
 import pathlib
 from agpair.executors.local_cli import LocalCLIExecutor
 from agpair.models import ContinuationCapability
+
+
+def _approval_args() -> list[str]:
+    mode = os.environ.get("AGPAIR_GEMINI_APPROVAL_MODE", "yolo").strip().lower()
+    if mode == "default":
+        return []
+    if mode == "auto_edit":
+        return ["--approval-mode", "auto_edit"]
+    return ["-y"]
 
 class GeminiExecutor(LocalCLIExecutor):
     def __init__(self, gemini_bin: str = "gemini") -> None:
@@ -14,7 +24,7 @@ class GeminiExecutor(LocalCLIExecutor):
     def _build_gemini_cmd(self, body: str, repo_path: str, temp_dir: pathlib.Path) -> list[str]:
         return [
             self.bin_path,
-            "-y",
+            *_approval_args(),
             "--output-format",
             "json",
             "-p",

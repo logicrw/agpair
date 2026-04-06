@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 
 from agpair.cli.app import app
 from agpair.config import AppPaths
+from agpair.executors.base import DispatchResult
 from agpair.storage.db import connect, ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.receipts import ReceiptRepository
@@ -944,6 +945,106 @@ def test_task_start_explicit_executor_gemini(tmp_path: Path, monkeypatch) -> Non
     assert payload["active_executor_backend"] == "gemini_cli"
 
 
+def test_task_start_rejects_review_then_commit_for_local_executor(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+
+    import agpair.executors.codex
+
+    monkeypatch.setattr(
+        agpair.executors.codex.CodexExecutor,
+        "dispatch",
+        lambda *args, **kwargs: DispatchResult(session_id="should-not-dispatch"),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            "/tmp/repo",
+            "--body",
+            "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--task-id",
+            "TASK-RTC-LOCAL",
+            "--executor",
+            "codex",
+            "--completion-policy",
+            "review_then_commit",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "review_then_commit" in result.stderr
+    assert "codex" in result.stderr
+    assert make_task_repo(tmp_path).get_task("TASK-RTC-LOCAL") is None
+
+
+def test_task_retry_local_executor_redispatches_locally(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+
+    import agpair.executors.codex
+
+    from unittest.mock import MagicMock
+
+    dispatch_mock = MagicMock(
+        side_effect=[
+            DispatchResult(session_id="mock_session_attempt_1"),
+            DispatchResult(session_id="mock_session_attempt_2"),
+        ]
+    )
+    monkeypatch.setattr(agpair.executors.codex.CodexExecutor, "dispatch", dispatch_mock)
+
+    def fail_send_task(*args, **kwargs):
+        raise AssertionError("local CLI retry must not send TASK over agent-bus")
+
+    monkeypatch.setattr("agpair.cli.task.AgentBusClient.send_task", fail_send_task)
+
+    runner = CliRunner()
+    start = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            "/tmp/repo",
+            "--body",
+            "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--task-id",
+            "TASK-LOCAL-RETRY",
+            "--executor",
+            "codex",
+            "--no-wait",
+        ],
+    )
+    assert start.exit_code == 0
+
+    retry = runner.invoke(
+        app,
+        [
+            "task",
+            "retry",
+            "TASK-LOCAL-RETRY",
+            "--force",
+            "--no-wait",
+        ],
+    )
+
+    assert retry.exit_code == 0
+    task = make_task_repo(tmp_path).get_task("TASK-LOCAL-RETRY")
+    assert task is not None
+    assert task.phase == "acked"
+    assert task.attempt_no == 2
+    assert task.antigravity_session_id == "mock_session_attempt_2"
+    assert dispatch_mock.call_count == 2
+
+
 def test_legacy_rows_without_executor_field_remain_readable(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     paths = make_paths(tmp_path)
@@ -1225,4 +1326,3 @@ def test_task_repository_spotlight_testing_roundtrip(tmp_path: Path) -> None:
     task3 = repo.get_task("TASK-SPOT-RT-3")
     assert task3 is not None
     assert task3.spotlight_testing is False
-

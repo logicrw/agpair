@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from unittest import mock
 
 from agpair.executors.local_cli import LocalCLIExecutor, _is_process_alive, _get_process_start_time
@@ -19,6 +20,28 @@ class DummyLocalCLIExecutor(LocalCLIExecutor):
     @property
     def continuation_capability(self) -> ContinuationCapability:
         return ContinuationCapability.UNSUPPORTED
+
+
+def test_dispatch_injects_task_id_commit_requirement(tmp_path):
+    executor = DummyLocalCLIExecutor()
+
+    with mock.patch("agpair.executors.local_cli._git_head", return_value="fake-head"), \
+         mock.patch("agpair.executors.local_cli.subprocess.Popen") as mock_popen:
+        process = mock.Mock()
+        process.pid = 12345
+        mock_popen.return_value = process
+
+        dispatch = executor.dispatch(
+            task_id="TASK-HINT-1",
+            body="Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+            repo_path=str(tmp_path),
+        )
+
+    wrapper = Path(dispatch.session_id) / "wrapper.sh"
+    content = wrapper.read_text(encoding="utf-8")
+    assert "TASK-HINT-1" in content
+    assert "commit message" in content
+    assert "must include" in content
 
 
 def test_poll_persists_final_summary_to_state_json(tmp_path):
@@ -105,6 +128,86 @@ def test_poll_blocks_success_exit_without_commit_when_commit_evidence_available(
     persisted = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
     assert persisted["final_summary"] is None
     assert persisted["error_summary"] == "Process exited successfully without committing"
+
+
+def test_poll_blocks_success_exit_without_commit_in_repo_without_baseline_head(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "pid": 1234,
+                "pgid": 1234,
+                "started_at": "2026-04-06T00:00:00Z",
+                "repo_path": "/fake/repo",
+                "start_head": None,
+                "current_head": None,
+                "exit_code": None,
+                "arbitration_rc": None,
+                "is_process_alive": False,
+                "has_committed": False,
+                "commit_detected_at": None,
+                "is_worktree_dirty": False,
+                "final_summary": None,
+                "error_summary": None,
+                "updated_at": "2026-04-06T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "rc.txt").write_text("0", encoding="utf-8")
+    (tmp_path / "last_msg.txt").write_text("No changes needed.", encoding="utf-8")
+
+    with mock.patch("agpair.executors.local_cli._git_head", return_value=None), \
+         mock.patch("agpair.executors.local_cli._git_status_porcelain", return_value=""):
+        state = executor.poll("TASK-LOCAL-EMPTY-REPO", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is True
+    assert state.receipt["status"] == "BLOCKED"
+    assert state.receipt["payload"]["blocker_type"] == "missing_commit"
+
+
+def test_poll_accepts_first_commit_in_repo_without_baseline_head_when_task_id_matches(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "pid": 1234,
+                "pgid": 1234,
+                "started_at": "2026-04-06T00:00:00Z",
+                "repo_path": "/fake/repo",
+                "start_head": None,
+                "current_head": None,
+                "exit_code": None,
+                "arbitration_rc": None,
+                "is_process_alive": False,
+                "has_committed": False,
+                "commit_detected_at": None,
+                "is_worktree_dirty": False,
+                "final_summary": None,
+                "error_summary": None,
+                "updated_at": "2026-04-06T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "rc.txt").write_text("0", encoding="utf-8")
+    (tmp_path / "last_msg.txt").write_text("Committed first change.", encoding="utf-8")
+
+    with mock.patch("agpair.executors.local_cli._git_head", return_value="def456"), \
+         mock.patch("agpair.executors.local_cli._git_log_grep_task_id", return_value=True):
+        state = executor.poll("TASK-FIRST-COMMIT", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is True
+    assert state.receipt["status"] == "COMMITTED"
+    assert state.receipt["summary"] == "Committed first change."
+
+    persisted = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    assert persisted["has_committed"] is True
+    assert persisted["current_head"] == "def456"
 
 
 def test_poll_marks_post_commit_hang_arbitration_in_state_json(tmp_path):

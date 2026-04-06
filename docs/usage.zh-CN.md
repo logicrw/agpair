@@ -163,6 +163,13 @@ agpair task start \
 - `codex`：CLI executor
 - `gemini`：CLI executor
 
+本地 CLI 的 approval 模式可以通过环境变量调整：
+
+- `AGPAIR_CODEX_APPROVAL_MODE=default|full_auto|bypass_all`
+  默认：`bypass_all`
+- `AGPAIR_GEMINI_APPROVAL_MODE=default|auto_edit|yolo`
+  默认：`yolo`
+
 默认情况下，`task start` **会阻塞**直到任务进入终态。
 要立即返回：
 

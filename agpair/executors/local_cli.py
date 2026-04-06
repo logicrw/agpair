@@ -41,7 +41,7 @@ def _git_diff_stat(repo_path: str, start: str, end: str) -> str:
         return ""
 
 
-def _git_log_grep_task_id(repo_path: str, start: str, end: str, task_id: str) -> bool:
+def _git_log_grep_task_id(repo_path: str, start: str | None, end: str, task_id: str) -> bool:
     """检查 start..end 之间是否存在 commit message 包含 task_id 的提交。
 
     用于多任务同 repo 场景的 commit 归属验证，防止 Task B 的提交被 Task A 误认。
@@ -52,10 +52,12 @@ def _git_log_grep_task_id(repo_path: str, start: str, end: str, task_id: str) ->
     import re as _re
     try:
         # %x01 as record separator — safe because it never appears in commit messages
-        result = subprocess.check_output(
-            ["git", "log", "--format=%H%x00%B%x01", f"--grep={task_id}", f"{start}..{end}"],
-            cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
-        ).strip()
+        cmd = ["git", "log", "--format=%H%x00%B%x01", f"--grep={task_id}", "-1"]
+        if start:
+            cmd.append(f"{start}..{end}")
+        else:
+            cmd.append(end)
+        result = subprocess.check_output(cmd, cwd=repo_path, text=True, stderr=subprocess.DEVNULL).strip()
         if not result:
             return False
         # 严格验证：commit message 中必须包含完整 task_id（word boundary）
@@ -240,6 +242,14 @@ def _read_state(temp_dir: pathlib.Path) -> dict:
     return state
 
 
+def _body_with_task_contract(task_id: str, body: str) -> str:
+    contract = (
+        f"Task ID: {task_id}\n"
+        f"If you create a git commit for this task, the commit message must include `{task_id}` verbatim.\n\n"
+    )
+    return contract + body
+
+
 class LocalCLIExecutor(ExecutorAdapter):
     """Base class for local CLI executors (Codex, Gemini, etc.)."""
 
@@ -266,7 +276,7 @@ class LocalCLIExecutor(ExecutorAdapter):
         temp_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"agpair_{self._backend_id}_{task_id}_"))
 
         start_head = _git_head(repo_path)
-        cli_cmd = self._build_cmd(body, repo_path, temp_dir)
+        cli_cmd = self._build_cmd(_body_with_task_contract(task_id, body), repo_path, temp_dir)
 
         wrapper_script = temp_dir / "wrapper.sh"
         cmd_str = " ".join(shlex.quote(str(x)) for x in cli_cmd)
@@ -359,15 +369,14 @@ exit $RC
         repo_path = state.get("repo_path")
         start_head = state.get("start_head")
 
-        if repo_path and start_head:
+        if repo_path:
             current_head = _git_head(repo_path)
             state["current_head"] = current_head
-            head_changed = current_head and current_head != start_head
+            head_changed = bool(current_head) if start_head is None else bool(current_head and current_head != start_head)
 
             if head_changed and not state.get("has_committed"):
                 # 检查是否有实质性提交
-                diff_stat = _git_diff_stat(repo_path, start_head, current_head)
-                has_real_commit = bool(diff_stat)
+                has_real_commit = True if start_head is None else bool(_git_diff_stat(repo_path, start_head, current_head))
                 # 多任务同 repo 保护：验证 commit 归属
                 if has_real_commit and task_id:
                     owns_commit = _git_log_grep_task_id(repo_path, start_head, current_head, task_id)
@@ -494,7 +503,7 @@ exit $RC
                     state["final_summary"] = summary
                     state["error_summary"] = None
                     return True, self._make_receipt(task_id, attempt_no, "COMMITTED", summary, {"exit_code": 0, "events_count": events_count})
-                if state.get("repo_path") and state.get("start_head"):
+                if state.get("repo_path"):
                     blocked_summary = "Process exited successfully without committing"
                     state["final_summary"] = None
                     state["error_summary"] = blocked_summary

@@ -12,6 +12,15 @@ from typer.testing import CliRunner
 
 VALID_BRIEF = "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test"
 
+def init_git_repo(repo_path: pathlib.Path) -> None:
+    subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo_path, check=True, capture_output=True)
+    (repo_path / "init.txt").write_text("init", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo_path, check=True, capture_output=True)
+
+
 def write_fake_codex_bin(tmp_path: pathlib.Path) -> pathlib.Path:
     bin_path = tmp_path / "fake-codex"
     # A script that ignores arguments, simulates typing some json,
@@ -20,6 +29,7 @@ def write_fake_codex_bin(tmp_path: pathlib.Path) -> pathlib.Path:
     # so we need a minimal sh wrapper that writes something to the requested file.
     script = """#!/bin/bash
     OUTPUT_FILE=""
+    PROMPT=""
     while [[ $# -gt 0 ]]; do
       case $1 in
         -o)
@@ -27,6 +37,7 @@ def write_fake_codex_bin(tmp_path: pathlib.Path) -> pathlib.Path:
           shift 2
           ;;
         *)
+          PROMPT="${PROMPT}\n$1"
           shift
           ;;
       esac
@@ -34,6 +45,13 @@ def write_fake_codex_bin(tmp_path: pathlib.Path) -> pathlib.Path:
 
     echo '{"event": "start"}'
     echo '{"event": "end"}'
+
+    TASK_ID=$(printf '%b\n' "$PROMPT" | grep -o 'TASK-[A-Za-z0-9-]*' | head -n1)
+    if [ -n "$TASK_ID" ]; then
+        echo "done" > fake_codex_output.txt
+        git add fake_codex_output.txt
+        git commit -m "feat: fake codex success $TASK_ID" >/dev/null 2>&1
+    fi
 
     if [ -n "$OUTPUT_FILE" ]; then
         echo "Fake Codex Success!" > "$OUTPUT_FILE"
@@ -51,6 +69,7 @@ def test_codex_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
     from agpair.config import AppPaths
     paths = AppPaths.default()
     ensure_database(paths.db_path)
+    init_git_repo(tmp_path)
     
     # We don't have a real codex CLI, we'll patch CodexExecutor.codex_bin
     fake_codex = write_fake_codex_bin(tmp_path)
@@ -222,6 +241,7 @@ def test_codex_evidence_ready_not_repolled(tmp_path: pathlib.Path, monkeypatch) 
     from agpair.config import AppPaths
     paths = AppPaths.default()
     ensure_database(paths.db_path)
+    init_git_repo(tmp_path)
 
     fake_codex = write_fake_codex_bin(tmp_path)
     import agpair.executors.codex
@@ -274,6 +294,7 @@ def test_codex_receipt_carries_real_attempt_no(tmp_path: pathlib.Path, monkeypat
     from agpair.config import AppPaths
     paths = AppPaths.default()
     ensure_database(paths.db_path)
+    init_git_repo(tmp_path)
 
     fake_codex = write_fake_codex_bin(tmp_path)
     import agpair.executors.codex

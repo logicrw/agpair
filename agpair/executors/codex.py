@@ -1,7 +1,19 @@
 from __future__ import annotations
+import os
 import pathlib
 from agpair.executors.local_cli import LocalCLIExecutor
 from agpair.models import ContinuationCapability
+
+
+def _approval_args() -> list[str]:
+    mode = os.environ.get("AGPAIR_CODEX_APPROVAL_MODE", "bypass_all").strip().lower()
+    if mode == "default":
+        return []
+    if mode == "full_auto":
+        return ["--full-auto"]
+    return ["--dangerously-bypass-approvals-and-sandbox"]
+
+
 class CodexExecutor(LocalCLIExecutor):
     def __init__(self, codex_bin: str = "codex") -> None:
         super().__init__(
@@ -14,6 +26,7 @@ class CodexExecutor(LocalCLIExecutor):
         return [
             self.bin_path,
             "exec",
+            *_approval_args(),
             "--ephemeral",
             "--json",
             "--skip-git-repo-check",

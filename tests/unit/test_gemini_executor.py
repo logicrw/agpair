@@ -43,6 +43,37 @@ def test_gemini_executor_dispatch_command_construction(tmp_path):
         assert "do some work" in wrapper_content
 
 
+def test_gemini_executor_dispatch_uses_yolo_by_default(monkeypatch):
+    monkeypatch.delenv("AGPAIR_GEMINI_APPROVAL_MODE", raising=False)
+    executor = GeminiExecutor()
+
+    cmd = executor._build_gemini_cmd("do some work", "/fake/repo", Path("/tmp"))
+
+    assert "-y" in cmd
+    assert "--approval-mode" not in cmd
+
+
+def test_gemini_executor_dispatch_honors_default_mode(monkeypatch):
+    monkeypatch.setenv("AGPAIR_GEMINI_APPROVAL_MODE", "default")
+    executor = GeminiExecutor()
+
+    cmd = executor._build_gemini_cmd("do some work", "/fake/repo", Path("/tmp"))
+
+    assert "-y" not in cmd
+    assert "--approval-mode" not in cmd
+
+
+def test_gemini_executor_dispatch_honors_auto_edit_mode(monkeypatch):
+    monkeypatch.setenv("AGPAIR_GEMINI_APPROVAL_MODE", "auto_edit")
+    executor = GeminiExecutor()
+
+    cmd = executor._build_gemini_cmd("do some work", "/fake/repo", Path("/tmp"))
+
+    assert "--approval-mode" in cmd
+    assert "auto_edit" in cmd
+    assert "-y" not in cmd
+
+
 def test_gemini_executor_poll(tmp_path):
     executor = GeminiExecutor()
     rc_file = tmp_path / "rc.txt"

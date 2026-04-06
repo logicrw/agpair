@@ -71,6 +71,36 @@ def test_codex_executor_dispatch():
         assert kwargs["text"] is True
 
 
+def test_codex_executor_dispatch_uses_bypass_all_by_default(monkeypatch):
+    monkeypatch.delenv("AGPAIR_CODEX_APPROVAL_MODE", raising=False)
+    executor = CodexExecutor(codex_bin="fake-codex")
+
+    cmd = executor._build_codex_cmd("Do something", "/fake/repo", pathlib.Path("/tmp"))
+
+    assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+    assert "--full-auto" not in cmd
+
+
+def test_codex_executor_dispatch_honors_full_auto_mode(monkeypatch):
+    monkeypatch.setenv("AGPAIR_CODEX_APPROVAL_MODE", "full_auto")
+    executor = CodexExecutor(codex_bin="fake-codex")
+
+    cmd = executor._build_codex_cmd("Do something", "/fake/repo", pathlib.Path("/tmp"))
+
+    assert "--full-auto" in cmd
+    assert "--dangerously-bypass-approvals-and-sandbox" not in cmd
+
+
+def test_codex_executor_dispatch_honors_default_mode(monkeypatch):
+    monkeypatch.setenv("AGPAIR_CODEX_APPROVAL_MODE", "default")
+    executor = CodexExecutor(codex_bin="fake-codex")
+
+    cmd = executor._build_codex_cmd("Do something", "/fake/repo", pathlib.Path("/tmp"))
+
+    assert "--full-auto" not in cmd
+    assert "--dangerously-bypass-approvals-and-sandbox" not in cmd
+
+
 def test_codex_executor_poll(tmp_path: pathlib.Path):
     stdout_file = tmp_path / "stdout.jsonl"
     rc_file = tmp_path / "rc.txt"
@@ -153,4 +183,3 @@ def test_codex_executor_dispatch_closes_fds_on_popen_error():
 
     mock_stdout_fh.close.assert_called_once()
     mock_stderr_fh.close.assert_called_once()
-

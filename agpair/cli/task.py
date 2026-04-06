@@ -404,7 +404,7 @@ def start_task(
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
 ) -> None:
-    from agpair.executors import AntigravityExecutor, CodexExecutor, GeminiExecutor
+    from agpair.executors import AntigravityExecutor, CodexExecutor, GeminiExecutor, is_local_cli_backend
     from agpair.targets import resolve_repo_path
 
     _validate_task_body(body)
@@ -428,6 +428,14 @@ def start_task(
         backend_to_store = None
     else:
         raise typer.BadParameter("Invalid --executor. Allowed values are 'antigravity', 'codex', or 'gemini'.")
+
+    if completion_policy == "review_then_commit" and is_local_cli_backend(backend_to_store):
+        typer.echo(
+            f"Refused: completion_policy={completion_policy} is not supported for local executor {executor}. "
+            "Use antigravity or direct_commit.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     tasks = TaskRepository(paths.db_path)
     journal = JournalRepository(paths.db_path)
@@ -1002,8 +1010,9 @@ def retry_task(
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
 ) -> None:
+    from agpair.executors import get_executor, is_local_cli_backend
+
     paths = _paths()
-    bus = AgentBusClient(paths.agent_bus_bin)
     tasks = TaskRepository(paths.db_path)
     journal = JournalRepository(paths.db_path)
     try:
@@ -1014,15 +1023,44 @@ def retry_task(
     _guard_live_task(task, force=force, command="retry")
     next_attempt = task.attempt_no + 1
     retry_body = body or f"Fresh retry requested for {task.task_id} attempt {next_attempt}"
-    try:
-        message_id = bus.send_task(task_id=task.task_id, body=retry_body, repo_path=task.repo_path)
-    except (subprocess.SubprocessError, FileNotFoundError, BusSendError) as exc:
-        reason = f"dispatch failed: {exc}"
-        journal.append(task.task_id, "cli", "retry_failed", reason)
-        typer.echo(reason, err=True)
-        raise typer.Exit(code=1)
-    updated = tasks.apply_retry_dispatch(task_id=task.task_id)
-    journal.append(updated.task_id, "cli", "retried", f"id={message_id} attempt={updated.attempt_no}")
+    if is_local_cli_backend(task.executor_backend):
+        exec_instance = get_executor(task.executor_backend)
+        if exec_instance is None:
+            reason = f"dispatch failed: executor backend unavailable for retry ({task.executor_backend})"
+            journal.append(task.task_id, "cli", "retry_failed", reason)
+            typer.echo(reason, err=True)
+            raise typer.Exit(code=1)
+        try:
+            dispatch_result = exec_instance.dispatch(task_id=task.task_id, body=retry_body, repo_path=task.repo_path)
+        except (subprocess.SubprocessError, FileNotFoundError, BusSendError) as exc:
+            reason = f"dispatch failed: {exc}"
+            journal.append(task.task_id, "cli", "retry_failed", reason)
+            typer.echo(reason, err=True)
+            raise typer.Exit(code=1)
+        if not dispatch_result.session_id:
+            reason = f"dispatch failed: local executor {task.executor_backend} did not return a session_id"
+            journal.append(task.task_id, "cli", "retry_failed", reason)
+            typer.echo(reason, err=True)
+            raise typer.Exit(code=1)
+        updated = tasks.apply_retry_dispatch(task_id=task.task_id)
+        tasks.mark_acked(task_id=updated.task_id, session_id=dispatch_result.session_id)
+        journal.append(
+            updated.task_id,
+            "cli",
+            "retried",
+            f"local session={dispatch_result.session_id} attempt={updated.attempt_no}",
+        )
+    else:
+        bus = AgentBusClient(paths.agent_bus_bin)
+        try:
+            message_id = bus.send_task(task_id=task.task_id, body=retry_body, repo_path=task.repo_path)
+        except (subprocess.SubprocessError, FileNotFoundError, BusSendError) as exc:
+            reason = f"dispatch failed: {exc}"
+            journal.append(task.task_id, "cli", "retry_failed", reason)
+            typer.echo(reason, err=True)
+            raise typer.Exit(code=1)
+        updated = tasks.apply_retry_dispatch(task_id=task.task_id)
+        journal.append(updated.task_id, "cli", "retried", f"id={message_id} attempt={updated.attempt_no}")
     typer.echo(task.task_id)
 
     maybe_auto_wait(
