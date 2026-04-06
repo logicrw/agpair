@@ -45,17 +45,24 @@ def _git_log_grep_task_id(repo_path: str, start: str, end: str, task_id: str) ->
     """检查 start..end 之间是否存在 commit message 包含 task_id 的提交。
 
     用于多任务同 repo 场景的 commit 归属验证，防止 Task B 的提交被 Task A 误认。
+
+    Uses record separator (\x01) to delimit commits instead of blank lines,
+    because commit bodies themselves can contain blank lines.
     """
     import re as _re
     try:
+        # %x01 as record separator — safe because it never appears in commit messages
         result = subprocess.check_output(
-            ["git", "log", "--format=%H%x00%B", f"--grep={task_id}", f"{start}..{end}"],
+            ["git", "log", "--format=%H%x00%B%x01", f"--grep={task_id}", f"{start}..{end}"],
             cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
         ).strip()
         if not result:
             return False
         # 严格验证：commit message 中必须包含完整 task_id（word boundary）
-        for entry in result.split("\n\n"):
+        for entry in result.split("\x01"):
+            entry = entry.strip()
+            if not entry:
+                continue
             parts = entry.split("\x00", 1)
             if len(parts) == 2 and _re.search(rf"\b{_re.escape(task_id)}\b", parts[1]):
                 return True
@@ -110,8 +117,11 @@ def _is_process_alive(pid: int | None, *, expected_start_time: float | None = No
     # Fast path: check if anything in the process group can receive signals.
     try:
         os.killpg(pid, 0)
-    except (ProcessLookupError, PermissionError):
+    except ProcessLookupError:
         return False
+    except PermissionError:
+        # Process group exists but we lack permission — conservatively treat as alive.
+        return True
     # Guard against PID recycling: verify the process started at the expected time.
     if expected_start_time is not None:
         actual_start = _get_process_start_time(pid)
@@ -560,6 +570,11 @@ exit $RC
             return True, 128 + signal.SIGTERM
 
         if termination_signal == "SIGKILL":
+            # Give kernel 2s to reap after SIGKILL; if still visible, it's a zombie — force-treat as dead.
+            if _seconds_since(termination_requested_at) > 2:
+                _reap_child_process(state.get("pid"))
+                logger.warning("SIGKILL sent but pgid %d still visible after 2s — treating as dead (likely zombie).", pgid)
+                return False, 128 + signal.SIGKILL
             return True, 128 + signal.SIGKILL
         if _seconds_since(termination_requested_at) < 5:
             return True, 128 + signal.SIGTERM

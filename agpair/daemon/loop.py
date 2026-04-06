@@ -120,7 +120,7 @@ def scan_workspace_activity(paths: AppPaths, *, current: datetime) -> None:
                 pass
 
 
-def detect_committed_task_in_repo(repo_path: str, task_id: str) -> str | None:
+def detect_committed_task_in_repo(repo_path: str, task_id: str, *, since_iso: str | None = None) -> str | None:
     """Check if a git commit containing *task_id* exists in *repo_path*.
 
     Uses ``git log --all --grep=<task_id> --format=%H%x00%B -1`` to find a commit
@@ -128,15 +128,22 @@ def detect_committed_task_in_repo(repo_path: str, task_id: str) -> str | None:
     to prevent false positives from shortened tokens. This is strong repo-side evidence
     that the delegated work already landed as a commit.
 
+    When *since_iso* is provided, only commits after that timestamp are considered.
+    This prevents historical commits from a prior attempt or previous task with the
+    same ID from triggering a false auto-close.
+
     Returns the full commit SHA if found, or ``None`` if not found or if the
     directory is not a valid git repository.
     """
     import subprocess as _subprocess
     import re
 
+    cmd = ["git", "log", "--all", f"--grep={task_id}", "--format=%H%x00%B", "-1"]
+    if since_iso:
+        cmd.append(f"--after={since_iso}")
     try:
         result = _subprocess.run(
-            ["git", "log", "--all", f"--grep={task_id}", "--format=%H%x00%B", "-1"],
+            cmd,
             capture_output=True,
             text=True,
             cwd=repo_path,
@@ -194,7 +201,7 @@ def auto_close_evidence_ready_tasks(
         if task.phase == "acked" and task.completion_policy != "direct_commit":
             continue
 
-        commit_sha = detect_committed_task_in_repo(task.repo_path, task.task_id)
+        commit_sha = detect_committed_task_in_repo(task.repo_path, task.task_id, since_iso=task.created_at)
         if commit_sha is None:
             continue
 
@@ -246,7 +253,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
             state = exec_instance.poll(task.task_id, task.antigravity_session_id, attempt_no=task.attempt_no)
             if state is not None:
                 if state.is_done:
-                    msg_id = f"{task.executor_backend}-{task.task_id}-done"
+                    msg_id = f"{task.executor_backend}-{task.task_id}-{task.attempt_no}-{task.antigravity_session_id}-done"
                     receipt = state.receipt or {}
                     msg = {
                         "id": msg_id,

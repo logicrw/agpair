@@ -441,3 +441,55 @@ def test_poll_uses_cached_receipt_on_second_poll_during_process_death(tmp_path):
     persisted = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
     assert "cached_receipt" not in persisted
     assert "cached_is_done" not in persisted
+
+
+def test_git_log_grep_task_id_handles_multiline_commit_body():
+    """Commit messages with blank lines (conventional commits) must not break parsing."""
+    from agpair.executors.local_cli import _git_log_grep_task_id
+
+    # Simulate git log output with multi-paragraph body containing blank lines
+    multi_para_output = (
+        "abc123\x00feat: implement feature [TASK-XYZ]\n\n"
+        "This is the body paragraph.\n\n"
+        "Signed-off-by: someone\x01"
+    )
+    with mock.patch("agpair.executors.local_cli.subprocess.check_output", return_value=multi_para_output):
+        assert _git_log_grep_task_id("/repo", "start", "end", "TASK-XYZ") is True
+
+
+def test_git_log_grep_task_id_rejects_wrong_task_in_multiline_body():
+    """Even with multi-paragraph body, wrong task_id should not match."""
+    from agpair.executors.local_cli import _git_log_grep_task_id
+
+    multi_para_output = (
+        "abc123\x00feat: implement feature [TASK-OTHER]\n\n"
+        "This body mentions nothing else.\x01"
+    )
+    with mock.patch("agpair.executors.local_cli.subprocess.check_output", return_value=multi_para_output):
+        assert _git_log_grep_task_id("/repo", "start", "end", "TASK-XYZ") is False
+
+
+def test_ensure_process_dead_forces_dead_after_sigkill_timeout(tmp_path):
+    """After SIGKILL + 2s, treat zombie processes as dead to prevent infinite loop."""
+    executor = DummyLocalCLIExecutor()
+    state = {
+        "pid": 1234,
+        "pgid": 1234,
+        "termination_signal": "SIGKILL",
+        "termination_requested_at": "2026-04-06T00:00:00Z",
+    }
+
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=True), \
+         mock.patch("agpair.executors.local_cli._seconds_since", return_value=3), \
+         mock.patch("agpair.executors.local_cli._reap_child_process") as reap:
+        alive_after, arbitration_rc = executor._ensure_process_dead(state, tmp_path)
+
+    assert alive_after is False  # Force-treated as dead
+    assert arbitration_rc == 128 + 9  # 128 + SIGKILL
+    reap.assert_called_once_with(1234)
+
+
+def test_is_process_alive_treats_permission_error_as_alive():
+    """PermissionError means process exists but we can't signal — should be treated as alive."""
+    with mock.patch("agpair.executors.local_cli.os.killpg", side_effect=PermissionError("Operation not permitted")):
+        assert _is_process_alive(4321) is True

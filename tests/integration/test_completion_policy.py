@@ -107,7 +107,7 @@ def test_repo_evidence_fallback(tmp_path: Path, monkeypatch) -> None:
     repo.mark_evidence_ready(task_id="TASK-1", last_receipt_id="1")
     
     import agpair.daemon.loop
-    monkeypatch.setattr(agpair.daemon.loop, "detect_committed_task_in_repo", lambda repo_path, task_id: "abcdef123456")
+    monkeypatch.setattr(agpair.daemon.loop, "detect_committed_task_in_repo", lambda repo_path, task_id, **kw: "abcdef123456")
     
     closed_count = auto_close_evidence_ready_tasks(paths)
     assert closed_count == 1
@@ -125,7 +125,7 @@ def test_repo_evidence_fallback_direct_commit_acked(tmp_path: Path, monkeypatch)
     repo.mark_acked(task_id="TASK-1", session_id="session-123")
     
     import agpair.daemon.loop
-    monkeypatch.setattr(agpair.daemon.loop, "detect_committed_task_in_repo", lambda repo_path, task_id: "abcdef123456")
+    monkeypatch.setattr(agpair.daemon.loop, "detect_committed_task_in_repo", lambda repo_path, task_id, **kw: "abcdef123456")
     
     closed_count = auto_close_evidence_ready_tasks(paths)
     assert closed_count == 1
@@ -170,7 +170,7 @@ def test_repo_evidence_fallback_skips_review_then_commit_acked(tmp_path: Path, m
     repo.mark_acked(task_id="TASK-1", session_id="session-123")
     
     import agpair.daemon.loop
-    monkeypatch.setattr(agpair.daemon.loop, "detect_committed_task_in_repo", lambda repo_path, task_id: "abcdef123456")
+    monkeypatch.setattr(agpair.daemon.loop, "detect_committed_task_in_repo", lambda repo_path, task_id, **kw: "abcdef123456")
     
     closed_count = auto_close_evidence_ready_tasks(paths)
     # Shouldn't close because it's review_then_commit and in acked, must be evidence_ready
