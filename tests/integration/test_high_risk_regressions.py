@@ -256,3 +256,171 @@ def test_cleanup_completes_after_sigkill_zombie(tmp_path: Path) -> None:
     assert not session_dir.exists(), \
         "Temp dir must be removed after SIGKILL+timeout zombie — cleanup must not infinite-loop"
     reap.assert_called()
+
+
+# --------------------------------------------------------------------------
+# Test 5: Retry + stale commit — attempt 1's commit must NOT close attempt 2
+# --------------------------------------------------------------------------
+def test_retry_stale_commit_does_not_close_new_attempt(tmp_path: Path) -> None:
+    """A commit from attempt 1 must NOT auto-close attempt 2.
+
+    Reproduces: auto_close used task.created_at as time boundary, but created_at
+    doesn't change on retry. Attempt 1's commit (after created_at) falsely closes
+    attempt 2 immediately upon ack.
+    """
+    from agpair.daemon.loop import auto_close_evidence_ready_tasks
+
+    # Set up a git repo and create the commit from "attempt 1"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True, capture_output=True)
+    (repo / "init.txt").write_text("init")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True)
+
+    # Create task and simulate attempt 1 committed
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    tasks_repo = TaskRepository(paths.db_path)
+    tasks_repo.create_task(
+        task_id="TASK-RETRY-STALE", repo_path=str(repo), completion_policy="direct_commit"
+    )
+    tasks_repo.mark_acked(task_id="TASK-RETRY-STALE", session_id="session-1")
+
+    # Attempt 1 makes a commit
+    import time
+    time.sleep(0.1)
+    (repo / "attempt1.txt").write_text("attempt 1 work")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feat: done TASK-RETRY-STALE"],
+        cwd=repo, check=True, capture_output=True,
+    )
+
+    # Mark attempt 1 as committed, then retry
+    tasks_repo.mark_committed(task_id="TASK-RETRY-STALE", terminal_source="receipt")
+    tasks_repo.apply_retry_dispatch(task_id="TASK-RETRY-STALE")
+    time.sleep(1.1)  # Ensure ack timestamp is AFTER the stale commit
+    tasks_repo.mark_acked(task_id="TASK-RETRY-STALE", session_id="session-2")
+
+    task = tasks_repo.get_task("TASK-RETRY-STALE")
+    assert task.phase == "acked"
+    assert task.attempt_no == 2
+
+    # auto_close should NOT find attempt 1's commit for attempt 2
+    count = auto_close_evidence_ready_tasks(paths)
+    assert count == 0, (
+        "Attempt 1's stale commit must NOT auto-close attempt 2. "
+        "auto_close must use last_activity_at (attempt-level anchor), not created_at."
+    )
+
+    task = tasks_repo.get_task("TASK-RETRY-STALE")
+    assert task.phase == "acked", "Task must remain acked after retry, not falsely closed by stale commit"
+
+
+# --------------------------------------------------------------------------
+# Test 6: Side branch commit must NOT auto-close task on main
+# --------------------------------------------------------------------------
+def test_side_branch_commit_does_not_close_main_task(tmp_path: Path) -> None:
+    """A commit on a different branch must NOT auto-close a task on the current branch.
+
+    Reproduces: detect_committed_task_in_repo used `git log --all` which searches
+    all branches, so a commit on any branch would falsely close the task even though
+    the current working tree doesn't have that code.
+    """
+    from agpair.daemon.loop import auto_close_evidence_ready_tasks
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True, capture_output=True)
+    (repo / "init.txt").write_text("init")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True)
+
+    # Create a side branch with a commit containing the task_id
+    subprocess.run(["git", "checkout", "-b", "side"], cwd=repo, check=True, capture_output=True)
+    (repo / "side.txt").write_text("side branch work")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feat: side branch TASK-SIDE-1"],
+        cwd=repo, check=True, capture_output=True,
+    )
+
+    # Switch back to main — this branch does NOT have the side commit
+    subprocess.run(["git", "checkout", "main"], cwd=repo, capture_output=True)
+    # Fallback: try 'master' if 'main' doesn't exist
+    result = subprocess.run(["git", "branch", "--show-current"], cwd=repo, capture_output=True, text=True)
+    if result.stdout.strip() != "main":
+        subprocess.run(["git", "checkout", "master"], cwd=repo, capture_output=True)
+
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    tasks_repo = TaskRepository(paths.db_path)
+    tasks_repo.create_task(
+        task_id="TASK-SIDE-1", repo_path=str(repo), completion_policy="direct_commit"
+    )
+    tasks_repo.mark_acked(task_id="TASK-SIDE-1", session_id="session-main")
+
+    count = auto_close_evidence_ready_tasks(paths)
+    assert count == 0, (
+        "Commit on side branch must NOT auto-close task on main. "
+        "detect_committed_task_in_repo must NOT use --all."
+    )
+
+    task = tasks_repo.get_task("TASK-SIDE-1")
+    assert task.phase == "acked", "Task on main must remain acked when commit is only on side branch"
+
+
+# --------------------------------------------------------------------------
+# Test 7: Cleanup with PermissionError must NOT delete session dir
+# --------------------------------------------------------------------------
+def test_cleanup_permission_denied_preserves_session_dir(tmp_path: Path) -> None:
+    """When SIGTERM/SIGKILL fails with PermissionError, cleanup must NOT delete
+    the session directory. The process is still alive but we can't kill it.
+
+    Reproduces: _ensure_process_dead returned (False, None) on PermissionError,
+    causing cleanup to proceed to shutil.rmtree while the process was still running.
+    """
+    from agpair.executors.local_cli import LocalCLIExecutor
+    from agpair.models import ContinuationCapability
+
+    class DummyExec(LocalCLIExecutor):
+        def __init__(self):
+            super().__init__("dummy", "dummy_cli", lambda b, r, t: ["echo"])
+        @property
+        def continuation_capability(self):
+            return ContinuationCapability.UNSUPPORTED
+
+    executor = DummyExec()
+    session_dir = tmp_path / "agpair_dummy_permerror_test"
+    session_dir.mkdir()
+    (session_dir / "state.json").write_text(
+        json.dumps({
+            "version": 1,
+            "pid": 8888,
+            "pgid": 8888,
+            "started_at": "2026-04-06T00:00:00Z",
+            "arbitration_rc": None,
+            "repo_path": None,
+        }),
+        encoding="utf-8",
+    )
+
+    # _is_process_alive returns True, killpg raises PermissionError
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=True), \
+         mock.patch("agpair.executors.local_cli.os.killpg", side_effect=PermissionError("Operation not permitted")):
+        executor.cleanup(str(session_dir))
+
+    assert session_dir.exists(), (
+        "Session dir must NOT be deleted when kill fails with PermissionError. "
+        "Process is still alive — deleting session dir loses tracking state."
+    )
+
+    # Verify state.json still marks process as alive
+    state = json.loads((session_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["is_process_alive"] is True, "Process must remain marked as alive after PermissionError"
+

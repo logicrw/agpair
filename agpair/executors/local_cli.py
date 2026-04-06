@@ -120,7 +120,17 @@ def _is_process_alive(pid: int | None, *, expected_start_time: float | None = No
     except ProcessLookupError:
         return False
     except PermissionError:
-        # Process group exists but we lack permission — conservatively treat as alive.
+        # Process group exists but we lack permission to signal it.
+        # Check PID recycling guard before assuming alive — if the PID was
+        # recycled to another user's process, it's not ours.
+        if expected_start_time is not None:
+            actual_start = _get_process_start_time(pid)
+            if actual_start is not None and abs(actual_start - expected_start_time) > 3:
+                logger.info("PID %d: PermissionError but start time mismatch "
+                            "(expected=%.0f, actual=%.0f) — PID recycled to another user.",
+                            pid, expected_start_time, actual_start)
+                return False
+        # Can't determine recycling — conservatively treat as alive.
         return True
     # Guard against PID recycling: verify the process started at the expected time.
     if expected_start_time is not None:
@@ -548,7 +558,7 @@ exit $RC
         if not pgid:
             return False, None
 
-        if not _is_process_alive(pgid):
+        if not _is_process_alive(pgid, expected_start_time=state.get("process_start_time")):
             _reap_child_process(state.get("pid"))
             return False, state.get("arbitration_rc")
 
@@ -563,8 +573,8 @@ exit $RC
                 # Process died between _is_process_alive check and killpg.
                 return False, 128 + signal.SIGTERM
             except PermissionError:
-                logger.warning("Permission denied sending SIGTERM to pgid %d", pgid)
-                return False, None
+                logger.warning("Permission denied sending SIGTERM to pgid %d — treating as still alive", pgid)
+                return True, None
             state["termination_requested_at"] = _now_iso()
             state["termination_signal"] = "SIGTERM"
             return True, 128 + signal.SIGTERM
@@ -586,8 +596,8 @@ exit $RC
             # Process died between _is_process_alive check and killpg — that's fine.
             return False, 128 + signal.SIGTERM
         except PermissionError:
-            logger.warning("Permission denied sending SIGKILL to pgid %d", pgid)
-            return False, None
+            logger.warning("Permission denied sending SIGKILL to pgid %d — treating as still alive", pgid)
+            return True, None
         state["termination_requested_at"] = _now_iso()
         state["termination_signal"] = "SIGKILL"
         return True, 128 + signal.SIGKILL
@@ -672,7 +682,7 @@ exit $RC
 
         state = _read_state(temp_dir)
         pgid = state.get("pgid") or state.get("pid")
-        if _is_process_alive(pgid):
+        if _is_process_alive(pgid, expected_start_time=state.get("process_start_time")):
             still_alive, arbitration_rc = self._ensure_process_dead(state, temp_dir)
             if arbitration_rc is not None:
                 state["arbitration_rc"] = arbitration_rc

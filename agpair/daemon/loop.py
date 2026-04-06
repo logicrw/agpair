@@ -123,14 +123,15 @@ def scan_workspace_activity(paths: AppPaths, *, current: datetime) -> None:
 def detect_committed_task_in_repo(repo_path: str, task_id: str, *, since_iso: str | None = None) -> str | None:
     """Check if a git commit containing *task_id* exists in *repo_path*.
 
-    Uses ``git log --all --grep=<task_id> --format=%H%x00%B -1`` to find a commit
-    whose message contains the task_id. Then strictly verifies with word boundaries
-    to prevent false positives from shortened tokens. This is strong repo-side evidence
-    that the delegated work already landed as a commit.
+    Searches commits reachable from the current HEAD (not ``--all`` branches)
+    using ``git log --grep=<task_id> --format=%H%x00%B -1``. Then strictly
+    verifies with word boundaries to prevent false positives from shortened
+    tokens. This is strong repo-side evidence that the delegated work already
+    landed as a commit on the current branch.
 
-    When *since_iso* is provided, only commits after that timestamp are considered.
-    This prevents historical commits from a prior attempt or previous task with the
-    same ID from triggering a false auto-close.
+    When *since_iso* is provided, only commits after that timestamp are
+    considered. This prevents historical commits from a prior attempt or
+    previous task with the same ID from triggering a false auto-close.
 
     Returns the full commit SHA if found, or ``None`` if not found or if the
     directory is not a valid git repository.
@@ -138,7 +139,8 @@ def detect_committed_task_in_repo(repo_path: str, task_id: str, *, since_iso: st
     import subprocess as _subprocess
     import re
 
-    cmd = ["git", "log", "--all", f"--grep={task_id}", "--format=%H%x00%B", "-1"]
+    # No --all: only search commits reachable from HEAD (current branch/worktree)
+    cmd = ["git", "log", f"--grep={task_id}", "--format=%H%x00%B", "-1"]
     if since_iso:
         cmd.append(f"--after={since_iso}")
     try:
@@ -201,7 +203,12 @@ def auto_close_evidence_ready_tasks(
         if task.phase == "acked" and task.completion_policy != "direct_commit":
             continue
 
-        commit_sha = detect_committed_task_in_repo(task.repo_path, task.task_id, since_iso=task.created_at)
+        # Use last_activity_at as the attempt-level time anchor (not created_at).
+        # last_activity_at is reset by apply_retry_dispatch() and mark_acked(),
+        # so it reflects when the CURRENT attempt started, not when the task
+        # was originally created. This prevents stale commits from attempt N-1
+        # from falsely closing attempt N.
+        commit_sha = detect_committed_task_in_repo(task.repo_path, task.task_id, since_iso=task.last_activity_at)
         if commit_sha is None:
             continue
 
