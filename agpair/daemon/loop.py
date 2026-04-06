@@ -386,8 +386,8 @@ def mark_stuck_tasks(
             from agpair.executors import get_executor
             exec_instance = get_executor(task.executor_backend)
             if exec_instance:
-                if is_local_cli_backend(task.executor_backend):
-                    exec_instance.cancel(task.task_id, task.antigravity_session_id)
+                # cleanup() is self-contained: it handles process termination
+                # (SIGTERM→SIGKILL) internally before removing the temp dir.
                 exec_instance.cleanup(task.antigravity_session_id)
         count += 1
     return count

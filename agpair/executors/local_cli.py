@@ -53,25 +53,61 @@ def _git_status_porcelain(repo_path: str) -> str:
 
 
 def _is_process_alive(pid: int | None) -> bool:
-    """检查对应进程组里是否还有非-zombie 进程存活。"""
+    """检查对应进程组里是否还有非-zombie 进程存活。
+
+    Uses ``os.killpg(pgid, 0)`` for cross-platform group liveness check,
+    then falls back to ``ps`` to filter out zombie-only groups.
+    macOS ``ps -g`` filters by *group leader* (not process group), so we
+    use ``pgrep -g <pgid>`` which works consistently on both platforms.
+    """
     if not pid:
         return False
+    # Fast path: check if anything in the process group can receive signals.
     try:
-        os.kill(pid, 0)  # signal 0 = 探测，不实际发信号
+        os.killpg(pid, 0)
     except (ProcessLookupError, PermissionError):
         return False
+    # Slow path: exclude zombie-only groups via pgrep (cross-platform).
     try:
         status_output = subprocess.check_output(
-            ["ps", "-o", "stat=", "-g", str(pid)],
+            ["ps", "-o", "stat=", "-p", str(pid)],
             text=True,
             stderr=subprocess.DEVNULL,
         )
     except Exception:
+        # ps failed but killpg succeeded — conservatively assume alive.
         return True
     statuses = [line.strip() for line in status_output.splitlines() if line.strip()]
     if not statuses:
-        return False
-    return any(not status.startswith("Z") for status in statuses)
+        # Leader gone but group still has signal-reachable members.
+        return True
+    if all(s.startswith("Z") for s in statuses):
+        # Leader is zombie; check if any non-zombie child exists in the group.
+        try:
+            children_output = subprocess.check_output(
+                ["pgrep", "-g", str(pid)],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            child_pids = [p.strip() for p in children_output.splitlines() if p.strip()]
+            if len(child_pids) <= 1:
+                return False  # only the zombie leader itself
+            # Check if any child is non-zombie.
+            for cpid in child_pids:
+                try:
+                    cs = subprocess.check_output(
+                        ["ps", "-o", "stat=", "-p", cpid],
+                        text=True,
+                        stderr=subprocess.DEVNULL,
+                    ).strip()
+                    if cs and not cs.startswith("Z"):
+                        return True
+                except Exception:
+                    pass
+            return False
+        except Exception:
+            return False
+    return True
 
 
 def _now_iso() -> str:
@@ -373,7 +409,7 @@ exit $RC
                     )
                 state["final_summary"] = summary
                 state["error_summary"] = None
-                return True, self._make_receipt(task_id, attempt_no, "COMMITTED", summary, {"exit_code": 0, "events_count": events_count})
+                return True, self._make_receipt(task_id, attempt_no, "COMMITTED", summary, {"exit_code": 0, "events_count": events_count, "verification": "unverified"})
             else:
                 summary = self._extract_error_summary(temp_dir)
                 state["final_summary"] = None
@@ -434,7 +470,11 @@ exit $RC
             try:
                 os.killpg(pgid, signal.SIGTERM)
                 logger.info("Sent SIGTERM to process group %d", pgid)
-            except (ProcessLookupError, PermissionError):
+            except ProcessLookupError:
+                # Process died between _is_process_alive check and killpg.
+                return False, 128 + signal.SIGTERM
+            except PermissionError:
+                logger.warning("Permission denied sending SIGTERM to pgid %d", pgid)
                 return False, None
             state["termination_requested_at"] = _now_iso()
             state["termination_signal"] = "SIGTERM"
@@ -448,7 +488,11 @@ exit $RC
         try:
             os.killpg(pgid, signal.SIGKILL)
             logger.warning("Sent SIGKILL to process group %d (SIGTERM timed out)", pgid)
-        except (ProcessLookupError, PermissionError):
+        except ProcessLookupError:
+            # Process died between _is_process_alive check and killpg — that's fine.
+            return False, 128 + signal.SIGTERM
+        except PermissionError:
+            logger.warning("Permission denied sending SIGKILL to pgid %d", pgid)
             return False, None
         state["termination_requested_at"] = _now_iso()
         state["termination_signal"] = "SIGKILL"
@@ -504,7 +548,12 @@ exit $RC
                 if not still_alive:
                     break
                 if time.monotonic() >= deadline:
-                    return
+                    logger.warning(
+                        "cleanup: process group %d did not exit within 6s deadline, "
+                        "force-removing temp dir %s anyway",
+                        pgid, temp_dir,
+                    )
+                    break
                 time.sleep(0.1)
 
         shutil.rmtree(temp_dir, ignore_errors=True)

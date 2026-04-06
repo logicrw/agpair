@@ -207,14 +207,21 @@ def test_ensure_process_dead_escalates_to_sigkill_after_grace(tmp_path):
 
 
 def test_is_process_alive_treats_zombie_as_dead():
-    with mock.patch("agpair.executors.local_cli.os.kill"), \
-         mock.patch("agpair.executors.local_cli.subprocess.check_output", return_value="Z+\n"):
+    with mock.patch("agpair.executors.local_cli.os.killpg"), \
+         mock.patch("agpair.executors.local_cli.subprocess.check_output", side_effect=[
+             "Z+\n",  # ps -p: leader is zombie
+             "1234\n",  # pgrep -g: only the leader itself
+         ]):
         assert _is_process_alive(4321) is False
 
 
 def test_is_process_alive_treats_live_child_in_same_group_as_alive():
-    with mock.patch("agpair.executors.local_cli.os.kill"), \
-         mock.patch("agpair.executors.local_cli.subprocess.check_output", return_value="Z+\nS\n"):
+    with mock.patch("agpair.executors.local_cli.os.killpg"), \
+         mock.patch("agpair.executors.local_cli.subprocess.check_output", side_effect=[
+             "Z+\n",  # ps -p: leader is zombie
+             "4321\n5678\n",  # pgrep -g: leader + child
+             "S\n",  # ps -p child: non-zombie
+         ]):
         assert _is_process_alive(4321) is True
 
 
