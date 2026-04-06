@@ -1,23 +1,13 @@
 ---
 name: agpair
-description: "Use agpair to delegate coding work to supported executors (currently Antigravity, Codex, and Gemini), check doctor/status/watch, and drive retry flows."
+description: "Use when delegating coding tasks to external executors (Antigravity, Codex, Gemini) — multi-file changes, mechanically clear work, or parallel worktree execution."
 ---
 
 # agpair
 
 ## Purpose
 
-Use `agpair` as the task lifecycle layer for delegating coding work to executors.
-
-It handles:
-
-- health checks
-- dispatch
-- watch / status / logs
-- structured task state
-- semantic follow-up (`retry`)
-
-It does **not** replace planning or code review.
+Task lifecycle layer for delegating coding work to executors. Handles health checks, dispatch, monitoring, retry. Does **not** replace planning or code review.
 
 ## When to Delegate
 
@@ -34,17 +24,61 @@ Do **not** delegate when:
 - the task requires interactive judgment calls mid-execution
 - you need to explore or understand code before knowing what to change
 
-## Executor Preference
+## Executor Selection
 
-Default order: **Antigravity → Codex → Gemini**.
+### Decision Flowchart
+
+```dot
+digraph executor_selection {
+  rankdir=TB;
+  node [shape=diamond, fontsize=11];
+
+  start [shape=oval, label="New task"];
+  wt [label="Needs worktree\nor parallel?"];
+  ag_health [label="Antigravity\nhealthy?"];
+  codex_ok [label="Codex\navailable?"];
+  codex_wt [label="Codex\navailable?"];
+  gemini_ok [label="Gemini\navailable?"];
+  gemini_wt [label="Gemini\navailable?"];
+
+  node [shape=box];
+  use_ag [label="Use Antigravity"];
+  use_codex [label="Use Codex"];
+  use_codex2 [label="Use Codex"];
+  use_gemini [label="Use Gemini"];
+  use_gemini2 [label="Use Gemini"];
+  fail [label="Cannot dispatch\nReport to user"];
+  fail2 [label="Cannot dispatch\nReport to user"];
+
+  start -> wt;
+  wt -> codex_wt [label="Yes — never Antigravity"];
+  wt -> ag_health [label="No"];
+
+  ag_health -> use_ag [label="Yes"];
+  ag_health -> codex_ok [label="No"];
+  codex_ok -> use_codex [label="Yes"];
+  codex_ok -> gemini_ok [label="No"];
+  gemini_ok -> use_gemini [label="Yes"];
+  gemini_ok -> fail [label="No"];
+
+  codex_wt -> use_codex2 [label="Yes"];
+  codex_wt -> gemini_wt [label="No"];
+  gemini_wt -> use_gemini2 [label="Yes"];
+  gemini_wt -> fail2 [label="No"];
+}
+```
+
+### Why Antigravity cannot do worktree tasks
+
+Antigravity is bound to the IDE bridge — it only operates on directories explicitly loaded in the current IDE window. Dynamically created git worktrees (`git worktree add`) are invisible to it without manual IDE intervention. For any parallel or worktree task, skip Antigravity entirely.
 
 | Executor | Strengths | Use when |
 |----------|-----------|----------|
-| `antigravity` | IDE tools, fast file ops | Default choice; single-worktree tasks |
-| `codex` | Thorough, good at cross-module refactors, runs tests reliably | Antigravity unavailable or task needs heavy test validation |
-| `gemini` | Alternative perspective | Antigravity and Codex both unavailable, or parallel diversity needed |
+| `antigravity` | IDE tools, rich context, fast file ops | Single task on the current worktree (default IDE window) |
+| `codex` | Thorough, cross-module refactors, runs tests reliably | Parallel worktree tasks; or Antigravity unavailable |
+| `gemini` | Alternative perspective | Parallel worktree tasks (alongside Codex); or Codex unavailable |
 
-Fallback: if the preferred executor is blocked or unhealthy, try the next in order. Do not retry the same executor more than once for the same failure.
+Fallback for single tasks: Antigravity → Codex → Gemini. Do not retry the same executor more than once for the same failure.
 
 ## Default Flow
 
@@ -70,24 +104,56 @@ Always use `--no-wait`:
 agpair task start --repo-path <path> --executor <executor> --body "<task brief>" --no-wait
 ```
 
-Observation differs by executor:
-
-| Executor | Observation method |
-|----------|-------------------|
-| `antigravity` | `agpair task watch <TASK_ID>` (run in background; Antigravity sessions are not directly observable) |
-| `codex` / `gemini` | Local CLI processes — use `agpair task status`, `ps`, `tail` on the working dir, or read stdout directly. `watch` in background for terminal notification only. |
-
-For Codex/Gemini, avoid running `watch` in foreground — heartbeat lines waste tokens. Use `task status` for point-in-time checks, or directly inspect the process and its output.
-
 Treat terminal phase as truth. Do **not** treat `ACK` as completion.
 
-### 3. Phase handling
+### 3. Post-dispatch Monitoring (MANDATORY)
+
+**After every successful dispatch, you MUST immediately set up background monitoring.**
+Do NOT say "I'll check when you ask." Do NOT wait for the user to request status.
+
+#### Antigravity
+
+Run `agpair task watch <TASK_ID>` in background. This is the only observation method — Antigravity sessions are opaque.
+
+```bash
+agpair task watch <TASK_ID>   # run_in_background=true
+```
+
+If the watch background job times out but the task is still `acked/working`, restart the watch.
+
+#### Codex / Gemini
+
+Do NOT use `agpair task watch` — heartbeat lines waste tokens and background watch times out repeatedly.
+
+Set up a background polling loop using `agpair task status`:
+
+```bash
+task_id="<TASK_ID>"
+while true; do
+  task_phase=$(agpair task status "$task_id" 2>/dev/null | grep '^phase:' | awk '{print $2}')
+  if [[ "$task_phase" == "evidence_ready" || "$task_phase" == "committed" || "$task_phase" == "blocked" || "$task_phase" == "abandoned" ]]; then
+    echo "AGPAIR_TERMINAL: task=$task_id phase=$task_phase"
+    break
+  fi
+  sleep 60
+done
+```
+
+Run this with `run_in_background=true`. When the background job completes, proceed to Phase handling → Completion Gate.
+
+**zsh pitfall**: Do NOT use `status` as a variable name — it is read-only in zsh. Use `task_phase` or `task_state`.
+
+#### Multiple parallel tasks
+
+Set up one monitoring loop per task. All loops run in background concurrently.
+
+### 4. Phase handling
 
 | Phase | Action |
 |-------|--------|
-| `acked` | Keep watching — not done yet |
-| `evidence_ready` | Executor finished and committed — verify with `git log --oneline -3`, announce completion |
-| `committed` | Same as `evidence_ready` — verify and announce |
+| `acked` | Keep monitoring — not done yet |
+| `evidence_ready` | Executor finished and committed — proceed to Completion Gate |
+| `committed` | Same as `evidence_ready` — proceed to Completion Gate |
 | `blocked` | Evaluate: retry same executor, or fallback to next executor |
 | `stuck` | Wait for auto-recovery; if it transitions to `blocked`, retry or fallback |
 | `abandoned` | Start fresh with next executor if work still needed |
@@ -197,23 +263,29 @@ Avoid:
 - multiple controllers acting on the same task/worktree
 - overlapping write scopes unless the merge plan is explicit
 
-## Anti-Patterns
+## Anti-Patterns (Rationalization Table)
 
-- Do not use `--wait` as the default path
-- Do not over-split work into tiny tasks — maximize what one session can accomplish
-- Do not attempt same-session continuation — always use fresh sessions
-- Do not ask Antigravity to run integration tests, start services, or import project modules — these can block indefinitely
-- Do not omit the execution rules block from Antigravity task bodies
-- Do not include Antigravity execution rules, agent-bus commands, or receipt paths in Codex/Gemini task bodies — this causes re-dispatch confusion
-- Do not run `watch` in foreground for Codex/Gemini tasks — heartbeat lines waste tokens; use background + direct observation
-- Do not write ambiguous briefs that require the executor to ask clarifying questions — the executor cannot ask
-- Do not wait for the user to request delegation — proactively delegate when the task matches delegation criteria
+| You might think... | But actually... | Severity |
+|---------------------|-----------------|----------|
+| "I'll wait for the user to ask me to check status" | You MUST set up monitoring immediately after dispatch. The user expects autonomous operation. | CRITICAL |
+| "I'll use `agpair task watch` for Codex — it works for Antigravity" | `watch` for Codex/Gemini wastes tokens on heartbeat lines and times out. Use a polling loop with `task status`. | CRITICAL |
+| "This worktree task can go to Antigravity — it's the preferred executor" | Antigravity cannot see dynamically created worktrees. Any task requiring `git worktree add` MUST go to Codex/Gemini. | CRITICAL |
+| "I'll use `--wait` so I don't need to set up monitoring" | `--wait` blocks your session. Always use `--no-wait` + background monitoring. | HIGH |
+| "I'll split this into 5 small tasks for safety" | Over-splitting wastes sessions and creates coordination overhead. One task = one logical goal. | MEDIUM |
+| "I'll include Antigravity execution rules in the Codex brief — extra context helps" | Executor-specific rules cause cross-dispatch confusion. Codex/Gemini briefs must NOT contain Antigravity blocks. | HIGH |
+| "The executor will figure out what I mean" | Executors cannot ask clarifying questions. Every brief must be self-sufficient with exact paths and commands. | HIGH |
+| "ACK means the task is done" | ACK only means accepted. Wait for `evidence_ready` or `committed`. | HIGH |
+| "I can use `status` as a variable name in my shell script" | `status` is read-only in zsh. Use `task_phase` or `task_state`. | MEDIUM |
 
 ## Completion Gate
 
-Before telling the user a delegated task is done, confirm:
+When monitoring confirms a terminal phase (`evidence_ready`, `committed`, `blocked`, `abandoned`), run this checklist before reporting to the user:
 
 - dispatch health was good
 - the task reached a real terminal or committed state in repo reality
 - the evidence was actually reviewed (git log, test results)
 - no pending task is left hanging for the same worktree
+
+## Success Criteria
+
+A skill invocation is successful when: all dispatched tasks reached terminal state, Completion Gate passed for each, and the user was informed with verified evidence.
