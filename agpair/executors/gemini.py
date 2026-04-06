@@ -5,6 +5,7 @@ import logging
 import pathlib
 import subprocess
 import tempfile
+import time
 import typing
 
 from agpair.executors.base import DispatchResult, ExecutorAdapter, TaskState
@@ -163,7 +164,6 @@ class GeminiExecutor(ExecutorAdapter):
                 try:
                     curr_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_path_str, text=True, stderr=subprocess.DEVNULL).strip()
                     if curr_head and curr_head != start_head:
-                        import time
                         if not detected_file.exists():
                             detected_file.write_text(str(time.time()), encoding="utf-8")
                         else:
@@ -172,11 +172,11 @@ class GeminiExecutor(ExecutorAdapter):
                             except ValueError:
                                 detected_at = time.time()
                             if time.time() - detected_at > 30:
-                                logger.info(f"Gemini hang timeout reached for {task_id}, force killing.")
+                                logger.warning(f"Gemini hang timeout reached for {task_id}, force killing. Treating as timeout/failure (RC=124).")
                                 self.cancel(task_id, session_id)
-                                task_ref.rc_file.write_text("0", encoding="utf-8")
+                                task_ref.rc_file.write_text("124", encoding="utf-8")
                                 is_done = True
-                                retcode = 0
+                                retcode = 124
                 except Exception as e:
                     logger.debug("Failed to check git head for gemini watchdog: %s", e)
 
