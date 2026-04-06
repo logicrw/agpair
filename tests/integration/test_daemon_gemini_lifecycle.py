@@ -88,7 +88,7 @@ def test_gemini_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
     
     session_id = task.antigravity_session_id
     assert session_id is not None
-    assert "agpair_gemini_TASK-GEMINI-TEST_" in session_id
+    assert "agpair_gemini_cli_TASK-GEMINI-TEST_" in session_id
     
     # Wait for the fake subprocess to finish writing its output
     temp_dir = pathlib.Path(session_id)
@@ -128,8 +128,8 @@ def test_gemini_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
     assert terminal_event is not None
     receipt = json.loads(terminal_event.body)
     assert receipt["status"] == "COMMITTED"
-    assert receipt["summary"] == "Task finished successfully via Gemini"
-    assert receipt["payload"]["returncode"] == 0
+    assert receipt["summary"] == "Task finished successfully"
+    assert receipt["payload"]["exit_code"] == 0
     assert receipt["payload"]["events_count"] == 2
 
 def write_failing_gemini_bin(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -211,8 +211,8 @@ def test_gemini_lifecycle_failure(tmp_path: pathlib.Path, monkeypatch) -> None:
     assert terminal_event is not None
     receipt = json.loads(terminal_event.body)
     assert receipt["status"] == "BLOCKED"
-    assert receipt["summary"] == "Gemini executor failed with return code 1"
-    assert receipt["payload"]["returncode"] == 1
+    assert receipt["summary"] == 'stdout: {"event": "start"}'
+    assert receipt["payload"]["exit_code"] == 1
     assert receipt["payload"]["blocker_type"] == "execution_error"
 
 

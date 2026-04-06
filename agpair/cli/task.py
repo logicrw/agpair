@@ -692,9 +692,9 @@ def abandon_task(
     _guard_live_task(task, force=force, command="abandon")
     bridge_cancel_attempted = False
     if task.phase == "acked" and task.antigravity_session_id:
-        from agpair.executors import get_executor
+        from agpair.executors import get_executor, is_local_cli_backend
         exec_instance = get_executor(task.executor_backend)
-        if exec_instance and task.executor_backend in {"codex_cli", "gemini_cli"}:
+        if exec_instance and is_local_cli_backend(task.executor_backend):
             exec_instance.cancel(task_id=task.task_id, session_id=task.antigravity_session_id)
             journal.append(task_id, "cli", "executor_cancelled", f"{task.executor_backend} cancelled locally")
         else:
@@ -721,7 +721,7 @@ def abandon_task(
                 )
     tasks.mark_abandoned(task_id=task_id, reason=reason)
     journal.append(task_id, "cli", "abandoned", reason)
-    if not bridge_cancel_attempted and task.executor_backend not in {"codex_cli", "gemini_cli"}:
+    if not bridge_cancel_attempted and not is_local_cli_backend(task.executor_backend):
         journal.append(task_id, "cli", "bridge_cancel_skipped", "task had no live bridge session to release")
     typer.echo(task_id)
 

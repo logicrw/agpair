@@ -237,7 +237,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
     if not active_tasks:
         return 0, set(), 0
     all_messages: list[dict] = []
-    from agpair.executors import get_executor
+    from agpair.executors import get_executor, is_local_cli_backend
     for task in active_tasks:
         exec_instance = get_executor(task.executor_backend)
         if exec_instance and task.phase == "acked" and task.antigravity_session_id:
@@ -265,7 +265,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 continue
                 
         # If executor didn't handle it locally, try to pull from bus
-        if task.executor_backend not in {"codex_cli", "gemini_cli"}:
+        if not is_local_cli_backend(task.executor_backend):
             try:
                 all_messages.extend(client.pull_receipts(task_id=task.task_id))
             except BusPullError as exc:
@@ -329,6 +329,8 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                     from agpair.executors import get_executor
                     exec_instance = get_executor(current_task.executor_backend)
                     if exec_instance:
+                        if is_local_cli_backend(current_task.executor_backend):
+                            exec_instance.cancel(current_task.task_id, current_task.antigravity_session_id)
                         exec_instance.cleanup(current_task.antigravity_session_id)
             elif status == messages.BLOCKED:
                 reason = clean_body or "blocked"
@@ -340,6 +342,8 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                     from agpair.executors import get_executor
                     exec_instance = get_executor(current_task.executor_backend)
                     if exec_instance:
+                        if is_local_cli_backend(current_task.executor_backend):
+                            exec_instance.cancel(current_task.task_id, current_task.antigravity_session_id)
                         exec_instance.cleanup(current_task.antigravity_session_id)
             elif status == messages.COMMITTED:
                 policy = current_task.completion_policy if current_task else "direct_commit"
@@ -353,6 +357,8 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                     from agpair.executors import get_executor
                     exec_instance = get_executor(current_task.executor_backend)
                     if exec_instance:
+                        if is_local_cli_backend(current_task.executor_backend):
+                            exec_instance.cancel(current_task.task_id, current_task.antigravity_session_id)
                         exec_instance.cleanup(current_task.antigravity_session_id)
 
             else:
@@ -386,6 +392,8 @@ def mark_stuck_tasks(
             from agpair.executors import get_executor
             exec_instance = get_executor(task.executor_backend)
             if exec_instance:
+                if is_local_cli_backend(task.executor_backend):
+                    exec_instance.cancel(task.task_id, task.antigravity_session_id)
                 exec_instance.cleanup(task.antigravity_session_id)
         count += 1
     return count

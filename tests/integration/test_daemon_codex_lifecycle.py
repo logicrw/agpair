@@ -88,7 +88,7 @@ def test_codex_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
     
     session_id = task.antigravity_session_id
     assert session_id is not None
-    assert "agpair_codex_TASK-CODEX-TEST_" in session_id
+    assert "agpair_codex_cli_TASK-CODEX-TEST_" in session_id
     
     # Wait for the fake subprocess to finish writing its output
     temp_dir = pathlib.Path(session_id)
@@ -129,7 +129,7 @@ def test_codex_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
     receipt = json.loads(terminal_event.body)
     assert receipt["status"] == "COMMITTED"
     assert receipt["summary"] == "Fake Codex Success!"
-    assert receipt["payload"]["returncode"] == 0
+    assert receipt["payload"]["exit_code"] == 0
     assert receipt["payload"]["events_count"] == 2
 
 def write_failing_codex_bin(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -212,7 +212,7 @@ def test_codex_lifecycle_failure(tmp_path: pathlib.Path, monkeypatch) -> None:
     receipt = json.loads(terminal_event.body)
     assert receipt["status"] == "BLOCKED"
     assert receipt["summary"] == "Fake Codex Error: syntax error"
-    assert receipt["payload"]["returncode"] == 1
+    assert receipt["payload"]["exit_code"] == 1
     assert receipt["payload"]["blocker_type"] == "execution_error"
 
 

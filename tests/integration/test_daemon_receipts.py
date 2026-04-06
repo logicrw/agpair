@@ -6,7 +6,7 @@ import json
 
 from agpair.config import AppPaths
 from agpair.terminal_receipts import StructuredTerminalReceipt, blocked_reason_from_receipt
-from agpair.storage.db import ensure_database
+from agpair.storage.db import connect, ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
 
@@ -196,6 +196,55 @@ def test_daemon_ingests_structured_committed_receipt_preserves_payload(tmp_path:
     parsed = json.loads(rows[0].body)
     assert parsed["summary"] == "Committed cleanly"
     assert parsed["payload"]["commit_sha"] == "abc1234"
+
+
+def test_daemon_cancels_local_cli_before_cleanup_on_terminal_receipt(tmp_path: Path, monkeypatch) -> None:
+    from agpair.daemon.loop import run_once
+    from agpair.executors.base import TaskState
+
+    paths = seed_task(tmp_path)
+    repo = TaskRepository(paths.db_path)
+    with connect(paths.db_path) as conn:
+        conn.execute(
+            "UPDATE tasks SET executor_backend=? WHERE task_id=?",
+            ("codex_cli", "TASK-1"),
+        )
+        conn.commit()
+    repo.mark_acked(task_id="TASK-1", session_id="session-local-123")
+
+    class FakeExecutor:
+        def __init__(self) -> None:
+            self.calls: list[tuple] = []
+
+        def poll(self, task_id: str, session_id: str, attempt_no: int = 1):
+            return TaskState(
+                is_done=True,
+                receipt={
+                    "schema_version": "1",
+                    "task_id": task_id,
+                    "attempt_no": attempt_no,
+                    "review_round": 0,
+                    "status": "COMMITTED",
+                    "summary": "Committed cleanly",
+                    "payload": {"commit_sha": "abc1234"},
+                },
+            )
+
+        def cancel(self, task_id: str, session_id: str) -> None:
+            self.calls.append(("cancel", task_id, session_id))
+
+        def cleanup(self, session_id: str) -> None:
+            self.calls.append(("cleanup", session_id))
+
+    fake_executor = FakeExecutor()
+    monkeypatch.setattr("agpair.executors.get_executor", lambda backend_id, **kwargs: fake_executor)
+
+    run_once(paths, now=datetime(2026, 3, 21, 12, 5, tzinfo=UTC), bus=FakePullBus([]))
+
+    assert fake_executor.calls == [
+        ("cancel", "TASK-1", "session-local-123"),
+        ("cleanup", "session-local-123"),
+    ]
 
 
 def test_blocked_reason_from_receipt_prefers_payload_message_when_summary_empty() -> None:

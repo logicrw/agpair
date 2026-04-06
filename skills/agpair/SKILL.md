@@ -154,7 +154,7 @@ Set up one monitoring loop per task. All loops run in background concurrently.
 | `acked` | Keep monitoring — not done yet |
 | `evidence_ready` | Executor finished and committed — proceed to Completion Gate |
 | `committed` | Same as `evidence_ready` — proceed to Completion Gate |
-| `blocked` | **Clean up first**: kill old executor process + any watch/polling for the old task. Then retry or fallback to next executor. |
+| `blocked` | Stop any watch/polling for this task. Then retry or fallback to next executor. |
 | `stuck` | Wait for auto-recovery; if it transitions to `blocked`, retry or fallback |
 | `abandoned` | Start fresh with next executor if work still needed |
 
@@ -285,6 +285,7 @@ When monitoring confirms a terminal phase (`evidence_ready`, `committed`, `block
 - the task reached a real terminal or committed state in repo reality
 - the evidence was actually reviewed (git log, test results)
 - no pending task is left hanging for the same worktree
+- executor processes are cleaned up (the daemon does this automatically on terminal state via cancel→cleanup; no manual kill needed)
 
 ## Success Criteria
 

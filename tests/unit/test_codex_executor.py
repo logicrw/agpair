@@ -13,8 +13,10 @@ from agpair.executors.base import DispatchResult, TaskState
 def test_codex_executor_dispatch():
     executor = CodexExecutor(codex_bin="fake-codex")
     
-    with mock.patch("subprocess.Popen") as mock_popen:
+    with mock.patch("agpair.executors.local_cli._git_head", return_value="fake-head"), \
+         mock.patch("subprocess.Popen") as mock_popen:
         mock_process = mock.Mock()
+        mock_process.pid = 12345
         mock_popen.return_value = mock_process
         
         # Track file handle open/close via mock
@@ -52,15 +54,18 @@ def test_codex_executor_dispatch():
         args, kwargs = mock_popen.call_args
         
         cmd = args[0]
-        assert cmd[0] == "sh"
-        assert cmd[1] == "-c"
-        assert "fake-codex exec" in cmd[2]
-        assert "--ephemeral" in cmd[2]
-        assert "--json" in cmd[2]
-        assert "--skip-git-repo-check" in cmd[2]
-        assert "-C " in cmd[2]
-        assert str(pathlib.Path(dispatch_res.session_id) / 'last_msg.txt') in cmd[2]
-        assert "Do something" in cmd[2]
+        assert len(cmd) == 1
+        wrapper_script_path = pathlib.Path(cmd[0])
+        assert wrapper_script_path.exists()
+        wrapper_content = wrapper_script_path.read_text(encoding="utf-8")
+        
+        assert "fake-codex exec" in wrapper_content
+        assert "--ephemeral" in wrapper_content
+        assert "--json" in wrapper_content
+        assert "--skip-git-repo-check" in wrapper_content
+        assert "-C" in wrapper_content
+        assert "last_msg.txt" in wrapper_content
+        assert "Do something" in wrapper_content
         
         assert kwargs["cwd"] == "/fake/repo"
         assert kwargs["text"] is True
@@ -85,7 +90,7 @@ def test_codex_executor_poll(tmp_path: pathlib.Path):
     assert receipt["status"] == "COMMITTED"
     assert receipt["summary"] == "Hello World!"
     assert receipt["attempt_no"] == 1  # default
-    assert receipt["payload"]["returncode"] == 0
+    assert receipt["payload"]["exit_code"] == 0
     assert receipt["payload"]["events_count"] == 2
 
     state_attempt3 = executor.poll("task-123", str(tmp_path), attempt_no=3)
@@ -106,7 +111,7 @@ def test_codex_executor_poll_failed(tmp_path: pathlib.Path):
     receipt = state.receipt
     assert receipt["status"] == "BLOCKED"
     assert receipt["summary"] == "Error occurred!"
-    assert receipt["payload"]["returncode"] == 1
+    assert receipt["payload"]["exit_code"] == 1
     assert receipt["payload"]["blocker_type"] == "execution_error"
 
 
@@ -115,9 +120,9 @@ def test_codex_executor_cancel(tmp_path):
     pid_file = tmp_path / "pid.txt"
     pid_file.write_text("12345", encoding="utf-8")
     
-    with mock.patch("os.kill") as mock_kill:
+    with mock.patch("os.killpg") as mock_killpg:
         executor.cancel("task-123", str(tmp_path))
-        mock_kill.assert_called_once()
+        mock_killpg.assert_called_once()
 
 
 def test_codex_executor_cancel_timeout():
@@ -147,6 +152,5 @@ def test_codex_executor_dispatch_closes_fds_on_popen_error():
 
     mock_stdout_fh.close.assert_called_once()
     mock_stderr_fh.close.assert_called_once()
-
 
 
