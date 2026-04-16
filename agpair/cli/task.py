@@ -830,6 +830,8 @@ def watch_task(
 
     paths = _paths()
     tasks = TaskRepository(paths.db_path)
+    from agpair.storage.journal import JournalRepository
+    journal = JournalRepository(paths.db_path)
 
     if tasks.get_task(task_id) is None:
         if json_output:
@@ -852,6 +854,17 @@ def watch_task(
             raise typer.Exit(code=1)
 
         current_phase = task.phase
+
+        # Inline executor poll for daemon-free detection
+        if current_phase == "acked" and task.antigravity_session_id:
+            from agpair.cli.wait import _try_inline_poll
+            _try_inline_poll(tasks, task, journal)
+            # Re-read task after potential state transition
+            task = tasks.get_task(task_id)
+            if task is None:
+                raise typer.Exit(code=1)
+            current_phase = task.phase
+
         watchdog = is_watchdog_triggered(task)
         timed_out = time.time() >= deadline
         is_terminal = current_phase in TERMINAL_PHASES

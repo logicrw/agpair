@@ -32,25 +32,19 @@ Copy and check off these items in your scratchpad during execution:
 - [ ] **1. Preflight:** Run `agpair doctor --repo-path <path>` and `agpair daemon status`.
 - [ ] **2. Write Brief:** Create a self-contained brief using the template. The executor cannot ask clarifying questions.
 - [ ] **3. Dispatch:** Run `agpair task start --repo-path <path> --executor <name> --body "<brief>" --no-wait`.
-- [ ] **4. Monitor:** Set up the background polling loop immediately (do not wait for the user).
+- [ ] **4. Monitor:** Start a `Monitor` with `agpair task watch <TASK_ID> --json` immediately (do not wait for the user).
 - [ ] **5. Completion Gate:** Verify physical git evidence and tests before reporting success.
 
 ## Monitoring
 
-**Antigravity:** `agpair task watch <TASK_ID>` (with `run_in_background=true`).
+Use Claude Code's `Monitor` tool for all executors. The `watch --json` command only outputs when state changes, so token cost is minimal.
 
-**Codex / Gemini:** Do NOT use `watch` (wastes tokens). Use this polling loop with `run_in_background=true`:
-
-```bash
-task_id="<TASK_ID>"
-while true; do
-  task_phase=$(agpair task status "$task_id" 2>/dev/null | grep '^phase:' | awk '{print $2}')
-  if [[ "$task_phase" == "evidence_ready" || "$task_phase" == "committed" || "$task_phase" == "blocked" || "$task_phase" == "abandoned" ]]; then
-    echo "AGPAIR_TERMINAL: task=$task_id phase=$task_phase"
-    break
-  fi
-  sleep 60
-done
+```
+Monitor(
+  description="Watch AGPair task <TASK_ID>",
+  command="agpair task watch <TASK_ID> --json",
+  timeout_ms=3600000
+)
 ```
 
 | Phase | Action |
@@ -137,6 +131,6 @@ Before reporting a task as done, verify:
 | Thought | Reality |
 |---------|---------|
 | "I'll split this into 5 small tasks" | Over-splitting wastes sessions. One task = maximum work for one logical goal. |
-| "I'll use `watch` for Codex" | `watch` wastes tokens for CLI executors. Use the polling loop script. |
+| "I'll use a bash polling loop" | Use `Monitor` tool with `watch --json` instead — event-driven, minimal tokens. |
 | "Worktree task to Antigravity" | Antigravity can't see dynamic worktrees. Use Codex/Gemini. |
 | "The executor will figure it out" | It can't ask questions. Brief must be explicit and self-sufficient. |
