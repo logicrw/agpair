@@ -945,45 +945,6 @@ def test_task_start_explicit_executor_gemini(tmp_path: Path, monkeypatch) -> Non
     assert payload["active_executor_backend"] == "gemini_cli"
 
 
-def test_task_start_rejects_review_then_commit_for_local_executor(tmp_path: Path, monkeypatch) -> None:
-    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
-
-    import agpair.executors.codex
-
-    monkeypatch.setattr(
-        agpair.executors.codex.CodexExecutor,
-        "dispatch",
-        lambda *args, **kwargs: DispatchResult(session_id="should-not-dispatch"),
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        app,
-        [
-            "task",
-            "start",
-            "--repo-path",
-            "/tmp/repo",
-            "--body",
-            "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
-            "--task-id",
-            "TASK-RTC-LOCAL",
-            "--executor",
-            "codex",
-            "--completion-policy",
-            "review_then_commit",
-            "--no-wait",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "review_then_commit" in result.stderr
-    assert "codex" in result.stderr
-    assert make_task_repo(tmp_path).get_task("TASK-RTC-LOCAL") is None
-
-
 def test_task_retry_local_executor_redispatches_locally(tmp_path: Path, monkeypatch) -> None:
     binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))

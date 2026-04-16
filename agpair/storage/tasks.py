@@ -39,7 +39,7 @@ class TaskRepository:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
 
-    def create_task(self, *, task_id: str, repo_path: str, client_idempotency_key: str | None = None, executor_backend: str | None = None, depends_on: str | None = None, isolated_worktree: bool = False, setup_commands: str | None = None, teardown_commands: str | None = None, env_vars: str | None = None, worktree_boundary: str | None = None, spotlight_testing: bool = False, completion_policy: str = "direct_commit") -> None:
+    def create_task(self, *, task_id: str, repo_path: str, client_idempotency_key: str | None = None, executor_backend: str | None = None, depends_on: str | None = None, isolated_worktree: bool = False, setup_commands: str | None = None, teardown_commands: str | None = None, env_vars: str | None = None, worktree_boundary: str | None = None, spotlight_testing: bool = False) -> None:
         now = utcnow_iso()
         with connect(self.db_path) as conn:
             conn.execute(
@@ -50,9 +50,9 @@ class TaskRepository:
                   last_heartbeat_at, last_workspace_activity_at, client_idempotency_key, executor_backend,
                   depends_on, isolated_worktree, setup_commands, teardown_commands, env_vars, worktree_boundary,
                   spotlight_testing, completion_policy, terminal_source, is_approved
-                ) VALUES (?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
+                ) VALUES (?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'direct_commit', NULL, 0)
                 """,
-                (task_id, repo_path, now, now, now, client_idempotency_key, executor_backend, depends_on, 1 if isolated_worktree else 0, setup_commands, teardown_commands, env_vars, worktree_boundary, 1 if spotlight_testing else 0, completion_policy),
+                (task_id, repo_path, now, now, now, client_idempotency_key, executor_backend, depends_on, 1 if isolated_worktree else 0, setup_commands, teardown_commands, env_vars, worktree_boundary, 1 if spotlight_testing else 0),
             )
             conn.commit()
 

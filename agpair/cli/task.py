@@ -399,7 +399,6 @@ def start_task(
     env_vars: str | None = typer.Option(None, "--env-vars", help="JSON object of environment overrides (e.g. PORT) for this task's worktree."),
     worktree_boundary: str | None = typer.Option(None, "--worktree-boundary", help="Declared worktree boundary path/label for this task."),
     spotlight_testing: bool = typer.Option(False, "--spotlight-testing", help="Declare intent to prefer localized/spotlight tests over full-suite runs."),
-    completion_policy: str = typer.Option("direct_commit", "--completion-policy", help="Completion policy: direct_commit or review_then_commit."),
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
@@ -428,14 +427,6 @@ def start_task(
         backend_to_store = None
     else:
         raise typer.BadParameter("Invalid --executor. Allowed values are 'antigravity', 'codex', or 'gemini'.")
-
-    if completion_policy == "review_then_commit" and is_local_cli_backend(backend_to_store):
-        typer.echo(
-            f"Refused: completion_policy={completion_policy} is not supported for local executor {executor}. "
-            "Use antigravity or direct_commit.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
 
     tasks = TaskRepository(paths.db_path)
     journal = JournalRepository(paths.db_path)
@@ -471,7 +462,6 @@ def start_task(
             env_vars=env_vars,
             worktree_boundary=worktree_boundary,
             spotlight_testing=spotlight_testing,
-            completion_policy=completion_policy,
         )
     except sqlite3.IntegrityError:
         if not idempotency_key:

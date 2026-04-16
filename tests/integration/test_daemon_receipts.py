@@ -27,10 +27,10 @@ def make_paths(tmp_path: Path) -> AppPaths:
     return AppPaths.from_root(tmp_path / ".agpair")
 
 
-def seed_task(tmp_path: Path, task_id: str = "TASK-1", completion_policy: str = "direct_commit") -> AppPaths:
+def seed_task(tmp_path: Path, task_id: str = "TASK-1") -> AppPaths:
     paths = make_paths(tmp_path)
     ensure_database(paths.db_path)
-    TaskRepository(paths.db_path).create_task(task_id=task_id, repo_path="/tmp/repo", completion_policy=completion_policy)
+    TaskRepository(paths.db_path).create_task(task_id=task_id, repo_path="/tmp/repo")
     return paths
 
 
@@ -58,31 +58,6 @@ def test_daemon_ingests_ack_and_updates_session_mapping(tmp_path: Path) -> None:
     rows = JournalRepository(paths.db_path).tail("TASK-1", limit=2)
     assert rows[0].event == "acked"
     assert "session-123" in rows[0].body
-
-
-def test_daemon_ingests_evidence_pack_marks_task_ready(tmp_path: Path) -> None:
-    from agpair.daemon.loop import run_once
-
-    paths = seed_task(tmp_path, completion_policy="review_then_commit")
-    repo = TaskRepository(paths.db_path)
-    repo.mark_acked(task_id="TASK-1", session_id="session-123")
-    bus = FakePullBus(
-        [
-            {
-                "id": 2,
-                "task_id": "TASK-1",
-                "status": "EVIDENCE_PACK",
-                "body": "git diff --stat\n 1 file changed",
-            }
-        ]
-    )
-
-    run_once(paths, now=datetime(2026, 3, 21, 12, 1, tzinfo=UTC), bus=bus)
-
-    task = repo.get_task("TASK-1")
-    assert task is not None
-    assert task.phase == "evidence_ready"
-    assert task.last_receipt_id == "2"
 
 
 def test_daemon_accepts_colon_space_session_id_format(tmp_path: Path) -> None:

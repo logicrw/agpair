@@ -40,7 +40,7 @@ def seed_task(tmp_path: Path, task_id: str = "TASK-1", repo_path: str = "/tmp/re
     paths = make_paths(tmp_path)
     ensure_database(paths.db_path)
     TaskRepository(paths.db_path).create_task(
-        task_id=task_id, repo_path=repo_path, completion_policy="direct_commit"
+        task_id=task_id, repo_path=repo_path
     )
     return paths
 
@@ -157,7 +157,7 @@ def test_repo_evidence_rejects_historical_commits(tmp_path: Path) -> None:
     ensure_database(paths.db_path)
     tasks_repo = TaskRepository(paths.db_path)
     tasks_repo.create_task(
-        task_id="TASK-HISTORY-1", repo_path=str(repo), completion_policy="direct_commit"
+        task_id="TASK-HISTORY-1", repo_path=str(repo)
     )
     tasks_repo.mark_acked(task_id="TASK-HISTORY-1", session_id="session-new")
 
@@ -285,7 +285,7 @@ def test_retry_stale_commit_does_not_close_new_attempt(tmp_path: Path) -> None:
     ensure_database(paths.db_path)
     tasks_repo = TaskRepository(paths.db_path)
     tasks_repo.create_task(
-        task_id="TASK-RETRY-STALE", repo_path=str(repo), completion_policy="direct_commit"
+        task_id="TASK-RETRY-STALE", repo_path=str(repo)
     )
     tasks_repo.mark_acked(task_id="TASK-RETRY-STALE", session_id="session-1")
 
@@ -361,7 +361,7 @@ def test_side_branch_commit_does_not_close_main_task(tmp_path: Path) -> None:
     ensure_database(paths.db_path)
     tasks_repo = TaskRepository(paths.db_path)
     tasks_repo.create_task(
-        task_id="TASK-SIDE-1", repo_path=str(repo), completion_policy="direct_commit"
+        task_id="TASK-SIDE-1", repo_path=str(repo)
     )
     tasks_repo.mark_acked(task_id="TASK-SIDE-1", session_id="session-main")
 

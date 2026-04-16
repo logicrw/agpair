@@ -198,11 +198,6 @@ def auto_close_evidence_ready_tasks(
         if task.task_id in excluded:
             continue
 
-        # Only direct_commit tasks can be auto-closed from acked phase.
-        # review_then_commit tasks must go through evidence_ready first.
-        if task.phase == "acked" and task.completion_policy != "direct_commit":
-            continue
-
         # Use last_activity_at as the attempt-level time anchor (not created_at).
         # last_activity_at is reset by apply_retry_dispatch() and mark_acked(),
         # so it reflects when the CURRENT attempt started, not when the task
@@ -352,11 +347,6 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 if current_task and current_task.antigravity_session_id:
                     _cleanup_local_cli_session(tasks, current_task)
             elif status == messages.COMMITTED:
-                policy = current_task.completion_policy if current_task else "direct_commit"
-                is_approved = current_task.is_approved if current_task else False
-                if policy == "review_then_commit" and not is_approved:
-                    journal.append(task_id, "daemon", "policy_rejection", f"COMMITTED not permitted for completion_policy={policy} before approval.", "invalid")
-                    continue
                 tasks.mark_committed(task_id=task_id, last_receipt_id=message_id, terminal_source="receipt")
                 journal.append(task_id, "daemon", "committed", journal_body)
                 if current_task and current_task.antigravity_session_id:
