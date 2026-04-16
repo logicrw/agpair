@@ -149,17 +149,6 @@ def _try_inline_poll(
             journal_body = json.dumps(receipt, ensure_ascii=False)
 
             if status == messages.EVIDENCE_PACK:
-                # Same policy check as daemon
-                policy = current_task.completion_policy or "direct_commit"
-                if policy == "direct_commit":
-                    journal.append(
-                        current_task.task_id,
-                        "wait",
-                        "policy_rejection",
-                        f"EVIDENCE_PACK not permitted for completion_policy={policy}",
-                        "invalid",
-                    )
-                    return
                 tasks.mark_evidence_ready(task_id=current_task.task_id, last_receipt_id=message_id)
                 journal.append(current_task.task_id, "wait", "inline_poll_closed", journal_body)
             elif status == messages.BLOCKED:

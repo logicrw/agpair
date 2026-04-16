@@ -111,9 +111,9 @@ def test_poll_blocks_success_exit_without_commit_when_commit_evidence_available(
     (tmp_path / "rc.txt").write_text("0", encoding="utf-8")
     (tmp_path / "last_msg.txt").write_text("No changes needed.", encoding="utf-8")
 
-    with mock.patch("agpair.executors.local_cli._git_head", return_value="abc123"), \
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=False), \
+         mock.patch("agpair.executors.local_cli._git_head", return_value="abc123"), \
          mock.patch("agpair.executors.local_cli._git_status_porcelain", return_value=""), \
-         mock.patch.object(executor, "_ensure_process_dead", return_value=None), \
          mock.patch.object(executor, "_clean_git_locks"):
         state = executor.poll("TASK-LOCAL-NOCOMMIT", str(tmp_path))
 
@@ -158,7 +158,8 @@ def test_poll_blocks_success_exit_without_commit_in_repo_without_baseline_head(t
     (tmp_path / "rc.txt").write_text("0", encoding="utf-8")
     (tmp_path / "last_msg.txt").write_text("No changes needed.", encoding="utf-8")
 
-    with mock.patch("agpair.executors.local_cli._git_head", return_value=None), \
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=False), \
+         mock.patch("agpair.executors.local_cli._git_head", return_value=None), \
          mock.patch("agpair.executors.local_cli._git_status_porcelain", return_value=""):
         state = executor.poll("TASK-LOCAL-EMPTY-REPO", str(tmp_path))
 
@@ -196,7 +197,8 @@ def test_poll_accepts_first_commit_in_repo_without_baseline_head_when_task_id_ma
     (tmp_path / "rc.txt").write_text("0", encoding="utf-8")
     (tmp_path / "last_msg.txt").write_text("Committed first change.", encoding="utf-8")
 
-    with mock.patch("agpair.executors.local_cli._git_head", return_value="def456"), \
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=False), \
+         mock.patch("agpair.executors.local_cli._git_head", return_value="def456"), \
          mock.patch("agpair.executors.local_cli._git_log_grep_task_id", return_value=True):
         state = executor.poll("TASK-FIRST-COMMIT", str(tmp_path))
 
