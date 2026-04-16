@@ -10,15 +10,21 @@ Waiter state is persisted to the ``waiters`` table so that other processes
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
+import typing
 from dataclasses import dataclass
 from pathlib import Path
 
 import typer
 
+from agpair import terminal_receipts
+from agpair.executors import get_executor, is_local_cli_backend
+from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
 from agpair.storage.waiters import WaiterRepository
+from agpair.transport import messages
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -105,6 +111,85 @@ def is_watchdog_triggered(
     return not has_fresh_heartbeat and not has_fresh_workspace
 
 
+def _try_inline_poll(
+    tasks: TaskRepository,
+    task: object,
+    journal: JournalRepository,
+) -> None:
+    """Attempt an inline executor poll for acked local CLI tasks.
+
+    This allows the wait loop to detect task completion and transition
+    state without depending on the background daemon.
+    """
+    # task is a TaskRecord
+    from agpair.models import TaskRecord
+    current_task = typing.cast(TaskRecord, task)
+
+    if not current_task.antigravity_session_id or not is_local_cli_backend(current_task.executor_backend):
+        return
+
+    try:
+        executor = get_executor(current_task.executor_backend)
+        if not executor:
+            return
+
+        state = executor.poll(
+            current_task.task_id,
+            current_task.antigravity_session_id,
+            attempt_no=current_task.attempt_no,
+        )
+
+        if state and state.is_done:
+            receipt = state.receipt or {}
+            status = receipt.get("status", messages.BLOCKED)
+            message_id = f"inline-{current_task.executor_backend}-{current_task.task_id}-{current_task.attempt_no}-done"
+
+            # Parse for consistent journal formatting
+            structured = terminal_receipts.validate_structured_receipt_dict(receipt)
+            journal_body = json.dumps(receipt, ensure_ascii=False)
+
+            if status == messages.EVIDENCE_PACK:
+                # Same policy check as daemon
+                policy = current_task.completion_policy or "direct_commit"
+                if policy == "direct_commit":
+                    journal.append(
+                        current_task.task_id,
+                        "wait",
+                        "policy_rejection",
+                        f"EVIDENCE_PACK not permitted for completion_policy={policy}",
+                        "invalid",
+                    )
+                    return
+                tasks.mark_evidence_ready(task_id=current_task.task_id, last_receipt_id=message_id)
+                journal.append(current_task.task_id, "wait", "inline_poll_closed", journal_body)
+            elif status == messages.BLOCKED:
+                reason = receipt.get("summary") or receipt.get("message") or "blocked"
+                if structured:
+                    reason = terminal_receipts.blocked_reason_from_receipt(structured, reason)
+                tasks.mark_blocked(task_id=current_task.task_id, reason=reason)
+                journal.append(current_task.task_id, "wait", "inline_poll_closed", journal_body)
+            elif status == messages.COMMITTED:
+                tasks.mark_committed(
+                    task_id=current_task.task_id,
+                    last_receipt_id=message_id,
+                    terminal_source="inline_poll",
+                )
+                journal.append(current_task.task_id, "wait", "inline_poll_closed", journal_body)
+
+            # Cleanup artifacts immediately
+            executor.cleanup(current_task.antigravity_session_id)
+            tasks.clear_session_id(task_id=current_task.task_id)
+
+    except Exception as exc:
+        journal.append(
+            current_task.task_id,
+            "wait",
+            "inline_poll_error",
+            f"Transient inline poll failure: {exc}",
+            "warning",
+        )
+
+
 def wait_for_terminal_phase(
     db_path: Path,
     task_id: str,
@@ -156,6 +241,7 @@ def wait_for_terminal_phase(
     utcnow_fn = _utcnow or (lambda: datetime.now(UTC))
     tasks = TaskRepository(db_path)
     waiters = WaiterRepository(db_path)
+    journal = JournalRepository(db_path)
     deadline = clock.time() + timeout_seconds  # type: ignore[union-attr]
 
     # --- Register waiter ---------------------------------------------------
@@ -175,6 +261,17 @@ def wait_for_terminal_phase(
                 if waiter:
                     waiters.finalize(waiter.waiter_id, outcome=f"phase:{current_phase}")
                 return WaitResult(phase=current_phase, timed_out=False)
+
+            # --- Inline executor poll (daemon-free close) ---
+            if current_phase == "acked" and task and task.antigravity_session_id:
+                _try_inline_poll(tasks, task, journal)
+                # Re-check phase after potential state transition
+                task = tasks.get_task(task_id)
+                current_phase = task.phase if task else "unknown"
+                if current_phase in terminal_phases:
+                    if waiter:
+                        waiters.finalize(waiter.waiter_id, outcome=f"phase:{current_phase}")
+                    return WaitResult(phase=current_phase, timed_out=False)
 
             if is_watchdog_triggered(task, heartbeat_silence_seconds, utcnow_fn):
                 if waiter:
