@@ -257,11 +257,26 @@ agpair claude hook precompact
 - `SessionStart` hook → `agpair claude hook session-start`
 - `PreCompact` hook → `agpair claude hook precompact`
 
+配置管理参数：
+
+- 默认行为：只打印这段受 AGPair 管理的 JSON 片段
+- `--install` / `--merge`：把 AGPair 管理片段写入 Claude Code settings
+- `--scope project|user`：选择当前 repo 下的 `.claude/settings.json` 或 `~/.claude/settings.json`；默认 `project`
+- `--dry-run`：只打印 unified diff，不写盘
+- `--uninstall`：只移除 AGPair 自己管理的条目
+- `--force`：在 `statusLine`、`hooks.SessionStart`、`hooks.PreCompact` 冲突时显式覆盖
+
+安全约束：
+
+- 遇到非 AGPair 管理的 `statusLine`，默认拒绝覆盖，除非显式 `--force`
+- 遇到 `SessionStart` / `PreCompact` 中的未知 hook，默认拒绝做“智能 merge”；要么报错，要么在 `--force` 下整段替换
+- `--uninstall` 只移除 AGPair 自己的条目，不碰无关配置
+
 设计取舍：
 
 - `statusline` 会读取 Claude Code 通过 stdin 传来的 JSON，解析当前 repo / worktree，并输出简短 AGPair 状态。
 - `session-start` 会给当前 repo 注入一段很短的 AGPair 提示上下文，提醒主控优先用 AGPair 做长流程任务编排。
-- `precompact` 会在 AGPair 任务仍处于 `acked` 或 `evidence_ready` 时阻止 compact。
+- `precompact` 只会在 AGPair 任务处于 `acked` 或 `evidence_ready` 时阻止 compact；其他可见状态可能仍显示在 status line，但不会因此拦截 compact。
 - 默认**不**提供 `InstructionsLoaded` 提示 hook，因为 Claude Code 官方把这个事件定义为 observability-only，不能可靠地做上下文提醒。
 - 默认**不**提供 `WorktreeCreate` hook，因为这个 hook 会完全替换 Claude Code 内建的 git worktree 行为，默认启用太重。
 

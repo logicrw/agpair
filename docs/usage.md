@@ -248,11 +248,26 @@ agpair claude hook precompact
 - `SessionStart` hook → `agpair claude hook session-start`
 - `PreCompact` hook → `agpair claude hook precompact`
 
+Config management flags:
+
+- default: print the managed JSON snippet only
+- `--install` / `--merge`: write the AGPair-managed fragment into Claude Code settings
+- `--scope project|user`: choose `.claude/settings.json` in the current repo or `~/.claude/settings.json`; default is `project`
+- `--dry-run`: print a unified diff without writing
+- `--uninstall`: remove only AGPair-managed entries
+- `--force`: replace conflicting `statusLine`, `hooks.SessionStart`, or `hooks.PreCompact` slots instead of aborting
+
+Safety rules:
+
+- AGPair never overwrites a foreign `statusLine` unless `--force` is passed.
+- AGPair never “smart merges” unknown hook entries inside `SessionStart` / `PreCompact`; it either aborts or replaces that event slot under `--force`.
+- Uninstall removes only AGPair-managed entries and leaves unrelated settings untouched.
+
 Notes:
 
 - `statusline` reads the Claude Code JSON payload on stdin, resolves the current repo/worktree, and prints a compact AGPair summary.
 - `session-start` injects a short reminder that AGPair is available for durable task orchestration in the current repo.
-- `precompact` blocks compaction while an AGPair task is still `acked` or `evidence_ready`.
+- `precompact` blocks compaction only while an AGPair task is `acked` or `evidence_ready`; other visible states may still appear in the status line without blocking compaction.
 - AGPair intentionally does **not** provide a default `InstructionsLoaded` reminder hook because Claude Code documents that event as observability-only.
 - AGPair intentionally does **not** provide a default `WorktreeCreate` hook because that hook replaces Claude Code’s built-in git-worktree behavior entirely.
 

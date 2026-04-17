@@ -112,6 +112,150 @@ def test_claude_config_emits_statusline_and_hook_commands() -> None:
     assert payload["hooks"]["PreCompact"][0]["hooks"][0]["command"] == "agpair claude hook precompact"
 
 
+def test_claude_config_install_writes_project_settings(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+
+    result = CliRunner().invoke(app, ["claude", "config", "--install"])
+
+    assert result.exit_code == 0
+    settings_path = repo_path / ".claude" / "settings.json"
+    payload = json.loads(settings_path.read_text())
+    assert payload["statusLine"]["command"] == "agpair claude statusline"
+    assert payload["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "agpair claude hook session-start"
+
+
+def test_claude_config_dry_run_prints_diff_without_writing(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+
+    result = CliRunner().invoke(app, ["claude", "config", "--install", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "---" in result.stdout
+    assert "+++ " in result.stdout
+    assert "agpair claude statusline" in result.stdout
+    assert not (repo_path / ".claude" / "settings.json").exists()
+
+
+def test_claude_config_install_refuses_foreign_statusline_without_force(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+    settings_dir = repo_path / ".claude"
+    settings_dir.mkdir()
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"statusLine": {"type": "command", "command": "~/.claude/custom-statusline.sh"}}, indent=2),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(app, ["claude", "config", "--install"])
+
+    assert result.exit_code == 1
+    assert "statusLine" in result.output
+    assert "manual merge" in result.output
+
+
+def test_claude_config_install_user_scope_writes_home_settings(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    home_path = tmp_path / "home"
+    home_path.mkdir()
+    monkeypatch.setenv("HOME", str(home_path))
+
+    result = CliRunner().invoke(app, ["claude", "config", "--install", "--scope", "user"])
+
+    assert result.exit_code == 0
+    settings_path = home_path / ".claude" / "settings.json"
+    payload = json.loads(settings_path.read_text())
+    assert payload["statusLine"]["command"] == "agpair claude statusline"
+
+
+def test_claude_config_install_refuses_foreign_sessionstart_hook_without_force(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+    settings_dir = repo_path / ".claude"
+    settings_dir.mkdir()
+    settings_payload = {
+        "hooks": {
+            "SessionStart": [
+                {"hooks": [{"type": "command", "command": "/tmp/custom-session-start.sh"}]}
+            ]
+        }
+    }
+    (settings_dir / "settings.json").write_text(json.dumps(settings_payload, indent=2), encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["claude", "config", "--install"])
+
+    assert result.exit_code == 1
+    assert "hooks.SessionStart" in result.output
+    assert "manual merge" in result.output
+
+
+def test_claude_config_force_replaces_conflicting_managed_slots(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+    settings_dir = repo_path / ".claude"
+    settings_dir.mkdir()
+    settings_payload = {
+        "statusLine": {"type": "command", "command": "~/.claude/custom-statusline.sh"},
+        "hooks": {
+            "SessionStart": [
+                {"hooks": [{"type": "command", "command": "/tmp/custom-session-start.sh"}]}
+            ],
+            "Notification": [
+                {"hooks": [{"type": "command", "command": "/tmp/notify-me.sh"}]}
+            ],
+        },
+    }
+    (settings_dir / "settings.json").write_text(json.dumps(settings_payload, indent=2), encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["claude", "config", "--install", "--force"])
+
+    assert result.exit_code == 0
+    updated = json.loads((settings_dir / "settings.json").read_text())
+    assert updated["statusLine"]["command"] == "agpair claude statusline"
+    assert updated["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "agpair claude hook session-start"
+    assert updated["hooks"]["Notification"][0]["hooks"][0]["command"] == "/tmp/notify-me.sh"
+
+
+def test_claude_config_uninstall_removes_only_managed_entries(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+    settings_dir = repo_path / ".claude"
+    settings_dir.mkdir()
+    settings_payload = {
+        "statusLine": {"type": "command", "command": "agpair claude statusline", "refreshInterval": 5},
+        "hooks": {
+            "SessionStart": [
+                {"hooks": [{"type": "command", "command": "agpair claude hook session-start"}]}
+            ],
+            "Notification": [
+                {"hooks": [{"type": "command", "command": "/tmp/notify-me.sh"}]}
+            ],
+        },
+    }
+    (settings_dir / "settings.json").write_text(json.dumps(settings_payload, indent=2), encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["claude", "config", "--uninstall"])
+
+    assert result.exit_code == 0
+    updated = json.loads((settings_dir / "settings.json").read_text())
+    assert "statusLine" not in updated
+    assert "SessionStart" not in updated["hooks"]
+    assert updated["hooks"]["Notification"][0]["hooks"][0]["command"] == "/tmp/notify-me.sh"
+
+
 def test_claude_session_start_hook_emits_agpair_context(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"
