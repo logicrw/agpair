@@ -230,9 +230,15 @@ agpair task status TASK-001
 ```bash
 agpair task list
 agpair task list --phase acked
+agpair task list --repo-path /绝对/仓库路径 --json
 ```
 
 适合快速看本地 SQLite 里还挂着哪些任务。
+
+现在也支持：
+
+- `--repo-path` / `--target`：只看某一个 repo 的任务
+- `--json`：输出机器可读 JSON，适合给 MCP client、status line 或 controller 端筛选逻辑直接消费
 
 ---
 

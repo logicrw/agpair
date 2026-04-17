@@ -214,6 +214,7 @@ It also waits by default unless you pass `--no-wait`.
 ```bash
 agpair task list
 agpair task list --phase acked
+agpair task list --repo-path /absolute/path/to/repo --json
 ```
 
 This is the fastest way to see what the local SQLite state still tracks. Output includes:
@@ -224,6 +225,11 @@ This is the fastest way to see what the local SQLite state still tracks. Output 
 - `retry`
 - `recommended`
 - `repo`
+
+`task list` now also supports:
+
+- `--repo-path` / `--target` to scope the listing to one repository
+- `--json` to emit machine-readable task payloads, suitable for MCP clients, status lines, or controller-side filtering
 
 ### Abandon a local task
 

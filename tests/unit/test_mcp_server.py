@@ -371,6 +371,73 @@ class TestStartTask:
         assert "--idempotency-key" not in args
         assert "--no-wait" in args
 
+    def test_supports_target_alias_without_repo_path(self, monkeypatch) -> None:
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            mcp_server, "_run_cli_text",
+            lambda args: captured.append(args) or "TASK-TARGET-1",
+        )
+
+        result = mcp_server.agpair_start_task(target="my-repo", body="Goal: target flow", wait=False)
+
+        assert result == {"ok": True, "task_id": "TASK-TARGET-1", "waited": False}
+        assert captured == [[
+            "task", "start",
+            "--target", "my-repo",
+            "--body", "Goal: target flow",
+            "--no-wait",
+        ]]
+
+    def test_accepts_structured_metadata_and_executor(self, monkeypatch, tmp_path) -> None:
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            mcp_server, "_run_cli_text",
+            lambda args: captured.append(args) or "TASK-META-1",
+        )
+
+        result = mcp_server.agpair_start_task(
+            repo_path=str(tmp_path),
+            body="Goal: orchestrate",
+            executor="codex",
+            depends_on=["TASK-A", "TASK-B"],
+            isolated_worktree=True,
+            setup_commands=["git worktree add ../wt feature-branch"],
+            teardown_commands=["git worktree remove ../wt"],
+            env_vars={"PORT": "3100", "FOO": "bar"},
+            worktree_boundary="../wt",
+            spotlight_testing=True,
+            wait=False,
+        )
+
+        assert result == {"ok": True, "task_id": "TASK-META-1", "waited": False}
+        args = captured[0]
+        assert args[:5] == ["task", "start", "--repo-path", str(tmp_path), "--body"]
+        assert "--executor" in args
+        assert args[args.index("--executor") + 1] == "codex"
+        assert json.loads(args[args.index("--depends-on") + 1]) == ["TASK-A", "TASK-B"]
+        assert "--isolated-worktree" in args
+        assert json.loads(args[args.index("--setup-commands") + 1]) == ["git worktree add ../wt feature-branch"]
+        assert json.loads(args[args.index("--teardown-commands") + 1]) == ["git worktree remove ../wt"]
+        assert json.loads(args[args.index("--env-vars") + 1]) == {"FOO": "bar", "PORT": "3100"}
+        assert args[args.index("--worktree-boundary") + 1] == "../wt"
+        assert "--spotlight-testing" in args
+
+    def test_rejects_invalid_executor_name(self, tmp_path) -> None:
+        with pytest.raises(RuntimeError, match="executor must be one of"):
+            mcp_server.agpair_start_task(
+                repo_path=str(tmp_path),
+                body="Goal: invalid executor",
+                executor="claude",
+            )
+
+    def test_rejects_repo_path_and_target_together(self, tmp_path) -> None:
+        with pytest.raises(RuntimeError, match="Specify either repo_path or target"):
+            mcp_server.agpair_start_task(
+                repo_path=str(tmp_path),
+                target="my-repo",
+                body="Goal: ambiguous locator",
+            )
+
 
 # ===================================================================
 # agpair_get_task tool
@@ -659,6 +726,78 @@ class TestRetryTask:
 
         mcp_server.agpair_retry_task(task_id="TASK-R4", body=None, wait=False)
         assert "--body" not in text_calls[0]
+
+
+# ===================================================================
+# agpair_list_tasks / inspect / doctor tools
+# ===================================================================
+
+class TestListInspectDoctorTools:
+    def test_list_tasks_supports_repo_filter_and_json(self, monkeypatch, tmp_path) -> None:
+        json_calls: list[tuple[list[str], bool]] = []
+
+        def fake_json(args, *, allow_nonzero=False):
+            json_calls.append((args, allow_nonzero))
+            return {"ok": True, "tasks": []}
+
+        monkeypatch.setattr(mcp_server, "_run_cli_json", fake_json)
+
+        result = mcp_server.agpair_list_tasks(repo_path=str(tmp_path), phase="acked", limit=5)
+
+        assert result == {"ok": True, "tasks": []}
+        assert json_calls == [([
+            "task", "list", "--json", "--limit", "5",
+            "--repo-path", str(tmp_path),
+            "--phase", "acked",
+        ], False)]
+
+    def test_list_tasks_supports_target_alias(self, monkeypatch) -> None:
+        captured: list[tuple[list[str], bool]] = []
+
+        def fake_json(args, *, allow_nonzero=False):
+            captured.append((args, allow_nonzero))
+            return {"ok": True, "tasks": []}
+
+        monkeypatch.setattr(mcp_server, "_run_cli_json", fake_json)
+        mcp_server.agpair_list_tasks(target="my-repo")
+
+        assert captured == [([
+            "task", "list", "--json", "--limit", "20", "--target", "my-repo",
+        ], False)]
+
+    def test_inspect_repo_requires_locator(self) -> None:
+        with pytest.raises(RuntimeError, match="Either repo_path or target must be provided"):
+            mcp_server.agpair_inspect_repo()
+
+    def test_inspect_repo_supports_task_id(self, monkeypatch, tmp_path) -> None:
+        captured: list[tuple[list[str], bool]] = []
+
+        def fake_json(args, *, allow_nonzero=False):
+            captured.append((args, allow_nonzero))
+            return {"repo_path": str(tmp_path), "task": None}
+
+        monkeypatch.setattr(mcp_server, "_run_cli_json", fake_json)
+        result = mcp_server.agpair_inspect_repo(repo_path=str(tmp_path), task_id="TASK-1")
+
+        assert result["repo_path"] == str(tmp_path)
+        assert captured == [([
+            "inspect", "--json", "--repo-path", str(tmp_path), "--task-id", "TASK-1",
+        ], False)]
+
+    def test_doctor_supports_optional_repo_locator_and_fresh(self, monkeypatch, tmp_path) -> None:
+        captured: list[tuple[list[str], bool]] = []
+
+        def fake_json(args, *, allow_nonzero=False):
+            captured.append((args, allow_nonzero))
+            return {"ok": True}
+
+        monkeypatch.setattr(mcp_server, "_run_cli_json", fake_json)
+        result = mcp_server.agpair_doctor(repo_path=str(tmp_path), fresh=True)
+
+        assert result == {"ok": True}
+        assert captured == [([
+            "doctor", "--repo-path", str(tmp_path), "--fresh",
+        ], False)]
 
 
 # ===================================================================

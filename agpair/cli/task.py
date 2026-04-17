@@ -595,12 +595,29 @@ def task_status(
 
 @app.command("list")
 def task_list(
+    repo_path: str | None = typer.Option(None, "--repo-path", help="Only show tasks for this repository path."),
+    target: str | None = typer.Option(None, "--target", help="Target alias (alternative to --repo-path)."),
     phase: str | None = typer.Option(None, "--phase", help="Only show tasks in this phase."),
     limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of tasks to print."),
+    json_output: bool = _JSON_OPTION,
 ) -> None:
+    from agpair.targets import resolve_repo_path
+
     paths = _paths()
     tasks = TaskRepository(paths.db_path)
-    rows = tasks.list_tasks(phase=phase, limit=limit)
+    resolved_repo_path = resolve_repo_path(repo_path, target, paths) if (repo_path or target) else None
+    rows = tasks.list_tasks(phase=phase, repo_path=resolved_repo_path, limit=limit)
+    if json_output:
+        _emit_json(
+            {
+                "ok": True,
+                "phase": phase,
+                "repo_path": resolved_repo_path,
+                "limit": limit,
+                "tasks": [build_task_payload(paths, task) for task in rows],
+            }
+        )
+        return
     if not rows:
         typer.echo("no tasks found")
         return

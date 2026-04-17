@@ -671,6 +671,42 @@ def test_task_list_can_filter_by_phase(tmp_path: Path, monkeypatch) -> None:
     assert "TASK-1" not in result.stdout
 
 
+def test_task_list_can_filter_by_repo_path(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-1", repo_path="/tmp/repo-a")
+    repo.create_task(task_id="TASK-2", repo_path="/tmp/repo-b")
+    repo.mark_acked(task_id="TASK-2", session_id="session-123")
+
+    result = CliRunner().invoke(app, ["task", "list", "--repo-path", "/tmp/repo-a"])
+
+    assert result.exit_code == 0
+    assert "TASK-1 new" in result.stdout
+    assert "TASK-2" not in result.stdout
+
+
+def test_task_list_can_emit_json_and_repo_filter(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-JSON-LIST-1", repo_path="/tmp/repo-a")
+    repo.create_task(task_id="TASK-JSON-LIST-2", repo_path="/tmp/repo-b")
+    repo.mark_acked(task_id="TASK-JSON-LIST-2", session_id="session-123")
+
+    result = CliRunner().invoke(
+        app,
+        ["task", "list", "--repo-path", "/tmp/repo-b", "--phase", "acked", "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["repo_path"] == "/tmp/repo-b"
+    assert payload["phase"] == "acked"
+    assert len(payload["tasks"]) == 1
+    assert payload["tasks"][0]["task_id"] == "TASK-JSON-LIST-2"
+    assert payload["tasks"][0]["phase"] == "acked"
+
+
 def test_task_abandon_marks_task_terminal_locally(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = make_task_repo(tmp_path)

@@ -72,6 +72,67 @@ def _run_cli_json(args: list[str], *, allow_nonzero: bool = False) -> dict[str, 
     return payload
 
 
+def _validate_repo_path(repo_path: str) -> None:
+    path = Path(repo_path)
+    if not path.is_absolute():
+        raise RuntimeError(f"repo_path must be an absolute path: {repo_path}")
+    if not path.is_dir():
+        raise RuntimeError(f"repo_path must be an existing directory: {repo_path}")
+
+
+def _append_repo_locator_args(
+    args: list[str],
+    *,
+    repo_path: str | None,
+    target: str | None,
+    require_locator: bool,
+) -> None:
+    if repo_path and target:
+        raise RuntimeError("Specify either repo_path or target, not both")
+    if repo_path is not None:
+        _validate_repo_path(repo_path)
+        args.extend(["--repo-path", repo_path])
+        return
+    if target is not None:
+        args.extend(["--target", target])
+        return
+    if require_locator:
+        raise RuntimeError("Either repo_path or target must be provided")
+
+
+def _append_start_metadata_args(
+    args: list[str],
+    *,
+    executor: str | None,
+    depends_on: list[str] | None,
+    isolated_worktree: bool,
+    setup_commands: list[str] | None,
+    teardown_commands: list[str] | None,
+    env_vars: dict[str, str] | None,
+    worktree_boundary: str | None,
+    spotlight_testing: bool,
+) -> None:
+    if executor is not None:
+        allowed = {"antigravity", "codex", "gemini"}
+        if executor not in allowed:
+            raise RuntimeError(f"executor must be one of {sorted(allowed)}")
+        args.extend(["--executor", executor])
+    if depends_on:
+        args.extend(["--depends-on", json.dumps(depends_on, ensure_ascii=False)])
+    if isolated_worktree:
+        args.append("--isolated-worktree")
+    if setup_commands:
+        args.extend(["--setup-commands", json.dumps(setup_commands, ensure_ascii=False)])
+    if teardown_commands:
+        args.extend(["--teardown-commands", json.dumps(teardown_commands, ensure_ascii=False)])
+    if env_vars:
+        args.extend(["--env-vars", json.dumps(env_vars, ensure_ascii=False, sort_keys=True)])
+    if worktree_boundary:
+        args.extend(["--worktree-boundary", worktree_boundary])
+    if spotlight_testing:
+        args.append("--spotlight-testing")
+
+
 def _extract_task_id(stdout: str) -> str:
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
     if not lines:
@@ -125,7 +186,7 @@ def _dispatch_then_maybe_wait(
 
 @mcp.tool()
 def agpair_get_task(task_id: str) -> dict[str, Any]:
-    """Get the current task state as structured JSON."""
+    """Get one task by id. Prefer this over agpair_inspect_repo when you already know the task_id."""
     return _run_cli_json(["task", "status", task_id, "--json"], allow_nonzero=True)
 
 
@@ -159,26 +220,42 @@ def agpair_get_logs(task_id: str, limit: int = 20) -> dict[str, Any]:
 
 @mcp.tool()
 def agpair_start_task(
-    repo_path: str,
     body: str,
+    repo_path: str | None = None,
+    target: str | None = None,
     task_id: str | None = None,
     idempotency_key: str | None = None,
+    executor: str | None = None,
+    depends_on: list[str] | None = None,
+    isolated_worktree: bool = False,
+    setup_commands: list[str] | None = None,
+    teardown_commands: list[str] | None = None,
+    env_vars: dict[str, str] | None = None,
+    worktree_boundary: str | None = None,
+    spotlight_testing: bool = False,
     wait: bool = False,
     interval_seconds: float = 5.0,
     timeout_seconds: float = 3600.0,
 ) -> dict[str, Any]:
     """Dispatch a new task via agpair and optionally wait for a terminal phase."""
-    path = Path(repo_path)
-    if not path.is_absolute():
-        raise RuntimeError(f"repo_path must be an absolute path: {repo_path}")
-    if not path.is_dir():
-        raise RuntimeError(f"repo_path must be an existing directory: {repo_path}")
-
-    args = ["task", "start", "--repo-path", repo_path, "--body", body]
+    args = ["task", "start"]
+    _append_repo_locator_args(args, repo_path=repo_path, target=target, require_locator=True)
+    args.extend(["--body", body])
     if task_id:
         args.extend(["--task-id", task_id])
     if idempotency_key:
         args.extend(["--idempotency-key", idempotency_key])
+    _append_start_metadata_args(
+        args,
+        executor=executor,
+        depends_on=depends_on,
+        isolated_worktree=isolated_worktree,
+        setup_commands=setup_commands,
+        teardown_commands=teardown_commands,
+        env_vars=env_vars,
+        worktree_boundary=worktree_boundary,
+        spotlight_testing=spotlight_testing,
+    )
     return _dispatch_then_maybe_wait(
         args,
         wait=wait,
@@ -250,6 +327,49 @@ def agpair_retry_task(
         interval_seconds=interval_seconds,
         timeout_seconds=timeout_seconds,
     )
+
+
+@mcp.tool()
+def agpair_list_tasks(
+    repo_path: str | None = None,
+    target: str | None = None,
+    phase: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """List tasks as structured JSON, optionally filtered by repo or phase."""
+    args = ["task", "list", "--json", "--limit", str(limit)]
+    _append_repo_locator_args(args, repo_path=repo_path, target=target, require_locator=False)
+    if phase:
+        args.extend(["--phase", phase])
+    return _run_cli_json(args)
+
+
+@mcp.tool()
+def agpair_inspect_repo(
+    repo_path: str | None = None,
+    target: str | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any]:
+    """Inspect repo-level bridge health plus the most relevant task. Use this when you need repo readiness/context, not just a known task_id."""
+    args = ["inspect", "--json"]
+    _append_repo_locator_args(args, repo_path=repo_path, target=target, require_locator=True)
+    if task_id:
+        args.extend(["--task-id", task_id])
+    return _run_cli_json(args)
+
+
+@mcp.tool()
+def agpair_doctor(
+    repo_path: str | None = None,
+    target: str | None = None,
+    fresh: bool = False,
+) -> dict[str, Any]:
+    """Run agpair doctor and return the health report JSON."""
+    args = ["doctor"]
+    _append_repo_locator_args(args, repo_path=repo_path, target=target, require_locator=False)
+    if fresh:
+        args.append("--fresh")
+    return _run_cli_json(args)
 
 
 # Seal the built-in registry so any external extensions or dynamic loads

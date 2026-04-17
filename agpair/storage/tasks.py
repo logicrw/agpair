@@ -386,19 +386,28 @@ class TaskRepository:
             (watchdog_cutoff_iso, hard_timeout_cutoff_iso, watchdog_cutoff_iso, watchdog_cutoff_iso),
         )
 
-    def list_tasks(self, *, phase: str | None = None, limit: int = 20) -> list[TaskRecord]:
-        sql = """
-        SELECT * FROM tasks
-        """
-        params: tuple[object, ...]
-        if phase is None:
-            sql += " ORDER BY updated_at DESC, task_id DESC LIMIT ?"
-            params = (limit,)
-        else:
-            sql += " WHERE phase=? ORDER BY updated_at DESC, task_id DESC LIMIT ?"
-            params = (phase, limit)
+    def list_tasks(
+        self,
+        *,
+        phase: str | None = None,
+        repo_path: str | None = None,
+        limit: int = 20,
+    ) -> list[TaskRecord]:
+        sql = "SELECT * FROM tasks"
+        where_clauses: list[str] = []
+        params: list[object] = []
+        if phase is not None:
+            where_clauses.append("phase = ?")
+            params.append(phase)
+        if repo_path is not None:
+            where_clauses.append("repo_path = ?")
+            params.append(repo_path)
+        if where_clauses:
+            sql += " WHERE " + " AND ".join(where_clauses)
+        sql += " ORDER BY updated_at DESC, task_id DESC LIMIT ?"
+        params.append(limit)
         with connect(self.db_path) as conn:
-            rows = conn.execute(sql, params).fetchall()
+            rows = conn.execute(sql, tuple(params)).fetchall()
         return [self._task_from_row(row) for row in rows]
 
     def list_local_cli_cleanup_candidates(self, *, limit: int = 100) -> list[TaskRecord]:
