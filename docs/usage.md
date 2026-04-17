@@ -231,6 +231,31 @@ This is the fastest way to see what the local SQLite state still tracks. Output 
 - `--repo-path` / `--target` to scope the listing to one repository
 - `--json` to emit machine-readable task payloads, suitable for MCP clients, status lines, or controller-side filtering
 
+### Claude Code helpers
+
+`agpair` also ships a small Claude Code integration surface:
+
+```bash
+agpair claude config
+agpair claude statusline
+agpair claude hook session-start
+agpair claude hook precompact
+```
+
+`agpair claude config` prints a ready-to-paste Claude Code settings snippet wiring:
+
+- `statusLine.command` → `agpair claude statusline`
+- `SessionStart` hook → `agpair claude hook session-start`
+- `PreCompact` hook → `agpair claude hook precompact`
+
+Notes:
+
+- `statusline` reads the Claude Code JSON payload on stdin, resolves the current repo/worktree, and prints a compact AGPair summary.
+- `session-start` injects a short reminder that AGPair is available for durable task orchestration in the current repo.
+- `precompact` blocks compaction while an AGPair task is still `acked` or `evidence_ready`.
+- AGPair intentionally does **not** provide a default `InstructionsLoaded` reminder hook because Claude Code documents that event as observability-only.
+- AGPair intentionally does **not** provide a default `WorktreeCreate` hook because that hook replaces Claude Code’s built-in git-worktree behavior entirely.
+
 ### Abandon a local task
 
 ```bash

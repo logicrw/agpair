@@ -199,6 +199,7 @@ claude mcp add --transport stdio --scope project agpair -- agpair-mcp
   - `worktree_boundary`
   - `spotlight_testing`
 - 新增 `agpair_list_tasks` / `agpair_inspect_repo` / `agpair_doctor`
+- 新增 `agpair claude config` / `agpair claude statusline` / `agpair claude hook session-start` / `agpair claude hook precompact`
 
 #### B. 把 `task list` 变成机器可读、可按 repo 收敛
 
@@ -217,6 +218,11 @@ claude mcp add --transport stdio --scope project agpair -- agpair-mcp
 
 #### C. 官方 Claude Code status line 集成
 
+已完成第一版：
+
+- `agpair claude statusline`
+- `agpair claude config` 会吐出可直接接到 Claude Code `statusLine` 的 settings 片段
+
 建议做法：
 
 - 用 Claude Code 的 `statusLine` 命令脚本读取 stdin JSON
@@ -231,6 +237,11 @@ claude mcp add --transport stdio --scope project agpair -- agpair-mcp
 
 #### D. 用 Monitor tool 绑定 `agpair task watch --json`
 
+当前状态：
+
+- `skills/agpair/SKILL.md` 已把 `Monitor("agpair task watch <TASK_ID> --json")` 作为标准动作
+- `agpair claude hook session-start` 会把这条建议以简短上下文注入 Claude Code
+
 建议做法：
 
 - Claude Code dispatch 完 AGPair 任务后
@@ -241,12 +252,13 @@ claude mcp add --transport stdio --scope project agpair -- agpair-mcp
 
 #### E. 用 hooks 做轻量自动化，而不是重自动编排
 
-优先级较高但不应一次做太大：
+当前实现取舍：
 
-- `InstructionsLoaded`：自动提醒当前 repo 已启用 AGPair 协议
-- `TaskCreated`：把 Claude Code 原生任务与 AGPair task id 关联
-- `WorktreeCreate`：自动写入 `worktree_boundary`
-- `PreCompact`：在 AGPair 仍有高风险活任务时阻止无脑 compact
+- 已落地 `SessionStart`：实际承担“提醒当前 repo 已启用 AGPair 协议”的职责
+- 已落地 `PreCompact`：有活任务时阻止 compact
+- 暂不默认落地 `InstructionsLoaded`：官方定义上只能做 observability，不能稳定注入提醒
+- 暂不默认落地 `WorktreeCreate`：该 hook 会完全替换 Claude Code 内建 git worktree 行为，默认太重
+- 暂不默认落地 `TaskCreated` → AGPair 映射：当前官方 hook 输入不足以安全建立原生 task 与 AGPair task 的稳定映射
 
 ### 暂时不要急着做
 
@@ -269,8 +281,8 @@ claude mcp add --transport stdio --scope project agpair -- agpair-mcp
 ### P1
 
 - 增加官方 Claude Code MCP 配置示例
-- 增加 status line 示例脚本
-- 在 skill 中明确推荐 `Monitor(agpair task watch --json ...)`
+- 让 `agpair claude config` 支持直接落盘到项目 `.claude/settings.json` 或输出 merge patch
+- 在 skill 中继续强化 `Monitor(agpair task watch --json ...)` 的默认使用路径
 
 ### P2
 

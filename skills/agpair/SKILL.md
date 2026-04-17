@@ -39,6 +39,8 @@ Copy and check off these items in your scratchpad during execution:
 
 Use Claude Code's `Monitor` tool for all executors. The `watch --json` command only outputs when state changes, so token cost is minimal.
 
+If the repo has `agpair claude statusline` or the AGPair SessionStart hook configured, treat those as passive hints only. They do **not** replace the Monitor attachment after dispatch.
+
 ```
 Monitor(
   description="Watch AGPair task <TASK_ID>",

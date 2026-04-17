@@ -240,6 +240,31 @@ agpair task list --repo-path /绝对/仓库路径 --json
 - `--repo-path` / `--target`：只看某一个 repo 的任务
 - `--json`：输出机器可读 JSON，适合给 MCP client、status line 或 controller 端筛选逻辑直接消费
 
+## 6.1 Claude Code 辅助命令
+
+`agpair` 现在还带了一组面向 Claude Code 的轻量集成命令：
+
+```bash
+agpair claude config
+agpair claude statusline
+agpair claude hook session-start
+agpair claude hook precompact
+```
+
+`agpair claude config` 会直接输出一段可粘贴到 Claude Code `settings.json` 的配置，默认接好：
+
+- `statusLine.command` → `agpair claude statusline`
+- `SessionStart` hook → `agpair claude hook session-start`
+- `PreCompact` hook → `agpair claude hook precompact`
+
+设计取舍：
+
+- `statusline` 会读取 Claude Code 通过 stdin 传来的 JSON，解析当前 repo / worktree，并输出简短 AGPair 状态。
+- `session-start` 会给当前 repo 注入一段很短的 AGPair 提示上下文，提醒主控优先用 AGPair 做长流程任务编排。
+- `precompact` 会在 AGPair 任务仍处于 `acked` 或 `evidence_ready` 时阻止 compact。
+- 默认**不**提供 `InstructionsLoaded` 提示 hook，因为 Claude Code 官方把这个事件定义为 observability-only，不能可靠地做上下文提醒。
+- 默认**不**提供 `WorktreeCreate` hook，因为这个 hook 会完全替换 Claude Code 内建的 git worktree 行为，默认启用太重。
+
 ---
 
 ## 7. `task logs`
