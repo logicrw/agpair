@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import typer
 
+from agpair.cli.claude import app as claude_app
 from agpair.cli.daemon import app as daemon_app
 from agpair.cli.doctor import emit_doctor_json
 from agpair.cli.task import app as task_app
@@ -10,6 +11,7 @@ from agpair.targets import app as target_app
 
 app = typer.Typer(no_args_is_help=True)
 
+app.add_typer(claude_app, name="claude")
 app.add_typer(task_app, name="task")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(target_app, name="target")
