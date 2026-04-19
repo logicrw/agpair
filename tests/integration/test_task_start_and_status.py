@@ -845,6 +845,7 @@ def test_target_cli_add_resolve_list_remove(tmp_path: Path, monkeypatch) -> None
     assert payload["ok"] is True
     assert payload["target"] == "my-repo"
     assert payload["repo_path"] == str(repo_path.resolve())
+    assert payload["default_executor"] is None
 
     result = CliRunner().invoke(app, ["target", "remove", "--name", "my-repo"])
     assert result.exit_code == 0
@@ -929,6 +930,92 @@ def test_task_start_default_executor_is_antigravity(tmp_path: Path, monkeypatch)
     assert status.exit_code == 0
     payload = json.loads(status.stdout)
     assert payload["active_executor_backend"] == "antigravity"
+
+
+def test_task_start_uses_env_default_executor(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("AGPAIR_DEFAULT_EXECUTOR", "codex")
+
+    import agpair.executors.codex
+    from agpair.executors.base import DispatchResult
+    from unittest.mock import MagicMock
+
+    mock_dispatch = MagicMock(return_value=DispatchResult(session_id="mock_session"))
+    monkeypatch.setattr(agpair.executors.codex.CodexExecutor, "dispatch", mock_dispatch)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            "/tmp/repo",
+            "--body",
+            "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--task-id",
+            "TASK-EXEC-ENV-DEFAULT",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 0
+    task = make_task_repo(tmp_path).get_task("TASK-EXEC-ENV-DEFAULT")
+    assert task is not None
+    assert task.executor_backend == "codex_cli"
+
+
+def test_task_start_uses_target_default_executor(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+
+    import agpair.executors.gemini
+    from agpair.executors.base import DispatchResult
+    from unittest.mock import MagicMock
+
+    mock_dispatch = MagicMock(return_value=DispatchResult(session_id="mock_session"))
+    monkeypatch.setattr(agpair.executors.gemini.GeminiExecutor, "dispatch", mock_dispatch)
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir(parents=True, exist_ok=True)
+    add_result = CliRunner().invoke(
+        app,
+        [
+            "target",
+            "add",
+            "--name",
+            "gem-target",
+            "--repo-path",
+            str(repo_path),
+            "--default-executor",
+            "gemini",
+        ],
+    )
+    assert add_result.exit_code == 0
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--target",
+            "gem-target",
+            "--body",
+            "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--task-id",
+            "TASK-EXEC-TARGET-DEFAULT",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 0
+    task = make_task_repo(tmp_path).get_task("TASK-EXEC-TARGET-DEFAULT")
+    assert task is not None
+    assert task.executor_backend == "gemini_cli"
 
 
 def test_task_start_explicit_executor_codex(tmp_path: Path, monkeypatch) -> None:

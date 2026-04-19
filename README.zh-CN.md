@@ -185,7 +185,10 @@ CLI 在手动检查、调试、retry 和 AI 工具不可用时仍然很有价值
 
 ## 可选的 Agent Skill
 
-这个仓库还带了一份可复用的 skill，位于 [skills/agpair/SKILL.md](skills/agpair/SKILL.md)，可用于 Codex、Claude Code 等 AI 工具。
+这个仓库在 `skills/` 下带了两份可复用的 skill：
+
+- [skills/Claude/SKILL.md](skills/Claude/SKILL.md) —— 面向 Claude 的工作流
+- [skills/Codex/SKILL.md](skills/Codex/SKILL.md) —— 面向 Codex 的工作流
 
 这是对外可分发、可复用的主方案，用来教 AI 工具正确使用 `agpair`：
 
@@ -199,17 +202,62 @@ CLI 在手动检查、调试、retry 和 AI 工具不可用时仍然很有价值
 
 ```bash
 # Codex
-mkdir -p ~/.codex/skills
-ln -sfn "$PWD/skills/agpair" ~/.codex/skills/agpair
+mkdir -p ~/.codex/skills/agpair
+cp "$PWD/skills/Codex/SKILL.md" ~/.codex/skills/agpair/SKILL.md
 
 # Claude Code
-mkdir -p ~/.claude/skills
-ln -sfn "$PWD/skills/agpair" ~/.claude/skills/agpair
+mkdir -p ~/.claude/skills/agpair
+cp "$PWD/skills/Claude/SKILL.md" ~/.claude/skills/agpair/SKILL.md
 ```
 
 然后重启 AI 工具或新开一个窗口即可。
 
 这会提升 Antigravity 派活场景下的自动触发概率。如果你想要更确定地触发，prompt 里可以直接写 `use agpair`。
+
+## 默认 Executor 配置
+
+`task start` 的 executor 解析顺序是：
+
+1. 显式 `--executor`
+2. target 级 `default_executor`
+3. `AGPAIR_DEFAULT_EXECUTOR`
+4. 产品回退（`antigravity`）
+
+这是**产品层**的统一解析顺序，对所有 controller 都一样。
+
+它和各个 skill 里的**推荐策略**不是一回事：
+
+- 面向 Claude 的工作流通常推荐：
+  - 单工作区：`antigravity`
+  - 并行 / 隔离 worktree：`codex`，再 `gemini`
+- 面向 Codex 的工作流通常推荐：
+  - 单工作区：`antigravity`
+  - 并行 / 隔离 worktree：`gemini`
+  - 只有明确要求时才用 `codex` 作为 executor
+
+也就是说：
+
+- 产品层决定的是：**没有显式 `--executor` 时最终会落到谁**
+- skill 决定的是：**controller 平时应该优先选谁**
+
+示例：
+
+```bash
+export AGPAIR_DEFAULT_EXECUTOR=codex
+
+agpair target add \
+  --name my-project \
+  --repo-path /你的项目路径 \
+  --default-executor gemini
+```
+
+如果是 Codex 做主控，更常见的设置是：
+
+```bash
+export AGPAIR_DEFAULT_EXECUTOR=antigravity
+```
+
+需要并行或隔离任务时，再显式写 `--executor gemini`。
 
 ## 当前状态
 

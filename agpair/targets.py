@@ -40,12 +40,32 @@ class TargetManager:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    def add(self, name: str, repo_path: str) -> None:
+    @staticmethod
+    def _normalize_default_executor(default_executor: str | None) -> str | None:
+        if default_executor is None:
+            return None
+        normalized = default_executor.strip().lower()
+        if normalized not in {"antigravity", "codex", "gemini"}:
+            raise TargetAliasError(
+                "default-executor must be one of: antigravity, codex, gemini"
+            )
+        return normalized
+
+    def add(
+        self,
+        name: str,
+        repo_path: str,
+        default_executor: str | None = None,
+    ) -> None:
         if not re.match(r"^[a-zA-Z0-9.\-_]+$", name):
             raise TargetAliasError(f"Invalid alias name '{name}', must match [a-zA-Z0-9._-]+")
 
         data = self._read()
-        data[name] = {"repo_path": str(self._normalize_repo_path(repo_path))}
+        payload = {"repo_path": str(self._normalize_repo_path(repo_path))}
+        normalized_executor = self._normalize_default_executor(default_executor)
+        if normalized_executor is not None:
+            payload["default_executor"] = normalized_executor
+        data[name] = payload
         self._write(data)
 
     def remove(self, name: str) -> None:
@@ -56,13 +76,21 @@ class TargetManager:
         self._write(data)
 
     def resolve(self, name: str) -> str:
+        return self.get(name)["repo_path"]
+
+    def get(self, name: str) -> dict:
         data = self._read()
         if name not in data:
             raise TargetAliasError(f"Target '{name}' not found")
-        repo_path = data[name].get("repo_path")
+        entry = data[name]
+        repo_path = entry.get("repo_path")
         if not isinstance(repo_path, str) or not repo_path.strip():
             raise TargetAliasError(f"Target '{name}' has no repo_path configured")
-        return str(self._normalize_repo_path(repo_path))
+        payload = {"repo_path": str(self._normalize_repo_path(repo_path))}
+        default_executor = entry.get("default_executor")
+        if default_executor is not None:
+            payload["default_executor"] = self._normalize_default_executor(default_executor)
+        return payload
 
     def list_all(self) -> dict[str, dict]:
         return self._read()
@@ -86,11 +114,16 @@ def resolve_repo_path(repo_path: str | None, target: str | None, paths: AppPaths
 def add_target(
     name: str = typer.Option(..., "--name", help="Alias name for the target."),
     repo_path: str = typer.Option(..., "--repo-path", help="Absolute path to the repository."),
+    default_executor: str | None = typer.Option(
+        None,
+        "--default-executor",
+        help="Optional default executor for this target (antigravity, codex, gemini).",
+    ),
 ) -> None:
     paths = AppPaths.default()
     mgr = TargetManager(paths.targets_path)
     try:
-        mgr.add(name, repo_path)
+        mgr.add(name, repo_path, default_executor=default_executor)
         typer.echo(f"Added target alias '{name}' -> '{mgr.resolve(name)}'")
     except TargetAliasError as e:
         typer.echo(str(e), err=True)
@@ -146,9 +179,21 @@ def resolve_target(
     paths = AppPaths.default()
     mgr = TargetManager(paths.targets_path)
     try:
-        path = mgr.resolve(name)
+        payload = mgr.get(name)
+        path = payload["repo_path"]
         if json_output:
-            typer.echo(json.dumps({"ok": True, "target": name, "repo_path": path}, ensure_ascii=False, indent=2))
+            typer.echo(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "target": name,
+                        "repo_path": path,
+                        "default_executor": payload.get("default_executor"),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
         else:
             typer.echo(path)
     except TargetAliasError as e:

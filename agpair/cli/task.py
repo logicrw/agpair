@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 import json
+import os
 import sqlite3
 import subprocess
 from urllib import error, request
@@ -37,6 +38,7 @@ from agpair.storage.db import ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskNotFoundError, TaskRepository
 from agpair.storage.waiters import WaiterRepository
+from agpair.targets import TargetManager
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -52,6 +54,27 @@ def _paths() -> AppPaths:
 
 def _emit_json(payload: dict) -> None:
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _configured_default_executor(*, target: str | None, paths: AppPaths) -> str | None:
+    if target:
+        try:
+            mgr = TargetManager(paths.targets_path)
+            target_payload = mgr.get(target)
+            target_executor = target_payload.get("default_executor")
+            if target_executor:
+                return target_executor
+        except Exception:
+            pass
+
+    env_executor = os.environ.get("AGPAIR_DEFAULT_EXECUTOR", "").strip().lower()
+    if env_executor:
+        if env_executor not in {"antigravity", "codex", "gemini"}:
+            raise typer.BadParameter(
+                "AGPAIR_DEFAULT_EXECUTOR must be one of: antigravity, codex, gemini"
+            )
+        return env_executor
+    return None
 
 
 def _not_found_payload(task_id: str) -> dict:
@@ -413,16 +436,21 @@ def start_task(
     if not resolved_repo_path:
         raise typer.BadParameter("Either --repo-path or --target must be provided.")
 
-    if executor == "codex":
+    selected_executor = executor or _configured_default_executor(
+        target=target,
+        paths=paths,
+    )
+
+    if selected_executor == "codex":
         exec_instance = CodexExecutor()
         backend_to_store = exec_instance.backend_id
-    elif executor == "gemini":
+    elif selected_executor == "gemini":
         exec_instance = GeminiExecutor()
         backend_to_store = exec_instance.backend_id
-    elif executor == "antigravity":
+    elif selected_executor == "antigravity":
         exec_instance = AntigravityExecutor(paths.agent_bus_bin)
         backend_to_store = exec_instance.backend_id
-    elif executor is None:
+    elif selected_executor is None:
         exec_instance = AntigravityExecutor(paths.agent_bus_bin)
         backend_to_store = None
     else:
@@ -495,11 +523,21 @@ def start_task(
 
     if dispatch_result.session_id:
         tasks.mark_acked(task_id=final_task_id, session_id=dispatch_result.session_id)
-        journal.append(final_task_id, "cli", "dispatched", f"started {executor} exec in {dispatch_result.session_id}")
+        journal.append(
+            final_task_id,
+            "cli",
+            "dispatched",
+            f"started {selected_executor or 'antigravity'} exec in {dispatch_result.session_id}",
+        )
     elif dispatch_result.message_id:
         journal.append(final_task_id, "cli", "dispatched", f"sent TASK to provider msg={dispatch_result.message_id}")
     else:
-        journal.append(final_task_id, "cli", "dispatched", f"dispatched {executor} task")
+        journal.append(
+            final_task_id,
+            "cli",
+            "dispatched",
+            f"dispatched {selected_executor or 'antigravity'} task",
+        )
 
     typer.echo(final_task_id)
 

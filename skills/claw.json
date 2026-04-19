@@ -4,7 +4,7 @@
   "description": "Bridge any AI coding agent to Antigravity executors — task dispatch, receipt tracking, stuck detection, and continue/approve/reject/retry flows",
   "author": "logicrw",
   "license": "MIT",
-  "entry": "SKILL.md",
+  "entry": "Claude/SKILL.md",
   "permissions": ["shell"],
   "tags": ["antigravity", "task-dispatch", "pair-programming", "agent-bridge", "cli"],
   "models": ["claude-*", "gpt-*", "gemini-*"],

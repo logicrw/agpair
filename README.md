@@ -178,23 +178,71 @@ The CLI is still valuable for manual inspection, debugging, retry, and recovery 
 
 ## Skill Integration
 
-This repo ships a reusable skill at [skills/agpair/SKILL.md](skills/agpair/SKILL.md) that teaches your AI tool how to use `agpair` correctly — preflight checks, blocking wait discipline, and semantic action flow.
+This repo ships reusable skills under `skills/`:
+
+- [skills/Claude/SKILL.md](skills/Claude/SKILL.md) — Claude-oriented workflow
+- [skills/Codex/SKILL.md](skills/Codex/SKILL.md) — Codex-oriented workflow
 
 Install for your tool of choice:
 
 ```bash
 # Codex
-mkdir -p ~/.codex/skills
-ln -sfn "$PWD/skills/agpair" ~/.codex/skills/agpair
+mkdir -p ~/.codex/skills/agpair
+cp "$PWD/skills/Codex/SKILL.md" ~/.codex/skills/agpair/SKILL.md
 
 # Claude Code
-mkdir -p ~/.claude/skills
-ln -sfn "$PWD/skills/agpair" ~/.claude/skills/agpair
+mkdir -p ~/.claude/skills/agpair
+cp "$PWD/skills/Claude/SKILL.md" ~/.claude/skills/agpair/SKILL.md
 ```
 
 After installing, restart or open a new window. Say `use agpair` in your prompt to trigger it explicitly.
 
-> **Other tools** (Cursor, Aider, OpenCode, etc.): copy the content of `skills/agpair/SKILL.md` into your tool's instruction file (e.g. `.cursorrules`, `AGENTS.md`).
+## Default Executor Configuration
+
+`task start` resolves the executor in this order:
+
+1. explicit `--executor`
+2. target-level `default_executor`
+3. `AGPAIR_DEFAULT_EXECUTOR`
+4. fallback (`antigravity`)
+
+This is the **product-level resolution order**. It is shared by every controller.
+
+That is different from the **recommended executor strategy** in each skill:
+
+- Claude-oriented workflows typically prefer:
+  - single-worktree: `antigravity`
+  - parallel / isolated-worktree: `codex`, then `gemini`
+- Codex-oriented workflows typically prefer:
+  - single-worktree: `antigravity`
+  - parallel / isolated-worktree: `gemini`
+  - `codex` as executor only when explicitly requested
+
+In short:
+
+- the product decides **what happens when no explicit executor is given**
+- the skill decides **what the controller should usually ask for**
+
+Examples:
+
+```bash
+export AGPAIR_DEFAULT_EXECUTOR=codex
+
+agpair target add \
+  --name my-project \
+  --repo-path /path/to/your/project \
+  --default-executor gemini
+```
+
+For a Codex-controlled workflow, a more typical setup is:
+
+```bash
+export AGPAIR_DEFAULT_EXECUTOR=antigravity
+```
+
+Then use `--executor gemini` explicitly for parallel or isolated tasks.
+
+> **Other tools** (Cursor, Aider, OpenCode, etc.): copy the content of the appropriate skill file — typically `skills/Claude/SKILL.md` or `skills/Codex/SKILL.md` — into your tool's instruction file (e.g. `.cursorrules`, `AGENTS.md`).
 
 ## Status
 
