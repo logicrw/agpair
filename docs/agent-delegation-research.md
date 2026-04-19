@@ -42,7 +42,7 @@
    - 面向 Antigravity 的垂直链路足够清晰
 
 2. 旧版研究文档方向总体正确，但存在几类问题：
-   - 把 `skills/agpair/SKILL.md` 的**操作策略**写成了产品**底层架构**
+   - 把 Claude skill（`skills/Claude/SKILL.md`）里的**操作策略**写成了产品**底层架构**
    - 部分外部协议信息已经过时
    - 几个建议本身成立，但优先级顺序不够经济
    - 几个“缺失能力”其实项目已经部分实现，不应重复设计
@@ -86,7 +86,7 @@
 
 关键含义：
 
-- “固定 60 秒轮询”是 `skills/agpair/SKILL.md` 给外部 AI 工具的**操作建议**
+- “固定 60 秒轮询”是 `skills/Claude/SKILL.md` 给外部 AI 工具的**操作建议**
 - 它不是 `agpair` CLI 或 daemon 的底层产品事实
 - 如果未来要优化等待模型，应该修改**产品层行为和接口**，不是继续放大 skill 中的 60 秒规则
 
@@ -194,7 +194,7 @@
 
 ### 2.7 Rule 5 是操作策略，不应被误写为产品事实
 
-`skills/agpair/SKILL.md` 当前推荐：
+`skills/Claude/SKILL.md` 当前推荐：
 
 1. 所有 shell 命令加 `timeout`
 2. 只做静态 / 语法检查
@@ -312,7 +312,7 @@ AG-UI 的价值主要在：
 
 具体要求：
 
-- `skills/agpair/SKILL.md` 可以继续给外部 AI 提供保守操作建议
+- `skills/Claude/SKILL.md` 可以继续给外部 AI 提供保守操作建议
 - 但产品层不得默认：
   - 永远 `--no-wait`
   - 永远 direct commit
@@ -893,7 +893,7 @@ AG-UI 的价值主要在：
 - `agpair/daemon/loop.py`
 - `companion-extension/src/services/delegationReceiptWatcher.ts`
 - `companion-extension/src/services/agentBusDelegationService.ts`
-- `skills/agpair/SKILL.md`
+- `skills/Claude/SKILL.md`
 
 #### 官方 / 一手外部来源
 
@@ -1000,4 +1000,3 @@ AG-UI 的价值主要在：
 如果你只能记住一件事，请记住：
 
 > 对 `agpair` 来说，当前最有价值的不是“再发明一个更完整的 agent protocol”，而是把已有机械链路的输出、错误、结果和重试语义做成**稳定、结构化、可验证、可被下一跳 AI 直接消费**的接口。
-
