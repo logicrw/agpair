@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import time
 from urllib import error, request
 
@@ -96,6 +97,8 @@ def _is_healthy(report: dict) -> bool:
     if report.get("repo_bridge_error"):
         return False
     if report.get("repo_bridge_warning"):
+        return False
+    if report.get("repo_git_antigravity_incompatible"):
         return False
     return True
 
@@ -209,8 +212,10 @@ def _build_repo_bridge_report(repo_path: Path) -> dict:
         chosen_marker = next((marker for marker in global_markers if marker.exists()), None)
     marker_source = "repo" if chosen_marker in repo_markers else "global" if chosen_marker in global_markers else None
     preferred_repo_marker = repo_markers[0]
+    git_worktreeconfig_conflict = _has_antigravity_incompatible_git_config(repo)
     report = {
         "repo_path": str(repo),
+        "repo_git_antigravity_incompatible": git_worktreeconfig_conflict,
         "repo_bridge_marker_path": str(preferred_repo_marker),
         "repo_bridge_marker_exists": any(marker.exists() for marker in repo_markers),
         "repo_bridge_marker_source": marker_source,
@@ -306,6 +311,11 @@ def _build_repo_bridge_report(repo_path: Path) -> dict:
         agent_bus_delegation_enabled = None
 
     warning_reasons: list[str] = []
+    if git_worktreeconfig_conflict:
+        warning_reasons.append(
+            "git extensions.worktreeConfig=true breaks Antigravity Go LS; "
+            f"run `git -C {repo} config --unset extensions.worktreeconfig`"
+        )
     if not sdk_initialized:
         warning_reasons.append("sdk_initialized=false")
     if not ls_ready:
@@ -402,6 +412,31 @@ def _fetch_bridge_health(url: str) -> tuple[dict, str | None]:
     if not isinstance(payload, dict):
         return {}, "bridge health returned non-object payload"
     return payload, None
+
+
+def _has_antigravity_incompatible_git_config(repo: Path) -> bool:
+    """Detect ``extensions.worktreeConfig=true`` in the repo git config.
+
+    Antigravity's Go language server uses a go-git dependency whose extension
+    whitelist is case-sensitive, while Git normalizes variable names to lower
+    case on read. The mismatch makes the LS reject the repository and the
+    agent window silently stops responding. A legacy ``git worktree add``
+    commonly leaves this marker behind even after the extra worktrees are
+    removed, so the check runs regardless of ``repositoryformatversion``.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "config", "--get", "extensions.worktreeConfig"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if result.returncode != 0:
+        return False
+    return result.stdout.strip().lower() == "true"
 
 
 def _read_repo_companion_metadata(repo: Path) -> tuple[Path | None, str | None, str | None]:
