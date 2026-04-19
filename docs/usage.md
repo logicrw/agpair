@@ -142,6 +142,22 @@ Current backend policy summary:
 - `codex`: CLI executor
 - `gemini`: CLI executor
 
+Executor resolution order when `--executor` is omitted:
+
+1. target-level `default_executor`
+2. `AGPAIR_DEFAULT_EXECUTOR`
+3. fallback `antigravity`
+
+Recommended controller-side defaults:
+
+- Claude Code
+  - single-worktree: `antigravity`
+  - parallel / isolated-worktree: `codex`, then `gemini`
+- Codex
+  - single-worktree: `antigravity`
+  - parallel / isolated-worktree: `gemini`
+  - `codex` as executor only when explicitly requested
+
 Local CLI approval modes can be adjusted with environment variables:
 
 - `AGPAIR_CODEX_APPROVAL_MODE=default|full_auto|bypass_all`

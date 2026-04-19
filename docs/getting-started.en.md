@@ -17,13 +17,30 @@ This guide walks you through going from zero to your first successful task dispa
 
 `agent-bus` is the local message bus that agpair uses for its Antigravity-backed execution path. It is **bundled with agpair** and installed automatically when you run `pip install -e .` — no separate download is needed.
 
-If you use `--executor codex` or `--executor gemini`, the same agpair lifecycle still applies, but the executor process is local CLI-based rather than Antigravity-session-based. This guide continues to use Antigravity examples because that path has the richest runtime surface.
+If you use `--executor codex` or `--executor gemini`, the same agpair lifecycle still applies, but the executor process is local CLI-based rather than Antigravity-session-based. This guide still uses Antigravity examples for the “single current worktree” path, because that remains the default fallback and has the richest runtime surface.
 
 Supported executor choices today are:
 
 - `antigravity`
 - `codex`
 - `gemini`
+
+Default executor resolution order:
+
+1. explicit `--executor`
+2. target-level `default_executor`
+3. `AGPAIR_DEFAULT_EXECUTOR`
+4. fallback `antigravity`
+
+Typical controller-side recommendations:
+
+- Claude Code
+  - single-worktree: `antigravity`
+  - parallel / isolated-worktree: `codex`, then `gemini`
+- Codex
+  - single-worktree: `antigravity`
+  - parallel / isolated-worktree: `gemini`
+  - use `codex` as executor only when you explicitly want a second Codex worker
 
 ### What is the Antigravity IDE?
 
@@ -193,7 +210,7 @@ In daily use, the intended flow is:
 
 1. You tell your AI agent (Codex, Claude Code, etc.) what you want in natural language
 2. The agent calls `agpair doctor`, `task start`, `task status`, etc.
-3. Antigravity executes the work
+3. The selected executor runs the work
 4. You review the results and give the next instruction
 
 The CLI exists as a manual fallback for when you need to:

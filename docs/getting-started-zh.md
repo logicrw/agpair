@@ -18,13 +18,30 @@
 
 `agent-bus` 是 agpair 在 Antigravity 执行路径中使用的本地消息总线。如果你使用 Antigravity 作为 executor，它必须在 `PATH` 中可用。它是 Antigravity 工具链的一部分。如果你使用的是 Antigravity 管理的环境，它应该已经可用。否则，请安装 Antigravity 发行版提供的 `agent-bus` 二进制文件并确保它在 `PATH` 中。目前没有独立的公开包发布。
 
-如果你使用的是 `--executor codex` 或 `--executor gemini`，agpair 的生命周期控制仍然一样，只是底层 executor 变成了本地 CLI 进程，而不是 Antigravity session。本教程后续仍以 Antigravity 示例为主，因为它的运行时表面最完整。
+如果你使用的是 `--executor codex` 或 `--executor gemini`，agpair 的生命周期控制仍然一样，只是底层 executor 变成了本地 CLI 进程，而不是 Antigravity session。本教程后续仍以 Antigravity 示例为主，因为它仍然是默认回退路径，而且运行时表面最完整。
 
 当前可选的 executor 包括：
 
 - `antigravity`
 - `codex`
 - `gemini`
+
+默认 executor 解析顺序：
+
+1. 显式 `--executor`
+2. target 级 `default_executor`
+3. `AGPAIR_DEFAULT_EXECUTOR`
+4. 产品回退 `antigravity`
+
+典型推荐策略：
+
+- Claude Code
+  - 单工作区：`antigravity`
+  - 并行 / 隔离 worktree：`codex`，再 `gemini`
+- Codex
+  - 单工作区：`antigravity`
+  - 并行 / 隔离 worktree：`gemini`
+  - 只有明确需要时才用 `codex` 作为 executor
 
 ### 什么是 Antigravity IDE？
 
@@ -194,7 +211,7 @@ agpair task abandon <TASK_ID> --reason "不再需要了"
 
 1. 你对 AI 工具（Codex、Claude Code 等）说自然语言任务
 2. 工具调用 `agpair doctor`、`task start`、`task status` 等
-3. Antigravity 执行工作
+3. 被选中的 executor 执行工作
 4. 你审核结果，给出下一步指令
 
 CLI 是手动辅助工具，适用于：

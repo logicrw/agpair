@@ -163,6 +163,22 @@ agpair task start \
 - `codex`：CLI executor
 - `gemini`：CLI executor
 
+当你省略 `--executor` 时，解析顺序是：
+
+1. target 级 `default_executor`
+2. `AGPAIR_DEFAULT_EXECUTOR`
+3. 产品回退 `antigravity`
+
+主控侧推荐默认值：
+
+- Claude Code
+  - 单工作区：`antigravity`
+  - 并行 / 隔离 worktree：`codex`，再 `gemini`
+- Codex
+  - 单工作区：`antigravity`
+  - 并行 / 隔离 worktree：`gemini`
+  - 只有明确要求时才用 `codex` 作为 executor
+
 本地 CLI 的 approval 模式可以通过环境变量调整：
 
 - `AGPAIR_CODEX_APPROVAL_MODE=default|full_auto|bypass_all`
