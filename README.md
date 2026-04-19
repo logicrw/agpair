@@ -74,7 +74,10 @@ In other words:
   - split a large plan into tasks
   - keep dispatching / watching / deciding over time
   - manage parallel work across isolated worktrees
-- **Codex** is extremely strong as an executor and short-chain reviewer, but is less natural as the long-running controller in the same workflow
+- **Codex** is a valid controller when you prefer shell-first orchestration
+  - use blocking `task start` / `task wait` for normal flows
+  - use `task watch` for background or parallel work
+  - prefer other executors unless you explicitly want a second Codex worker
 
 This is a usage recommendation, not a product limitation: `agpair` itself stays neutral and works as the lifecycle layer either way.
 

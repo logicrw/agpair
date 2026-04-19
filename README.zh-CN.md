@@ -78,7 +78,10 @@
   - 拆大任务
   - 持续派发 / 观察 / 决策
   - 在不同 worktree 上管理并行任务
-- **Codex** 很适合当 executor，或者做短链路 reviewer / implementation worker，但不如 Claude Code 那样自然地长期盯整条流程
+- **Codex** 也可以作为主控，尤其适合 shell-first 的阻塞式工作流
+  - 普通任务直接用阻塞式 `task start` / `task wait`
+  - 后台或并行任务再用 `task watch`
+  - 默认更适合调用其他 executor，而不是再起一个 Codex worker
 
 这只是使用建议，不是产品限制：`agpair` 本身仍然保持 controller-agnostic。
 

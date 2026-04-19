@@ -6,9 +6,14 @@
 
 ## 结论先行
 
-**Codex v0.121.0 不宜改为 AGPair 的主控。** 当前 Claude Code 主控 + Codex executor 的格局仍然是正确选择。本次升级确实增强了 Codex 作为 executor 接入 AGPair 的能力（主要是 MCP client 这条线），但没有解决"Codex 对话结束就结束、无法长时间等待委派任务完成"这个根本限制。
+> 更新说明（2026-04-19）：下述研究结论代表 **当时** 的判断。此后 `agpair` 已新增 Codex 专用 skill、默认 executor 配置，以及更明确的 blocking wait 工作流说明。  
+> 当前更准确的结论是：**Codex 作为 AGPair 主控已经可用，但推荐的运行方式是 shell-first 的阻塞/观察式控制，而不是复制 Claude Code 的 Monitor 风格。**
 
-建议动作：**花半天验证 + 加一节文档，不启动主控适配工程**。
+当前建议：
+
+- 如果你要的是 **Monitor-rich / 多工具并行盯盘**，Claude Code 仍然更顺手
+- 如果你要的是 **阻塞等待 + durable task state + shell-first orchestration**，Codex 现在已经可以胜任主控
+- 在 Codex 主控场景下，默认更推荐调 `antigravity` 或 `gemini` 作为 executor；只有明确需要时才再起一个 Codex worker
 
 ## Codex v0.121.0 真实升级内容
 
