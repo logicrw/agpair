@@ -111,6 +111,13 @@
 
 companion 扩展（`companion-extension/`）是一个兼容 VS Code 的扩展，运行在 [Antigravity](https://antigravity.google/) IDE 中。下面用到的 `antigravity --install-extension` 命令是 Antigravity IDE 的 CLI，用于侧载 `.vsix` 扩展，类似 VS Code 中的 `code --install-extension`。
 
+#### 可选辅助插件
+
+以下是社区第三方扩展，能消除 Antigravity 的手动点击卡点，让 agpair 派发的任务更顺畅地跑下去。与 agpair 无隶属关系，自行酌情使用。
+
+- [**Simple AGQ**](https://github.com/quitam/antigravity-auto-retry) —— agent 异常终止时自动点击 **Retry**。
+- [**Better Antigravity**](https://github.com/Kanezal/better-antigravity) —— 修复 `Always Proceed` 失效的 bug，终端命令不再需要手动点 **Run**。
+
 ## 快速开始
 
 ### 1. 安装 agpair 和 companion 扩展

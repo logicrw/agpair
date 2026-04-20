@@ -104,6 +104,13 @@ This is a usage recommendation, not a product limitation: `agpair` itself stays 
 
 The companion extension (`companion-extension/`) is a VS Code-compatible extension that runs inside the [Antigravity](https://antigravity.google/) IDE. The `antigravity --install-extension` command used below is the Antigravity IDE's CLI for sideloading `.vsix` extensions, analogous to `code --install-extension` in VS Code.
 
+#### Optional companions
+
+These third-party extensions remove manual-click friction that otherwise interrupts delegated runs. Not affiliated with agpair, use at your own discretion.
+
+- [**Simple AGQ**](https://github.com/quitam/antigravity-auto-retry) — auto-clicks **Retry** when an agent terminates.
+- [**Better Antigravity**](https://github.com/Kanezal/better-antigravity) — fixes the `Always Proceed` bug so terminal commands don't need a manual **Run** click.
+
 ## Quick Start
 
 ### 1. Install agpair and the companion extension
