@@ -1,11 +1,11 @@
 ---
 name: agpair-codex
-description: "Use when Codex is the controller and the user requests one or more coding changes that should run in another executor (Codex, Gemini, or Antigravity). Triggers: 'delegate this', 'dispatch to gemini', 'run this in antigravity', multi-task turns with >=2 independent goals, parallel worktree execution, 'agpair', 'agpair-codex'."
+description: "Use when Codex is the controller and the user requests one or more coding changes that should run in another executor (Gemini or Antigravity). Triggers: 'delegate this', 'dispatch to gemini', 'run this in antigravity', multi-task turns with >=2 independent goals, parallel worktree execution, 'agpair', 'agpair-codex'."
 ---
 
 # agpair (Codex controller)
 
-Codex acts as the controller and dispatches work to another executor (Gemini / Antigravity / a second Codex). Same-repo, same-worktree concurrent editing is **not supported** — isolation boundary is a separate repo or a separate git worktree.
+Codex is the controller and dispatches work to **Gemini** (worktree-friendly CLI executor) or **Antigravity** (current-worktree IDE executor). Codex already has built-in subagent capability for in-process delegation; do **not** dispatch agpair tasks back to a `codex` executor — use Gemini for parallel worktree work and Antigravity for single-worktree work. Same-repo, same-worktree concurrent editing is **not supported** — isolation boundary is a separate repo or a separate git worktree.
 
 ## Parallel Decision Tree
 
@@ -36,7 +36,8 @@ Resolution order: explicit `--executor` → target-level default → `AGPAIR_DEF
 From Codex as controller:
 
 - **Current worktree, focused task:** `antigravity`
-- **Parallel / isolated-worktree task:** `gemini` (preferred), then `codex` only if you explicitly want a second Codex worker
+- **Parallel / isolated-worktree task:** `gemini`
+- **Never** dispatch to `--executor codex` from this controller — for in-process work, use Codex's built-in subagent instead of round-tripping through agpair
 - **Never** dispatch a worktree task to `antigravity` — it cannot see dynamic worktrees
 
 ## Worktree workflow (default for >= 2 tasks)
@@ -149,7 +150,7 @@ Before trusting a completed task: check `agpair task status <TASK_ID> --json`, i
 |---------|---------|
 | "User gave me 4 things, I'll dispatch them one at a time" | Default is parallel worktrees. Serial only when the Decision Tree forces it. |
 | "I'll always use `--no-wait`" | Single-task control uses blocking wait. `--no-wait` is for parallel and long-running async only. |
-| "Codex is controller, default executor should be codex" | Prefer `gemini` (worktree) or `antigravity` (single). Use `codex` only when you explicitly want a second Codex worker. |
-| "Worktree task to Antigravity" | Antigravity cannot see dynamic worktrees. Use Codex / Gemini. |
+| "Codex is controller, default executor should be codex" | No. Use Gemini for worktree work, Antigravity for single-worktree work. For in-process delegation, use Codex's built-in subagent — not `agpair task start --executor codex`. |
+| "Worktree task to Antigravity" | Antigravity cannot see dynamic worktrees. Use Gemini. |
 | "Two parallel tasks editing the same file is fine" | It is not. Serialize them, or carve disjoint scopes per worktree. |
 | "Completed means safe" | Verify git evidence and tests. |
