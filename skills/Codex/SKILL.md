@@ -1,80 +1,113 @@
 ---
 name: agpair-codex
-description: "Use agpair to dispatch coding tasks from Codex to external executors. Prefer blocking waits for normal tasks, use watch for background or parallel tasks, and prefer Antigravity or Gemini as executors."
+description: "Use when Codex is the controller and the user requests one or more coding changes that should run in another executor (Codex, Gemini, or Antigravity). Triggers: 'delegate this', 'dispatch to gemini', 'run this in antigravity', multi-task turns with >=2 independent goals, parallel worktree execution, 'agpair', 'agpair-codex'."
 ---
 
-# agpair
+# agpair (Codex controller)
 
-Use `agpair` when Codex is acting as the controller and you want to dispatch work to another executor.
+Codex acts as the controller and dispatches work to another executor (Gemini / Antigravity / a second Codex). Same-repo, same-worktree concurrent editing is **not supported** — isolation boundary is a separate repo or a separate git worktree.
 
-## When to Use
+## Parallel Decision Tree
 
-Use `agpair` when:
+```
+Q1: >= 2 distinct goals this turn?
+    NO  -> single-task path
+    YES -> Q2
 
-- the task is larger than a trivial local edit
-- you want durable state outside prompt context
-- you want background / parallel / isolated-worktree execution
-- you want structured receipts and retry / inspect / watch semantics
+Q2: Do any goals touch the SAME files / modules?
+    YES -> serialize the overlapping ones, parallelize the rest
+    NO  -> Q3
 
-Do not use `agpair` when:
+Q3: Does any task depend on another's output?
+    YES -> chain via --depends-on, parallelize the independent ones
+    NO  -> one worktree per task, dispatch in parallel (DEFAULT)
+```
 
-- the fix is tiny and local
-- you still need exploratory reading before you know the task
-- the work requires constant interactive judgment mid-execution
+When the tree says parallel, dispatch all worktrees in the same controller turn. Do not start one task to "see how it goes" before launching the rest.
+
+## When to Delegate (single-task path)
+
+Delegate when the work is larger than a trivial local edit, or you want durable state, structured receipts, or background execution. Do **not** delegate when the fix is tiny and local, you still need exploratory reading, or the work needs constant interactive judgment mid-execution.
 
 ## Executor Selection
 
-Executor resolution order:
+Resolution order: explicit `--executor` → target-level default → `AGPAIR_DEFAULT_EXECUTOR` → product fallback (`antigravity`).
 
-1. explicit `--executor`
-2. target-level default executor
-3. `AGPAIR_DEFAULT_EXECUTOR`
-4. product fallback (`antigravity`)
-
-Recommended from Codex:
+From Codex as controller:
 
 - **Current worktree, focused task:** `antigravity`
-- **Parallel / isolated-worktree task:** `gemini`
-- **Use `codex` as executor only when you explicitly want another Codex worker**
+- **Parallel / isolated-worktree task:** `gemini` (preferred), then `codex` only if you explicitly want a second Codex worker
+- **Never** dispatch a worktree task to `antigravity` — it cannot see dynamic worktrees
 
-## Default Codex Workflow
+## Worktree workflow (default for >= 2 tasks)
 
-- [ ] Preflight with `agpair doctor --repo-path <path>` or `--target <alias>`
-- [ ] Write a self-contained brief
-- [ ] Dispatch with `agpair task start ... --wait` for normal tasks
-- [ ] Use `task watch` only when you intentionally go background / parallel
-- [ ] Verify git evidence and tests yourself before trusting success
-
-## Dispatch Patterns
-
-### Normal task
+### 1. Create one worktree per task (parallel)
 
 ```bash
-agpair task start \
-  --repo-path <path> \
-  --executor antigravity \
-  --body "<brief>"
+REPO=/absolute/path/to/repo
+SLUG=task-a              # short, filesystem-safe label
+BRANCH=wt/${SLUG}
+WT=${REPO}-wt/${SLUG}    # sibling directory; do NOT nest inside the main worktree
+
+git -C "$REPO" worktree add -b "$BRANCH" "$WT" HEAD
 ```
 
-`task start` waits by default, so there is no need to force `--no-wait` for ordinary Codex control flow.
+### 2. Preflight (once per session)
 
-### Parallel / isolated task
+```bash
+agpair daemon status
+agpair doctor --repo-path "$WT"
+```
+
+### 3. Dispatch in parallel
 
 ```bash
 agpair task start \
-  --repo-path <path> \
+  --repo-path "$WT" \
   --executor gemini \
   --body "<brief>" \
+  --isolated-worktree \
+  --worktree-boundary "$WT" \
   --no-wait
+```
 
+`--no-wait` is mandatory in parallel mode. For a single isolated task, the default `--wait` behavior is fine.
+
+### 4. Watch each task
+
+```bash
 agpair task watch <TASK_ID> --json
 ```
 
-Use this only when:
+Only emits on phase change, so token cost is minimal. Run one watch per `TASK_ID`.
 
-- you want to continue other work immediately
-- you have multiple independent tasks
-- the expected runtime is long enough to justify async monitoring
+### 5. Integrate back to main
+
+```bash
+git -C "$WT" log --oneline -5
+git -C "$WT" diff HEAD~1            # review before merging anything
+
+# pick ONE
+git -C "$REPO" cherry-pick $(git -C "$WT" rev-parse HEAD)
+git -C "$REPO" merge --no-ff "$BRANCH"
+```
+
+### 6. Cleanup
+
+```bash
+git -C "$REPO" worktree remove "$WT"
+git -C "$REPO" branch -d "$BRANCH"   # -D only if work was abandoned
+```
+
+If the worktree is dirty, inspect first; do not blindly `--force` removal.
+
+## Single-task dispatch
+
+```bash
+agpair task start --repo-path "$REPO" --executor antigravity --body "<brief>"
+```
+
+`task start` waits by default. Use `--no-wait` only when you want to continue Codex work immediately and the task is long enough to justify async monitoring.
 
 ## Brief Template
 
@@ -94,22 +127,29 @@ Exit criteria:
   - [suggested commit message]
 ```
 
+## Failure handling
+
+| Symptom | Action |
+|---------|--------|
+| `git worktree add` fails: branch exists | Pick a new `SLUG`; do not reuse a prior branch |
+| `git worktree add` fails: path exists | `git worktree prune`, then re-add |
+| `agpair daemon status` shows `running: false` | `agpair daemon start`, then re-dispatch |
+| Task stuck in `acked` past expected runtime | Wait for daemon detection; on `blocked`, retry next executor |
+| Task `blocked` | Stop watch. `agpair task retry <ID> --body "..."` with the next executor |
+| Two parallel tasks edit the same file | Abandon the later one; redo serially after the first lands |
+| Cherry-pick conflict in main | Resolve in main. Do **not** push the resolution back into the worktree |
+
 ## Completion Gate
 
-Before you trust a completed task:
-
-- check `agpair task status <TASK_ID> --json`
-- inspect the latest commit / diff in the executor workspace
-- run the required evidence commands yourself if correctness matters
-
-Never treat “task completed” as sufficient proof.
+Before trusting a completed task: check `agpair task status <TASK_ID> --json`, inspect `git -C <wt> log --oneline -1` and `git -C <wt> diff HEAD~1`, run the brief's evidence commands yourself, then cherry-pick / merge or hold for user review. Remove the worktree and prune the branch unless intentionally kept. Never treat "task completed" as sufficient proof.
 
 ## Anti-Patterns
 
 | Thought | Reality |
 |---------|---------|
-| "I should always use `--no-wait`" | In Codex, blocking wait is the normal path. |
-| "I need Claude Monitor semantics" | Codex can use `task watch` directly from shell. |
-| "Since I am Codex, default executor should be codex" | If Codex is the controller, prefer another executor unless you explicitly want a second Codex worker. |
-| "No need to care about executor defaults" | Codex control works best when executor choice is explicit or configured. |
-| "Completed means safe" | Always verify git evidence and tests. |
+| "User gave me 4 things, I'll dispatch them one at a time" | Default is parallel worktrees. Serial only when the Decision Tree forces it. |
+| "I'll always use `--no-wait`" | Single-task control uses blocking wait. `--no-wait` is for parallel and long-running async only. |
+| "Codex is controller, default executor should be codex" | Prefer `gemini` (worktree) or `antigravity` (single). Use `codex` only when you explicitly want a second Codex worker. |
+| "Worktree task to Antigravity" | Antigravity cannot see dynamic worktrees. Use Codex / Gemini. |
+| "Two parallel tasks editing the same file is fine" | It is not. Serialize them, or carve disjoint scopes per worktree. |
+| "Completed means safe" | Verify git evidence and tests. |
