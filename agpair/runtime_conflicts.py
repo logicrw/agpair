@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import os
+import subprocess
 
 
 class DesktopReaderLockError(RuntimeError):
@@ -36,11 +37,64 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _get_process_start_time(pid: int) -> float | None:
+    """Return the kernel-recorded start time of *pid* as epoch seconds.
+
+    Mirrors the helper in agpair.executors.local_cli; duplicated here to
+    avoid a circular import. Used to detect PID recycling so a stale lock
+    file pointing at a re-issued PID can be cleaned up safely.
+    """
+    try:
+        output = subprocess.check_output(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        if not output:
+            return None
+        from datetime import datetime
+        dt = datetime.strptime(output, "%a %b %d %H:%M:%S %Y")
+        return dt.timestamp()
+    except Exception:
+        return None
+
+
+def _coerce_float(value: object) -> float | None:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_lock_owner_alive(existing: dict) -> bool:
+    """Return True only if the lock file's recorded owner is *still* the same
+    process. Guards against PID recycling: if the recorded process_start_time
+    no longer matches the actual start time of that PID, the original owner
+    is dead and the PID has been re-issued.
+    """
+    owner_pid = _coerce_pid(existing.get("pid"))
+    if not owner_pid or not _pid_alive(owner_pid):
+        return False
+    recorded_start = _coerce_float(existing.get("process_start_time"))
+    if recorded_start is None:
+        # Legacy lock file without start_time — fall back to PID-only check.
+        return True
+    actual_start = _get_process_start_time(owner_pid)
+    if actual_start is None:
+        # ps unavailable; conservatively trust the PID liveness check.
+        return True
+    if abs(actual_start - recorded_start) > 3:
+        return False
+    return True
+
+
 def acquire_shared_desktop_reader_lock(lock_path: Path) -> dict:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
+    self_pid = os.getpid()
     payload = {
-        "pid": os.getpid(),
+        "pid": self_pid,
         "started_at": _now_iso(),
+        "process_start_time": _get_process_start_time(self_pid),
         "lock_path": str(lock_path),
         "owner": "agpair",
     }
@@ -49,13 +103,11 @@ def acquire_shared_desktop_reader_lock(lock_path: Path) -> dict:
         return payload
 
     existing = _safe_load_json(lock_path)
-    if existing:
-        owner_pid = _coerce_pid(existing.get("pid"))
-        if owner_pid and _pid_alive(owner_pid):
-            raise DesktopReaderLockError(
-                "another desktop-side receipt consumer already holds the shared lock "
-                f"(pid={owner_pid}, owner={existing.get('owner') or 'unknown'}, path={lock_path})"
-            )
+    if existing and _is_lock_owner_alive(existing):
+        raise DesktopReaderLockError(
+            "another desktop-side receipt consumer already holds the shared lock "
+            f"(pid={existing.get('pid')}, owner={existing.get('owner') or 'unknown'}, path={lock_path})"
+        )
 
     try:
         lock_path.unlink()

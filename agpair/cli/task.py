@@ -898,6 +898,10 @@ def watch_task(
     start_time = time.time()
     deadline = start_time + timeout_seconds
     last_emitted_state = None
+    # JSON consumers (LLM Monitor) re-read every event, so throttle activity-only
+    # emissions. Phase / terminal-receipt changes always emit immediately.
+    activity_throttle_seconds = 60.0
+    last_activity_emit_mono = -float("inf")
 
     if not json_output:
         typer.echo(f"Watching task {task_id} ...")
@@ -937,7 +941,26 @@ def watch_task(
             json.dumps(payload.get("terminal_receipt"), sort_keys=True) if payload.get("terminal_receipt") else None,
         )
 
-        changed = current_state != last_emitted_state
+        if last_emitted_state is None:
+            phase_or_receipt_changed = True
+            activity_changed = False
+        else:
+            phase_or_receipt_changed = (
+                current_state[0] != last_emitted_state[0]
+                or current_state[3] != last_emitted_state[3]
+            )
+            activity_changed = (
+                current_state[1] != last_emitted_state[1]
+                or current_state[2] != last_emitted_state[2]
+            )
+
+        now_mono = time.monotonic()
+        if json_output and activity_changed and not phase_or_receipt_changed:
+            activity_emit_allowed = (now_mono - last_activity_emit_mono) >= activity_throttle_seconds
+        else:
+            activity_emit_allowed = True
+
+        changed = phase_or_receipt_changed or (activity_changed and activity_emit_allowed)
 
         if changed or watchdog or timed_out or is_terminal:
             event_type = "status_update"
@@ -986,6 +1009,7 @@ def watch_task(
                     typer.echo(f"Timed out after {timeout_seconds}s.", err=True)
 
             last_emitted_state = current_state
+            last_activity_emit_mono = now_mono
 
             if is_terminal:
                 code = exit_code_for_dispatch(WaitResult(phase=current_phase, timed_out=False))

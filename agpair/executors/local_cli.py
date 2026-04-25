@@ -582,7 +582,8 @@ exit $RC
                 # Process died between _is_process_alive check and killpg.
                 return False, 128 + signal.SIGTERM
             except PermissionError:
-                logger.warning("Permission denied sending SIGTERM to pgid %d — treating as still alive", pgid)
+                if self._handle_signal_permission_error(state, pgid, "SIGTERM"):
+                    return False, 128 + signal.SIGTERM
                 return True, None
             state["termination_requested_at"] = _now_iso()
             state["termination_signal"] = "SIGTERM"
@@ -605,11 +606,45 @@ exit $RC
             # Process died between _is_process_alive check and killpg — that's fine.
             return False, 128 + signal.SIGTERM
         except PermissionError:
-            logger.warning("Permission denied sending SIGKILL to pgid %d — treating as still alive", pgid)
+            if self._handle_signal_permission_error(state, pgid, "SIGKILL"):
+                return False, 128 + signal.SIGKILL
             return True, None
         state["termination_requested_at"] = _now_iso()
         state["termination_signal"] = "SIGKILL"
         return True, 128 + signal.SIGKILL
+
+    def _handle_signal_permission_error(self, state: dict, pgid: int, signal_name: str) -> bool:
+        """Decide whether a PermissionError on killpg means the process is gone.
+
+        Returns True if the original process is no longer present (PID recycled
+        or stale-lock equivalent) and the caller should treat the group as
+        dead. Returns False if it might still be alive and the caller should
+        keep polling.
+        """
+        expected_start = state.get("process_start_time")
+        if not _is_process_alive(pgid, expected_start_time=expected_start):
+            logger.warning(
+                "PermissionError on %s to pgid %d, but liveness check confirms PID is no longer ours — treating as dead.",
+                signal_name, pgid,
+            )
+            _reap_child_process(state.get("pid"))
+            return True
+        # Still appears alive (or inconclusive); count consecutive failures so
+        # we can give up after enough retries instead of spinning forever.
+        count = int(state.get("permission_denied_count") or 0) + 1
+        state["permission_denied_count"] = count
+        if count >= 60:
+            logger.warning(
+                "PermissionError on %s to pgid %d persisted for %d polls — giving up and treating as dead.",
+                signal_name, pgid, count,
+            )
+            _reap_child_process(state.get("pid"))
+            return True
+        logger.warning(
+            "Permission denied sending %s to pgid %d — treating as still alive (count=%d).",
+            signal_name, pgid, count,
+        )
+        return False
 
     def _clean_git_locks(self, repo_path: str | None, *, started_at: str | None = None) -> None:
         """仅在确认锁文件无人持有且更可能由本任务遗留时清理 git 锁。"""
