@@ -1,42 +1,37 @@
-# Serial Task Chain — Tech Debt
+# AgPair — Tech Debt & Roadmap
 
-## Open Items
+Items deferred by explicit decision. Each has a trigger condition — when the trigger fires, the item is worth implementing.
 
-### R4: Concurrent dispatch guard (low risk, deferred)
+## R4: Concurrent dispatch CAS guard
 
-**Context**: `auto_advance_dependent_tasks` re-reads the task phase before dispatch
-to narrow the race window, but does not use a true CAS (compare-and-swap) UPDATE.
-The daemon is single-threaded, so the realistic race is with concurrent CLI `task retry`
-calls. The `mark_acked` transition check prevents DB state corruption, but the executor
-process may already have been forked.
+**Risk**: `auto_advance_dependent_tasks` re-reads task phase before dispatch but doesn't use atomic CAS. A concurrent `task retry` could cause double-dispatch.
 
-**Decision (2026-04-26)**: Accepted as low risk given single-threaded daemon and the
-re-read guard. No concurrent dispatch test written.
+**Current mitigation**: Single-threaded daemon + `mark_acked` transition check prevents DB corruption. Re-read narrows the race window.
 
-**Recommended fix**: Add a `claim_for_dispatch` method that does
-`UPDATE tasks SET phase='acked' WHERE task_id=? AND phase='new'` atomically,
-returning rowcount. Only proceed with `exec_instance.dispatch()` if rowcount == 1.
+**Recommended fix**: `UPDATE tasks SET phase='acked' WHERE task_id=? AND phase='new'` (check rowcount) before calling `dispatch()`.
+
+**Trigger**: Any report of duplicate executor processes on the same worktree.
 
 ---
 
-### S2: Store task body in tasks table instead of journal
+## S2: Store task body in tasks table
 
-**Context**: `auto_advance_dependent_tasks` retrieves the original task body from
-the journal via `_get_task_body_from_journal(journal, task_id, limit=200)`. This has
-two durability risks:
+**Risk**: `auto_advance` retrieves body from journal via `tail(limit=200)`. Journal auto-cleanup (30 days) or >200 entries could lose the body.
 
-1. Journal auto-cleanup (default 30 days) could delete the `created` entry for
-   long-deferred tasks.
-2. If a task accumulates >200 journal entries before being advanced, the body
-   lookup silently fails.
+**Current mitigation**: limit raised from 50 to 200.
 
-**Short-term mitigation (2026-04-26)**: Increased `limit` from 50 to 200.
+**Recommended fix**: Add `task_body TEXT` column — migration 14 in `db.py`, populate in `create_task()`, read in `auto_advance`.
 
-**Recommended fix**: Add `task_body TEXT` column to the `tasks` table schema.
-Populate it in `create_task()`. Read it directly in `auto_advance_dependent_tasks()`
-instead of scanning the journal. This requires:
-- Schema migration 14 in `db.py`
-- `schema.sql` column addition
-- `TaskRecord` dataclass field
-- `create_task()` parameter
-- `auto_advance_dependent_tasks()` body retrieval path
+**Trigger**: Any deferred task that fails with "no task body found in journal".
+
+---
+
+## Level 3: `--branch-from` daemon worktree creation
+
+**Context**: Currently, serial chains use a shared worktree (Level 1). For cases where A and B need isolation but B must inherit A's commits, daemon-level worktree creation from A's branch tip would be needed.
+
+**Why deferred**: Level 1 (shared worktree) covers most sequential scenarios. Adding worktree operations to the daemon increases the failure surface (worktree pruned, branch force-pushed, disk full). Better to observe real usage first.
+
+**Recommended design**: `--branch-from TASK-A` flag. Daemon resolves A's `execution_repo_path`, runs `git worktree add -b wt/<B> <new-path> <A-branch-tip>`, dispatches B in the new worktree.
+
+**Trigger**: ≥3 real cases where users need "inherit A's commits + isolated worktree for B" within a month.

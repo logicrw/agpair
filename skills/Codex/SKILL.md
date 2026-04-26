@@ -27,15 +27,25 @@ When the tree says parallel, dispatch all worktrees in the same controller turn.
 
 ## Serial Chain (auto-advance)
 
-When tasks have strict ordering (B cannot start until A's commit has landed):
+When tasks have strict ordering (B cannot start until A's commit has landed), use a **shared worktree** with `--depends-on`. The daemon auto-dispatches each step after its dependencies reach `committed`.
+
+**This is the recommended serial pattern for Codex** — Codex is one-shot and cannot maintain a Monitor loop across tasks.
+
+### Key pattern: shared worktree
+
+All tasks share **one worktree**. Auto-advance guarantees no concurrent editing.
 
 ```bash
+# Create ONE worktree for the chain
+WT=${REPO}-wt/chain
+git -C "$REPO" worktree add -b wt/chain "$WT" HEAD
+
 # Step A: dispatch immediately
-agpair task start --repo-path "$WT_A" --executor gemini \
+agpair task start --repo-path "$WT" --executor codex \
   --body "<brief-A>" --task-id TASK-A --no-wait
 
-# Step B: deferred — daemon auto-dispatches when TASK-A commits
-agpair task start --repo-path "$WT_B" --executor gemini \
+# Step B: same worktree, deferred until A commits
+agpair task start --repo-path "$WT" --executor codex \
   --body "<brief-B>" --task-id TASK-B \
   --depends-on '["TASK-A"]' --no-wait
 
@@ -43,21 +53,38 @@ agpair task start --repo-path "$WT_B" --executor gemini \
 agpair task watch TASK-B --json
 ```
 
-Tasks with unsatisfied `--depends-on` are created but **not dispatched**. The daemon checks each tick and auto-dispatches when all dependencies reach `committed`.
+Why shared worktree: **B sees A's commits.** Separate worktrees would start from the old HEAD and miss A's changes.
 
-**This is the recommended serial pattern for Codex** — Codex is one-shot and cannot maintain a Monitor loop across tasks. Pre-define the chain and let the daemon advance it.
+### Key pattern: goal-oriented briefs
 
-Use serial chains when: task bodies are fully defined upfront. Use Codex built-in subagent when: next step depends on previous output.
+Briefs must reference the **current repo state**, not the previous task's specific changes. The executor AI reads the code.
+
+❌ Bad — requires knowing what A changed:
+```
+Add user_role field to the API endpoint response
+```
+
+✅ Good — works regardless of A's specific output:
+```
+Goal:         Make API layer consistent with current schema definitions
+Non-goals:    Do not modify schema files — updated by prior task
+Scope:        api/routes.py, api/models.py
+Required changes:
+  - Read models/schema.py for current field definitions
+  - Align all API endpoints with schema
+Required evidence: python -m pytest tests/api/ -v
+Exit criteria: API layer reflects current schema; all tests pass
+```
 
 ### Mixed parallel + serial
 
 ```bash
-# A and B in parallel
-agpair task start ... --task-id TASK-A --no-wait
-agpair task start ... --task-id TASK-B --no-wait
+# A and B in parallel (separate worktrees)
+agpair task start --repo-path "$WT_A" ... --task-id TASK-A --no-wait
+agpair task start --repo-path "$WT_B" ... --task-id TASK-B --no-wait
 
 # C waits for both
-agpair task start ... --task-id TASK-C \
+agpair task start --repo-path "$REPO" ... --task-id TASK-C \
   --depends-on '["TASK-A", "TASK-B"]' --no-wait
 ```
 

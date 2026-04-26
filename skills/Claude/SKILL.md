@@ -39,64 +39,122 @@ When the tree says parallel, dispatch all worktrees in the same assistant turn a
 
 ## Serial Chain (auto-advance)
 
-When tasks have strict ordering (B cannot start until A's commit has landed):
+When tasks have strict ordering (B cannot start until A's commit has landed), use a **shared worktree** with `--depends-on`. The daemon auto-dispatches each step after its dependencies reach `committed`.
 
-### Usage
+### Key pattern: shared worktree
+
+All tasks in the chain share **one worktree**. This is safe because auto-advance guarantees B only starts after A commits — no concurrent editing.
 
 ```bash
+# Create ONE worktree for the entire chain
+WT=${REPO}-wt/chain
+git -C "$REPO" worktree add -b wt/chain "$WT" HEAD
+
 # Step A: dispatch immediately
-agpair task start --repo-path "$WT_A" --executor codex \
+agpair task start --repo-path "$WT" --executor codex \
   --body "<brief-A>" --task-id TASK-A --no-wait
 
-# Step B: deferred — daemon will auto-dispatch when TASK-A reaches committed
-agpair task start --repo-path "$WT_B" --executor codex \
+# Step B: same worktree, deferred until A commits
+agpair task start --repo-path "$WT" --executor codex \
   --body "<brief-B>" --task-id TASK-B \
   --depends-on '["TASK-A"]' --no-wait
 
-# Step C: depends on B
-agpair task start --repo-path "$REPO" --executor gemini \
+# Step C: same worktree, deferred until B commits
+agpair task start --repo-path "$WT" --executor gemini \
   --body "<brief-C>" --task-id TASK-C \
   --depends-on '["TASK-B"]' --no-wait
 ```
 
-Tasks with unsatisfied `--depends-on` are created but **not dispatched**. The daemon checks each tick and auto-dispatches when all dependencies reach `committed`.
+Why shared worktree matters: **B sees A's commits.** If A updates a schema, B can read the updated schema from disk. If they used separate worktrees, B would start from the old HEAD and miss A's changes.
 
-### When to use serial chains
+### Key pattern: goal-oriented briefs
 
-- Task bodies are fully defined upfront (no need to adjust based on previous results)
-- Controller does not need to inspect intermediate results
-- You want fire-and-forget execution of a multi-step plan
+Serial chain briefs must be **goal-oriented** (reference the current repo state) not **diff-oriented** (reference the previous task's specific output). The executor is an AI — it can read the code.
 
-### When NOT to use — use manual Monitor loop instead
+❌ Bad (diff-oriented — can't write before A runs):
+```
+Required changes:
+  - Add user_role field to UserSchema in models/schema.py
+  - Update /api/users endpoint to accept the new field
+```
 
-- Next step's body depends on previous step's output
-- You need to review or adjust between steps
-- The chain may need human judgment at decision points
+✅ Good (goal-oriented — works regardless of what A changed):
+```
+Goal:         Make API layer consistent with current schema definitions
+Non-goals:    Do not modify schema files — they were updated by a prior task
+Scope:        api/routes.py, api/models.py, api/serializers.py
+Invariants:   All existing API tests must pass
+Required changes:
+  - Read models/schema.py to find the current field definitions
+  - Ensure every API endpoint's request/response model includes all schema fields
+Required evidence:
+  - python -m pytest tests/api/ -v
+Exit criteria:
+  - API layer fully reflects current schema; all tests pass
+```
+
+### Worked example: schema → API → tests
+
+```bash
+WT=${REPO}-wt/schema-update
+git -C "$REPO" worktree add -b wt/schema-update "$WT" HEAD
+
+agpair task start --repo-path "$WT" --executor codex --task-id CHAIN-1 \
+  --body "Goal: Add user_role enum to schema
+Scope: models/schema.py, migrations/
+Required evidence: python -m pytest tests/models/ -v
+Exit criteria: migration passes; schema has user_role field" --no-wait
+
+agpair task start --repo-path "$WT" --executor codex --task-id CHAIN-2 \
+  --depends-on '["CHAIN-1"]' \
+  --body "Goal: API layer matches current schema
+Non-goals: do not modify schema files
+Scope: api/routes.py, api/models.py
+Required changes: read models/schema.py, align all endpoints
+Required evidence: python -m pytest tests/api/ -v
+Exit criteria: all API tests pass with current schema" --no-wait
+
+agpair task start --repo-path "$WT" --executor codex --task-id CHAIN-3 \
+  --depends-on '["CHAIN-2"]' \
+  --body "Goal: integration tests pass end-to-end
+Scope: tests/integration/
+Required changes: read current API and schema, add/fix integration tests
+Required evidence: python -m pytest tests/integration/ -v
+Exit criteria: full integration suite green" --no-wait
+```
 
 ### Monitoring
 
 ```
 Monitor(
-  description="Watch final task TASK-C",
-  command="agpair task watch TASK-C --json",
+  description="Watch final task CHAIN-3",
+  command="agpair task watch CHAIN-3 --json",
   timeout_ms=7200000
 )
 ```
 
-Watch the **final** task in the chain — it won't start until all predecessors complete.
+Watch the **final** task — it won't start until all predecessors complete.
 
 ### Mixed parallel + serial
 
-Combine both patterns freely:
-
 ```bash
-# A and B in parallel (no deps)
-agpair task start ... --task-id TASK-A --no-wait
-agpair task start ... --task-id TASK-B --no-wait
+# A and B in parallel (separate worktrees, independent scopes)
+agpair task start --repo-path "$WT_A" ... --task-id TASK-A --no-wait
+agpair task start --repo-path "$WT_B" ... --task-id TASK-B --no-wait
 
-# C waits for both A and B
-agpair task start ... --task-id TASK-C \
+# C waits for both A and B (C's worktree branched after A+B merge, or uses main)
+agpair task start --repo-path "$REPO" ... --task-id TASK-C \
   --depends-on '["TASK-A", "TASK-B"]' --no-wait
+```
+
+### When to use adaptive Monitor loop instead
+
+If the next step's brief **cannot be written as a goal against current repo state** — e.g. it requires reading a log file that only exists during A's execution, or the decision of what to do next depends on A's success/failure mode — use a Monitor loop:
+
+```
+1. task start A --no-wait
+2. Monitor: task watch A --json
+3. Read A's output → decide → task start B
 ```
 
 
