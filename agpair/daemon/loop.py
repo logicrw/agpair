@@ -14,7 +14,7 @@ from agpair.storage.db import connect, ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.receipts import ReceiptRepository
 from agpair.storage.tasks import IllegalTransitionError, TaskNotFoundError, TaskRepository
-from agpair.transport.bus import AgentBusClient, BusPullError
+from agpair.transport.bus import AgentBusClient, BusPullError, BusSettleError
 from agpair.transport import messages
 
 SESSION_ID_RE = re.compile(r"session_id\s*[:=]\s*(?P<session>[^\s]+)")
@@ -77,6 +77,7 @@ def run_once(
     client = bus or AgentBusClient(paths.agent_bus_bin)
     processed, touched_task_ids, bus_errors = ingest_new_receipts(paths, client, current=current)
     scan_workspace_activity(paths, current=current)
+    auto_advanced = auto_advance_dependent_tasks(paths, committed_task_ids=touched_task_ids)
     auto_closed = auto_close_evidence_ready_tasks(paths, skip_task_ids=touched_task_ids)
     watchdog_count, watchdog_task_ids = mark_watchdog_tasks(
         paths,
@@ -96,6 +97,7 @@ def run_once(
         "running": True,
         "last_tick_at": to_iso(current),
         "processed_receipts": processed,
+        "auto_advanced": auto_advanced,
         "auto_closed_from_repo": auto_closed,
         "watchdog_recommended": watchdog_count,
         "stuck_marked": stuck,
@@ -118,6 +120,111 @@ def scan_workspace_activity(paths: AppPaths, *, current: datetime) -> None:
                 tasks.update_workspace_activity(task_id=task.task_id, activity_at=activity_at)
             except TaskNotFoundError:
                 pass
+
+
+def _get_task_body_from_journal(journal: JournalRepository, task_id: str) -> str | None:
+    """Retrieve the original task body from the 'created' journal entry."""
+    for row in journal.tail(task_id, limit=50):
+        if row.event == "created" and row.source == "cli":
+            return row.body
+    return None
+
+
+def auto_advance_dependent_tasks(
+    paths: AppPaths,
+    *,
+    committed_task_ids: set[str] | None = None,
+) -> int:
+    """Auto-dispatch deferred tasks whose depends_on are now fully satisfied.
+
+    Scans all ``new``-phase tasks that have a ``depends_on`` value. For each,
+    checks whether every listed dependency has reached the ``committed`` phase.
+    If so, dispatches the task using its stored executor and the original body
+    from the journal.
+
+    Returns the number of tasks successfully advanced.
+    """
+    tasks = TaskRepository(paths.db_path)
+    journal = JournalRepository(paths.db_path)
+    count = 0
+
+    for task in tasks.list_tasks(phase="new", limit=100):
+        if not task.depends_on:
+            continue
+        try:
+            dep_ids = json.loads(task.depends_on)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(dep_ids, list) or not dep_ids:
+            continue
+
+        # Check all dependencies are committed
+        all_satisfied = True
+        for dep_id in dep_ids:
+            dep_task = tasks.get_task(dep_id)
+            if dep_task is None or dep_task.phase != "committed":
+                all_satisfied = False
+                break
+
+        if not all_satisfied:
+            continue
+
+        # Retrieve original task body from journal
+        body = _get_task_body_from_journal(journal, task.task_id)
+        if not body:
+            journal.append(
+                task.task_id,
+                "daemon",
+                "auto_advance_skipped",
+                "no task body found in journal",
+            )
+            continue
+
+        # Resolve executor and dispatch
+        from agpair.executors import get_executor
+
+        exec_instance = get_executor(task.executor_backend or "antigravity")
+        if exec_instance is None:
+            journal.append(
+                task.task_id,
+                "daemon",
+                "auto_advance_failed",
+                f"unknown executor backend: {task.executor_backend}",
+            )
+            continue
+
+        try:
+            dispatch_result = exec_instance.dispatch(
+                task_id=task.task_id,
+                body=body,
+                repo_path=task.repo_path,
+                isolated_worktree=task.isolated_worktree,
+                worktree_boundary=task.worktree_boundary,
+            )
+        except Exception as exc:
+            reason = f"auto-advance dispatch failed: {exc}"
+            journal.append(task.task_id, "daemon", "auto_advance_failed", reason)
+            tasks.mark_blocked(task_id=task.task_id, reason=reason)
+            continue
+
+        if dispatch_result.execution_repo_path:
+            tasks.set_execution_repo_path(
+                task_id=task.task_id,
+                execution_repo_path=dispatch_result.execution_repo_path,
+            )
+
+        if dispatch_result.session_id:
+            tasks.mark_acked(task_id=task.task_id, session_id=dispatch_result.session_id)
+
+        journal.append(
+            task.task_id,
+            "daemon",
+            "auto_advanced",
+            f"dependencies satisfied {dep_ids}; dispatched to {task.executor_backend or 'antigravity'}",
+        )
+        count += 1
+
+    return count
 
 
 def detect_committed_task_in_repo(repo_path: str, task_id: str, *, since_iso: str | None = None) -> str | None:
@@ -275,15 +382,15 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                     all_messages.append(msg)
                 continue
                 
-        # If executor didn't handle it locally, try to pull from bus
+        # If executor didn't handle it locally, reserve receipts from the bus
         if not is_local_cli_backend(task.executor_backend):
             try:
-                all_messages.extend(client.pull_receipts(task_id=task.task_id))
+                all_messages.extend(client.reserve_receipts(task_id=task.task_id))
             except BusPullError as exc:
                 bus_errors += 1
                 journal.append(
                     task.task_id, "daemon", "bus_pull_error",
-                    f"transient bus pull failure: {exc}", "warning",
+                    f"transient bus reserve failure: {exc}", "warning",
                 )
             
     for message in all_messages:
@@ -310,11 +417,14 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
         journal_body = structured_receipt.raw_body if structured_receipt is not None else clean_body
 
         is_new = receipts.record(message_id, task_id, status, delivery_id=delivery_id)
+        claim_id = message.get("claim_id")
         if not is_new:
+            bus_errors += _settle_reserved_claim(client, claim_id, task_id, journal)
             continue
         current_task = tasks.get_task(task_id)
         if current_task is not None and is_stale_receipt(current_task.last_receipt_id, message_id):
             journal.append(task_id, "daemon", "receipt_stale", f"{status} id={message_id}", "stale")
+            bus_errors += _settle_reserved_claim(client, claim_id, task_id, journal)
             continue
         try:
             if status == messages.ACK:
@@ -356,9 +466,27 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 journal.append(task_id, "daemon", "receipt_ignored", f"{status}: {body}", "invalid")
         except (TaskNotFoundError, IllegalTransitionError):
             continue
+        bus_errors += _settle_reserved_claim(client, claim_id, task_id, journal)
         count += 1
         touched_task_ids.add(task_id)
     return count, touched_task_ids, bus_errors
+
+
+def _settle_reserved_claim(client, claim_id: object, task_id: str, journal: JournalRepository) -> int:
+    if not isinstance(claim_id, str) or not claim_id:
+        return 0
+    try:
+        client.settle_claims(reader=messages.DESKTOP_READER, claims=[claim_id])
+    except BusSettleError as exc:
+        journal.append(
+            task_id,
+            "daemon",
+            "bus_settle_error",
+            f"transient bus settle failure: {exc}",
+            "warning",
+        )
+        return 1
+    return 0
 
 
 def mark_stuck_tasks(

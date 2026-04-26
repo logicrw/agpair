@@ -25,6 +25,43 @@ Q3: Does any task depend on another's output?
 
 When the tree says parallel, dispatch all worktrees in the same controller turn. Do not start one task to "see how it goes" before launching the rest.
 
+## Serial Chain (auto-advance)
+
+When tasks have strict ordering (B cannot start until A's commit has landed):
+
+```bash
+# Step A: dispatch immediately
+agpair task start --repo-path "$WT_A" --executor gemini \
+  --body "<brief-A>" --task-id TASK-A --no-wait
+
+# Step B: deferred — daemon auto-dispatches when TASK-A commits
+agpair task start --repo-path "$WT_B" --executor gemini \
+  --body "<brief-B>" --task-id TASK-B \
+  --depends-on '["TASK-A"]' --no-wait
+
+# Monitor the final task
+agpair task watch TASK-B --json
+```
+
+Tasks with unsatisfied `--depends-on` are created but **not dispatched**. The daemon checks each tick and auto-dispatches when all dependencies reach `committed`.
+
+**This is the recommended serial pattern for Codex** — Codex is one-shot and cannot maintain a Monitor loop across tasks. Pre-define the chain and let the daemon advance it.
+
+Use serial chains when: task bodies are fully defined upfront. Use Codex built-in subagent when: next step depends on previous output.
+
+### Mixed parallel + serial
+
+```bash
+# A and B in parallel
+agpair task start ... --task-id TASK-A --no-wait
+agpair task start ... --task-id TASK-B --no-wait
+
+# C waits for both
+agpair task start ... --task-id TASK-C \
+  --depends-on '["TASK-A", "TASK-B"]' --no-wait
+```
+
+
 ## When to Delegate (single-task path)
 
 Delegate when the work is larger than a trivial local edit, or you want durable state, structured receipts, or background execution. Do **not** delegate when the fix is tiny and local, you still need exploratory reading, or the work needs constant interactive judgment mid-execution.

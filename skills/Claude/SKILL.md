@@ -37,6 +37,69 @@ Q3: Does any task depend on another's output?
 
 When the tree says parallel, dispatch all worktrees in the same assistant turn and open one Monitor per task immediately. Do not wait for the user to ask.
 
+## Serial Chain (auto-advance)
+
+When tasks have strict ordering (B cannot start until A's commit has landed):
+
+### Usage
+
+```bash
+# Step A: dispatch immediately
+agpair task start --repo-path "$WT_A" --executor codex \
+  --body "<brief-A>" --task-id TASK-A --no-wait
+
+# Step B: deferred — daemon will auto-dispatch when TASK-A reaches committed
+agpair task start --repo-path "$WT_B" --executor codex \
+  --body "<brief-B>" --task-id TASK-B \
+  --depends-on '["TASK-A"]' --no-wait
+
+# Step C: depends on B
+agpair task start --repo-path "$REPO" --executor gemini \
+  --body "<brief-C>" --task-id TASK-C \
+  --depends-on '["TASK-B"]' --no-wait
+```
+
+Tasks with unsatisfied `--depends-on` are created but **not dispatched**. The daemon checks each tick and auto-dispatches when all dependencies reach `committed`.
+
+### When to use serial chains
+
+- Task bodies are fully defined upfront (no need to adjust based on previous results)
+- Controller does not need to inspect intermediate results
+- You want fire-and-forget execution of a multi-step plan
+
+### When NOT to use — use manual Monitor loop instead
+
+- Next step's body depends on previous step's output
+- You need to review or adjust between steps
+- The chain may need human judgment at decision points
+
+### Monitoring
+
+```
+Monitor(
+  description="Watch final task TASK-C",
+  command="agpair task watch TASK-C --json",
+  timeout_ms=7200000
+)
+```
+
+Watch the **final** task in the chain — it won't start until all predecessors complete.
+
+### Mixed parallel + serial
+
+Combine both patterns freely:
+
+```bash
+# A and B in parallel (no deps)
+agpair task start ... --task-id TASK-A --no-wait
+agpair task start ... --task-id TASK-B --no-wait
+
+# C waits for both A and B
+agpair task start ... --task-id TASK-C \
+  --depends-on '["TASK-A", "TASK-B"]' --no-wait
+```
+
+
 ## When to Delegate (single-task path)
 
 **Default: delegate.** Skip delegation only when the change is a single-line fix, you still need exploratory reading, or the task requires interactive judgment mid-execution.

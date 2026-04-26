@@ -174,7 +174,159 @@ def _latest_terminal_receipt(paths: AppPaths, task_id: str) -> dict | None:
     return None
 
 
+def _iso_is_newer(candidate: str | None, baseline: str | None) -> bool:
+    from datetime import UTC, datetime
+
+    if not candidate:
+        return False
+    try:
+        candidate_dt = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if baseline is None:
+        return True
+    try:
+        baseline_dt = datetime.fromisoformat(baseline.replace("Z", "+00:00"))
+    except ValueError:
+        baseline_dt = datetime.min.replace(tzinfo=UTC)
+    return candidate_dt > baseline_dt
+
+
+def _derive_antigravity_bridge_state(paths: AppPaths, task) -> dict:
+    if task.phase != "new" or task.executor_backend not in {None, "antigravity"}:
+        return {}
+
+    from agpair.cli.doctor import build_doctor_report
+    from agpair.runtime_liveness import detect_workspace_activity
+
+    report = build_doctor_report(paths, repo_path=task.repo_path, fresh=False)
+    pending_count = report.get("repo_bridge_pending_task_count")
+    pending_ids = report.get("repo_bridge_pending_task_ids")
+    if not isinstance(pending_ids, list):
+        pending_ids = None
+    pending_tasks = report.get("repo_bridge_pending_tasks")
+    if not isinstance(pending_tasks, list):
+        pending_tasks = None
+
+    matching_pending_task = None
+    if pending_tasks is not None:
+        matching_pending_task = next(
+            (
+                entry
+                for entry in pending_tasks
+                if isinstance(entry, dict) and entry.get("task_id") == task.task_id
+            ),
+            None,
+        )
+
+    bridge_state = None
+    status_sync = None
+    provider_session_id = None
+    detected_activity = detect_workspace_activity(task.repo_path)
+    if matching_pending_task is not None:
+        bridge_state = "provider_consumed_no_ack"
+        provider_session_id = matching_pending_task.get("provider_session_id")
+        status_sync = {
+            "state": bridge_state,
+            "source": "bridge_tracker",
+            "bridge_pending_on_provider": True,
+            "provider_status": matching_pending_task.get("provider_status"),
+            "provider_session_id": provider_session_id,
+            "provider_acked_at": matching_pending_task.get("provider_acked_at"),
+            "provider_last_activity_at": matching_pending_task.get("provider_last_activity_at"),
+            "provider_last_heartbeat_at": matching_pending_task.get("provider_last_heartbeat_at"),
+        }
+    elif task.last_heartbeat_at:
+        bridge_state = "provider_consumed_no_ack"
+        status_sync = {
+            "state": bridge_state,
+            "source": "daemon_heartbeat",
+            "bridge_pending_on_provider": None,
+            "provider_status": "RUNNING",
+            "provider_session_id": None,
+            "provider_acked_at": None,
+            "provider_last_activity_at": None,
+            "provider_last_heartbeat_at": task.last_heartbeat_at,
+        }
+    elif pending_ids is not None and task.task_id in pending_ids:
+        bridge_state = "queued_unclaimed"
+        status_sync = {
+            "state": bridge_state,
+            "source": "bridge_tracker",
+            "bridge_pending_on_provider": True,
+            "provider_status": None,
+            "provider_session_id": None,
+            "provider_acked_at": None,
+            "provider_last_activity_at": None,
+            "provider_last_heartbeat_at": None,
+        }
+    elif pending_ids is not None and _iso_is_newer(detected_activity, task.last_activity_at):
+        bridge_state = "running_without_receipt"
+        status_sync = {
+            "state": bridge_state,
+            "source": "workspace_activity",
+            "bridge_pending_on_provider": False,
+            "provider_status": None,
+            "provider_session_id": None,
+            "provider_acked_at": None,
+            "provider_last_activity_at": detected_activity,
+            "provider_last_heartbeat_at": None,
+        }
+    elif pending_ids is not None:
+        bridge_state = "queued_unclaimed"
+        status_sync = {
+            "state": bridge_state,
+            "source": "bridge_tracker",
+            "bridge_pending_on_provider": False,
+            "provider_status": None,
+            "provider_session_id": None,
+            "provider_acked_at": None,
+            "provider_last_activity_at": None,
+            "provider_last_heartbeat_at": None,
+        }
+
+    last_workspace_activity = task.last_workspace_activity_at
+    if bridge_state == "running_without_receipt" and detected_activity is not None:
+        last_workspace_activity = detected_activity
+    if bridge_state == "provider_consumed_no_ack":
+        if _iso_is_newer(detected_activity, task.last_activity_at):
+            bridge_state = "running_without_receipt"
+            last_workspace_activity = detected_activity
+            if status_sync is not None:
+                status_sync = {
+                    **status_sync,
+                    "state": bridge_state,
+                    "provider_last_activity_at": detected_activity,
+                }
+
+    return {
+        "phase_detail": bridge_state,
+        "bridge_state": bridge_state,
+        "bridge_pending_task_count": pending_count if isinstance(pending_count, int) else None,
+        "bridge_pending_task_ids": pending_ids,
+        "bridge_pending_tasks": pending_tasks,
+        "provider_session_id": provider_session_id,
+        "status_sync": status_sync,
+        "last_workspace_activity_at": last_workspace_activity,
+    }
+
+
 def build_task_payload(paths: AppPaths, task) -> dict:
+    derived_bridge_state = _derive_antigravity_bridge_state(paths, task)
+    phase_detail = derived_bridge_state.get("phase_detail")
+    phase_source = "derived" if phase_detail else "stored"
+    last_workspace_activity_at = (
+        derived_bridge_state.get("last_workspace_activity_at") or task.last_workspace_activity_at
+    )
+    execution_repo_path = task.execution_repo_path or task.repo_path
+    isolation_satisfied = (
+        not task.isolated_worktree
+        or (
+            task.execution_repo_path is not None
+            and Path(task.execution_repo_path).resolve() != Path(task.repo_path).resolve()
+        )
+    )
+
     liveness = classify_liveness(task) if task.phase == "acked" else None
     waiters = WaiterRepository(paths.db_path)
     waiter = waiters.get_active_waiter(task.task_id)
@@ -215,21 +367,32 @@ def build_task_payload(paths: AppPaths, task) -> dict:
             },
         },
         "phase": task.phase,
-        "a2a_state_hint": a2a_state_hint_from_phase(task.phase, blocker_type=blocker_type),
+        "stored_phase": task.phase,
+        "phase_detail": phase_detail,
+        "phase_source": phase_source,
+        "a2a_state_hint": a2a_state_hint_from_phase(phase_detail or task.phase, blocker_type=blocker_type),
         "repo_path": task.repo_path,
+        "execution_repo_path": execution_repo_path,
+        "isolation_satisfied": isolation_satisfied,
         "session_id": task.antigravity_session_id,
+        "provider_session_id": derived_bridge_state.get("provider_session_id"),
         "attempt_no": task.attempt_no,
         "retry_count": task.retry_count,
         "retry_recommended": task.retry_recommended,
         "stuck_reason": task.stuck_reason,
         "last_heartbeat_at": task.last_heartbeat_at,
-        "last_workspace_activity_at": task.last_workspace_activity_at,
+        "last_workspace_activity_at": last_workspace_activity_at,
         "depends_on": json.loads(task.depends_on) if task.depends_on else None,
         "isolated_worktree": task.isolated_worktree,
         "setup_commands": json.loads(task.setup_commands) if task.setup_commands else None,
         "teardown_commands": json.loads(task.teardown_commands) if task.teardown_commands else None,
         "env_vars": json.loads(task.env_vars) if task.env_vars else None,
         "worktree_boundary": task.worktree_boundary,
+        "bridge_state": derived_bridge_state.get("bridge_state"),
+        "bridge_pending_task_count": derived_bridge_state.get("bridge_pending_task_count"),
+        "bridge_pending_task_ids": derived_bridge_state.get("bridge_pending_task_ids"),
+        "bridge_pending_tasks": derived_bridge_state.get("bridge_pending_tasks"),
+        "status_sync": derived_bridge_state.get("status_sync"),
         "spotlight_testing": task.spotlight_testing,
         "completion_policy": task.completion_policy,
         "terminal_source": task.terminal_source,
@@ -427,6 +590,7 @@ def start_task(
     timeout_seconds: float = _TIMEOUT_OPTION,
 ) -> None:
     from agpair.executors import AntigravityExecutor, CodexExecutor, GeminiExecutor, is_local_cli_backend
+    from agpair.executors.local_cli import WorktreeProvisionError, resolve_worktree_root
     from agpair.targets import resolve_repo_path
 
     _validate_task_body(body)
@@ -459,6 +623,11 @@ def start_task(
     tasks = TaskRepository(paths.db_path)
     journal = JournalRepository(paths.db_path)
     final_task_id = task_id or f"TASK-{uuid4().hex[:12].upper()}"
+    resolved_worktree_boundary = worktree_boundary
+    if isolated_worktree and is_local_cli_backend(backend_to_store):
+        resolved_worktree_boundary = str(
+            resolve_worktree_root(resolved_repo_path, final_task_id, worktree_boundary)
+        )
 
     if idempotency_key:
         existing_task = tasks.get_task_by_idempotency_key(
@@ -488,7 +657,7 @@ def start_task(
             setup_commands=setup_commands,
             teardown_commands=teardown_commands,
             env_vars=env_vars,
-            worktree_boundary=worktree_boundary,
+            worktree_boundary=resolved_worktree_boundary,
             spotlight_testing=spotlight_testing,
         )
     except sqlite3.IntegrityError:
@@ -512,14 +681,48 @@ def start_task(
         )
         return
     journal.append(final_task_id, "cli", "created", body)
+
+    # --- Deferred dispatch for unsatisfied depends_on ---
+    if depends_on:
+        try:
+            dep_ids = json.loads(depends_on)
+        except (json.JSONDecodeError, TypeError):
+            dep_ids = []
+        if isinstance(dep_ids, list) and dep_ids:
+            all_met = all(
+                (dep_task := tasks.get_task(d)) is not None and dep_task.phase == "committed"
+                for d in dep_ids
+            )
+            if not all_met:
+                journal.append(
+                    final_task_id,
+                    "cli",
+                    "deferred",
+                    f"dependencies not yet satisfied: {dep_ids}; daemon will auto-advance",
+                )
+                typer.echo(final_task_id)
+                return
+
     try:
-        dispatch_result = exec_instance.dispatch(task_id=final_task_id, body=body, repo_path=resolved_repo_path)
-    except (subprocess.SubprocessError, FileNotFoundError, BusSendError) as exc:
+        dispatch_result = exec_instance.dispatch(
+            task_id=final_task_id,
+            body=body,
+            repo_path=resolved_repo_path,
+            isolated_worktree=isolated_worktree,
+            worktree_boundary=resolved_worktree_boundary,
+        )
+    except (subprocess.SubprocessError, FileNotFoundError, BusSendError, WorktreeProvisionError) as exc:
         reason = f"dispatch failed: {exc}"
         journal.append(final_task_id, "cli", "dispatch_failed", reason)
         tasks.mark_blocked(task_id=final_task_id, reason=reason)
         typer.echo(reason, err=True)
         raise typer.Exit(code=1)
+
+    if dispatch_result.execution_repo_path:
+        tasks.set_execution_repo_path(
+            task_id=final_task_id,
+            execution_repo_path=dispatch_result.execution_repo_path,
+        )
 
     if dispatch_result.session_id:
         tasks.mark_acked(task_id=final_task_id, session_id=dispatch_result.session_id)
@@ -579,9 +782,13 @@ def task_status(
     typer.echo(f"active_executor_safety_metadata: {json.dumps(payload['active_executor_safety_metadata'])}")
     typer.echo(f"supported_backends: {json.dumps(payload['supported_backends'])}")
     typer.echo(f"phase: {payload['phase']}")
+    typer.echo(f"phase_detail: {payload['phase_detail']}")
     typer.echo(f"a2a_state_hint: {payload['a2a_state_hint']}")
     typer.echo(f"repo_path: {payload['repo_path']}")
+    typer.echo(f"execution_repo_path: {payload['execution_repo_path']}")
+    typer.echo(f"isolation_satisfied: {payload['isolation_satisfied']}")
     typer.echo(f"session_id: {payload['session_id']}")
+    typer.echo(f"provider_session_id: {payload['provider_session_id']}")
     typer.echo(f"attempt_no: {payload['attempt_no']}")
     typer.echo(f"retry_count: {payload['retry_count']}")
     typer.echo(f"retry_recommended: {payload['retry_recommended']}")
@@ -594,6 +801,8 @@ def task_status(
     typer.echo(f"teardown_commands: {json.dumps(payload['teardown_commands'])}")
     typer.echo(f"env_vars: {json.dumps(payload['env_vars'])}")
     typer.echo(f"worktree_boundary: {payload['worktree_boundary']}")
+    typer.echo(f"bridge_state: {payload['bridge_state']}")
+    typer.echo(f"bridge_pending_task_count: {payload['bridge_pending_task_count']}")
     typer.echo(f"spotlight_testing: {payload['spotlight_testing']}")
     typer.echo(f"completion_policy: {payload['completion_policy']}")
     typer.echo(f"terminal_source: {payload['terminal_source']}")
@@ -620,6 +829,11 @@ def task_status(
         typer.echo(
             "failure_context: "
             + json.dumps(failure_context, ensure_ascii=False, sort_keys=True)
+        )
+    if payload["status_sync"] is not None:
+        typer.echo(
+            "status_sync: "
+            + json.dumps(payload["status_sync"], ensure_ascii=False, sort_keys=True)
         )
     waiter = payload["waiter"]
     if waiter:
@@ -1093,6 +1307,7 @@ def retry_task(
     timeout_seconds: float = _TIMEOUT_OPTION,
 ) -> None:
     from agpair.executors import get_executor, is_local_cli_backend
+    from agpair.executors.local_cli import WorktreeProvisionError
 
     paths = _paths()
     tasks = TaskRepository(paths.db_path)
@@ -1113,8 +1328,14 @@ def retry_task(
             typer.echo(reason, err=True)
             raise typer.Exit(code=1)
         try:
-            dispatch_result = exec_instance.dispatch(task_id=task.task_id, body=retry_body, repo_path=task.repo_path)
-        except (subprocess.SubprocessError, FileNotFoundError, BusSendError) as exc:
+            dispatch_result = exec_instance.dispatch(
+                task_id=task.task_id,
+                body=retry_body,
+                repo_path=task.repo_path,
+                isolated_worktree=task.isolated_worktree,
+                worktree_boundary=task.worktree_boundary,
+            )
+        except (subprocess.SubprocessError, FileNotFoundError, BusSendError, WorktreeProvisionError) as exc:
             reason = f"dispatch failed: {exc}"
             journal.append(task.task_id, "cli", "retry_failed", reason)
             typer.echo(reason, err=True)
@@ -1125,6 +1346,11 @@ def retry_task(
             typer.echo(reason, err=True)
             raise typer.Exit(code=1)
         updated = tasks.apply_retry_dispatch(task_id=task.task_id)
+        if dispatch_result.execution_repo_path:
+            tasks.set_execution_repo_path(
+                task_id=updated.task_id,
+                execution_repo_path=dispatch_result.execution_repo_path,
+            )
         tasks.mark_acked(task_id=updated.task_id, session_id=dispatch_result.session_id)
         journal.append(
             updated.task_id,
