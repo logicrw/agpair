@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS tasks (
   task_id TEXT PRIMARY KEY,
   repo_path TEXT NOT NULL,
+  execution_repo_path TEXT,
   phase TEXT NOT NULL,
   antigravity_session_id TEXT,
   attempt_no INTEGER NOT NULL DEFAULT 1,

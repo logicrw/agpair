@@ -33,13 +33,18 @@ def write_fake_agent_bus(tmp_path: Path) -> tuple[str, Path, Path]:
                 with calls_path.open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps({"argv": [Path(sys.argv[0]).name, *argv], "body": body}) + "\\n")
                 print(json.dumps({"ok": True, "id": 101}))
-            elif command == "pull":
+            elif command in {"pull", "reserve"}:
                 with calls_path.open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps({"argv": [Path(sys.argv[0]).name, *argv], "body": ""}) + "\\n")
                 if pull_path.exists():
                     print(pull_path.read_text(encoding="utf-8"))
                 else:
-                    print(json.dumps({"ok": True, "reader": "desktop", "claimed": 0, "messages": []}))
+                    key = "reserved" if command == "reserve" else "claimed"
+                    print(json.dumps({"ok": True, "reader": "desktop", key: 0, "messages": []}))
+            elif command == "settle":
+                with calls_path.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"argv": [Path(sys.argv[0]).name, *argv], "body": ""}) + "\\n")
+                print(json.dumps({"ok": True, "reader": "desktop", "settled": 1}))
             else:
                 print(json.dumps({"ok": False, "error": f"unsupported command: {command}"}))
                 raise SystemExit(2)

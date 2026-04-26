@@ -18,9 +18,17 @@ class FakeBus:
     def __init__(self, receipts: list[dict] | None = None) -> None:
         self._receipts = receipts or []
         self.sent_messages: list[tuple[str, tuple, dict]] = []
+        self.settled_claims: list[tuple[str, list[str]]] = []
 
     def pull_receipts(self, *, task_id: str | None = None, limit: int = 20) -> list[dict]:
         return list(self._receipts)
+
+    def reserve_receipts(self, *, task_id: str | None = None, limit: int = 20, lease_ms: int = 30000) -> list[dict]:
+        return [{**receipt, "claim_id": f"clm-{idx}"} for idx, receipt in enumerate(self._receipts, start=1)]
+
+    def settle_claims(self, *, reader: str, claims: list[str]) -> int:
+        self.settled_claims.append((reader, list(claims)))
+        return len(claims)
 
     def send_task(self, *args, **kwargs):
         self.sent_messages.append(("send_task", args, kwargs))
@@ -111,5 +119,4 @@ def test_retry_exhaustion_stops_automatic_recovery(tmp_path: Path) -> None:
     assert task.attempt_no == 1
     assert task.retry_count == 0
     assert bus.sent_messages == []
-
 

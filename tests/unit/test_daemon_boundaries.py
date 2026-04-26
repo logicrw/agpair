@@ -12,9 +12,17 @@ from agpair.storage.tasks import TaskRepository
 class FakeBus:
     def __init__(self) -> None:
         self.sent_messages: list[tuple[str, tuple, dict]] = []
+        self.settled_claims: list[tuple[str, list[str]]] = []
 
     def pull_receipts(self, *, task_id: str | None = None, limit: int = 20) -> list[dict]:
         return []
+
+    def reserve_receipts(self, *, task_id: str | None = None, limit: int = 20, lease_ms: int = 30000) -> list[dict]:
+        return []
+
+    def settle_claims(self, *, reader: str, claims: list[str]) -> int:
+        self.settled_claims.append((reader, list(claims)))
+        return len(claims)
 
     def send_task(self, *args, **kwargs):
         self.sent_messages.append(("send_task", args, kwargs))
@@ -65,7 +73,7 @@ def test_daemon_does_not_create_fresh_retry_attempt(tmp_path: Path) -> None:
 
 
 class FailingBus(FakeBus):
-    """A bus stub that raises BusPullError on pull_receipts."""
+    """A bus stub that raises BusPullError on reserve_receipts."""
 
     def __init__(self, fail_count: int = 1) -> None:
         super().__init__()
@@ -78,6 +86,9 @@ class FailingBus(FakeBus):
             from agpair.transport.bus import BusPullError
             raise BusPullError("simulated transient failure")
         return []
+
+    def reserve_receipts(self, *, task_id: str | None = None, limit: int = 20, lease_ms: int = 30000) -> list[dict]:
+        return self.pull_receipts(task_id=task_id, limit=limit)
 
 
 def test_run_once_survives_transient_bus_pull_error(tmp_path: Path) -> None:
@@ -98,7 +109,7 @@ def test_run_once_survives_transient_bus_pull_error(tmp_path: Path) -> None:
 
 
 def test_bus_error_surfaces_in_journal(tmp_path: Path) -> None:
-    """A transient bus pull error should be recorded in the journal."""
+    """A transient bus reserve error should be recorded in the journal."""
     from agpair.daemon.loop import run_once
     from agpair.storage.journal import JournalRepository
 
@@ -111,7 +122,7 @@ def test_bus_error_surfaces_in_journal(tmp_path: Path) -> None:
     entries = journal.tail("TASK-1", limit=100)
     bus_error_entries = [e for e in entries if e.event == "bus_pull_error"]
     assert len(bus_error_entries) >= 1
-    assert "transient bus pull failure" in bus_error_entries[0].body
+    assert "transient bus reserve failure" in bus_error_entries[0].body
 
 
 def test_daemon_recovers_after_transient_bus_failure(tmp_path: Path) -> None:

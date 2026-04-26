@@ -45,14 +45,30 @@ class TaskRepository:
             conn.execute(
                 """
                 INSERT INTO tasks (
-                  task_id, repo_path, phase, antigravity_session_id, attempt_no, retry_count,
+                  task_id, repo_path, execution_repo_path, phase, antigravity_session_id, attempt_no, retry_count,
                   last_receipt_id, stuck_reason, retry_recommended, last_activity_at, created_at, updated_at,
                   last_heartbeat_at, last_workspace_activity_at, client_idempotency_key, executor_backend,
                   depends_on, isolated_worktree, setup_commands, teardown_commands, env_vars, worktree_boundary,
                   spotlight_testing, completion_policy, terminal_source, is_approved
-                ) VALUES (?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'direct_commit', NULL, 0)
+                ) VALUES (?, ?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'direct_commit', NULL, 0)
                 """,
-                (task_id, repo_path, now, now, now, client_idempotency_key, executor_backend, depends_on, 1 if isolated_worktree else 0, setup_commands, teardown_commands, env_vars, worktree_boundary, 1 if spotlight_testing else 0),
+                (
+                    task_id,
+                    repo_path,
+                    None,
+                    now,
+                    now,
+                    now,
+                    client_idempotency_key,
+                    executor_backend,
+                    depends_on,
+                    1 if isolated_worktree else 0,
+                    setup_commands,
+                    teardown_commands,
+                    env_vars,
+                    worktree_boundary,
+                    1 if spotlight_testing else 0,
+                ),
             )
             conn.commit()
 
@@ -259,6 +275,17 @@ class TaskRepository:
             (utcnow_iso(), task_id),
         )
 
+    def set_execution_repo_path(self, *, task_id: str, execution_repo_path: str | None) -> None:
+        self._update(
+            task_id,
+            """
+            UPDATE tasks
+            SET execution_repo_path=?, updated_at=?
+            WHERE task_id=?
+            """,
+            (execution_repo_path, utcnow_iso(), task_id),
+        )
+
     def recommend_retry(self, *, task_id: str, retry_count: int | None = None) -> None:
         now = utcnow_iso()
         if retry_count is None:
@@ -296,6 +323,7 @@ class TaskRepository:
                 UPDATE tasks
                 SET phase='new',
                     antigravity_session_id=NULL,
+                    execution_repo_path=NULL,
                     attempt_no=?,
                     retry_count=?,
                     last_receipt_id=NULL,
@@ -441,6 +469,10 @@ class TaskRepository:
     def _task_from_row(row) -> TaskRecord:
         # Gracefully handle old DBs that may not have the workspace column yet
         try:
+            execution_repo_path = row["execution_repo_path"]
+        except (IndexError, KeyError):
+            execution_repo_path = None
+        try:
             ws_activity = row["last_workspace_activity_at"]
         except (IndexError, KeyError):
             ws_activity = None
@@ -495,6 +527,7 @@ class TaskRepository:
         return TaskRecord(
             task_id=row["task_id"],
             repo_path=row["repo_path"],
+            execution_repo_path=execution_repo_path,
             phase=row["phase"],
             antigravity_session_id=row["antigravity_session_id"],
             attempt_no=row["attempt_no"],

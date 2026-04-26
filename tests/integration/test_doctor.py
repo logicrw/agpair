@@ -667,9 +667,25 @@ def test_doctor_reports_pending_tasks_and_concurrency_policy(
                 "tracker_summary": {
                     "pending": 2,
                     "tasks": [
-                        {"taskId": "T-1", "terminalSentAt": None},
+                        {
+                            "taskId": "T-1",
+                            "status": "ACKED",
+                            "sessionId": "sess-1",
+                            "ackedAt": "2026-03-21T10:00:00Z",
+                            "lastActivityAt": "2026-03-21T10:00:10Z",
+                            "lastHeartbeatAt": None,
+                            "terminalSentAt": None,
+                        },
                         {"taskId": "T-2", "terminalSentAt": "2026-03-21T10:00:00Z"},
-                        {"taskId": "T-3", "terminalSentAt": None},
+                        {
+                            "taskId": "T-3",
+                            "status": "RUNNING",
+                            "sessionId": "sess-3",
+                            "ackedAt": "2026-03-21T10:01:00Z",
+                            "lastActivityAt": "2026-03-21T10:01:20Z",
+                            "lastHeartbeatAt": "2026-03-21T10:01:30Z",
+                            "terminalSentAt": None,
+                        },
                     ]
                 }
             }
@@ -683,6 +699,9 @@ def test_doctor_reports_pending_tasks_and_concurrency_policy(
 
     assert payload["repo_bridge_pending_task_count"] == 2
     assert payload["repo_bridge_pending_task_ids"] == ["T-1", "T-3"]
+    assert payload["repo_bridge_pending_tasks"][0]["task_id"] == "T-1"
+    assert payload["repo_bridge_pending_tasks"][0]["provider_status"] == "ACKED"
+    assert payload["repo_bridge_pending_tasks"][1]["provider_last_heartbeat_at"] == "2026-03-21T10:01:30Z"
 
     policy = payload["repo_bridge_concurrency_policy"]
     assert policy["same_worktree_parallel_safe"] is False

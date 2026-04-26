@@ -29,7 +29,7 @@ class AntigravityExecutor(ExecutorAdapter):
             requires_human_interaction=False,
         )
 
-    def dispatch(self, *, task_id: str, body: str, repo_path: str) -> DispatchResult:
+    def dispatch(self, *, task_id: str, body: str, repo_path: str, isolated_worktree: bool = False, worktree_boundary: str | None = None) -> DispatchResult:
         """Dispatch via the existing AgentBusClient semantics."""
         msg_id = self.bus.send_task(task_id=task_id, body=body, repo_path=repo_path)
         return DispatchResult(message_id=str(msg_id))

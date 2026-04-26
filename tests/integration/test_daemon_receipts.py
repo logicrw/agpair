@@ -15,9 +15,20 @@ class FakePullBus:
     def __init__(self, receipts: list[dict]) -> None:
         self._receipts = receipts
         self.sent_messages: list[tuple[str, tuple, dict]] = []
+        self.settled_claims: list[tuple[str, list[str]]] = []
 
     def pull_receipts(self, *, task_id: str | None = None, limit: int = 20) -> list[dict]:
         return list(self._receipts)
+
+    def reserve_receipts(self, *, task_id: str | None = None, limit: int = 20, lease_ms: int = 30000) -> list[dict]:
+        reserved = []
+        for index, receipt in enumerate(self._receipts, start=1):
+            reserved.append({**receipt, "claim_id": f"clm-{index}"})
+        return reserved
+
+    def settle_claims(self, *, reader: str, claims: list[str]) -> int:
+        self.settled_claims.append((reader, list(claims)))
+        return len(claims)
 
     def send_task(self, *args, **kwargs):
         self.sent_messages.append(("send_task", args, kwargs))
@@ -55,6 +66,7 @@ def test_daemon_ingests_ack_and_updates_session_mapping(tmp_path: Path) -> None:
     assert task is not None
     assert task.phase == "acked"
     assert task.antigravity_session_id == "session-123"
+    assert bus.settled_claims == [("desktop", ["clm-1"])]
     rows = JournalRepository(paths.db_path).tail("TASK-1", limit=2)
     assert rows[0].event == "acked"
     assert "session-123" in rows[0].body
@@ -81,6 +93,35 @@ def test_daemon_accepts_colon_space_session_id_format(tmp_path: Path) -> None:
     assert task is not None
     assert task.phase == "acked"
     assert task.antigravity_session_id == "session-456"
+
+
+def test_daemon_settles_each_reserved_claim_individually(tmp_path: Path) -> None:
+    from agpair.daemon.loop import run_once
+
+    paths = seed_task(tmp_path)
+    bus = FakePullBus(
+        [
+            {
+                "id": 1,
+                "task_id": "TASK-1",
+                "status": "ACK",
+                "body": "session_id=session-123\nrepo_path=/tmp/repo",
+            },
+            {
+                "id": 2,
+                "task_id": "TASK-1",
+                "status": "RUNNING",
+                "body": "still running",
+            },
+        ]
+    )
+
+    run_once(paths, now=datetime(2026, 3, 21, 12, 0, tzinfo=UTC), bus=bus)
+
+    assert bus.settled_claims == [
+        ("desktop", ["clm-1"]),
+        ("desktop", ["clm-2"]),
+    ]
 
 
 def test_daemon_ingests_structured_blocked_receipt_uses_summary_for_reason(tmp_path: Path) -> None:

@@ -12,9 +12,17 @@ from agpair.storage.tasks import TaskRepository
 class EmptyBus:
     def __init__(self) -> None:
         self.sent_messages: list[tuple[str, tuple, dict]] = []
+        self.settled_claims: list[tuple[str, list[str]]] = []
 
     def pull_receipts(self, *, task_id: str | None = None, limit: int = 20) -> list[dict]:
         return []
+
+    def reserve_receipts(self, *, task_id: str | None = None, limit: int = 20, lease_ms: int = 30000) -> list[dict]:
+        return []
+
+    def settle_claims(self, *, reader: str, claims: list[str]) -> int:
+        self.settled_claims.append((reader, list(claims)))
+        return len(claims)
 
     def send_task(self, *args, **kwargs):
         self.sent_messages.append(("send_task", args, kwargs))

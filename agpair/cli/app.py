@@ -112,14 +112,23 @@ def inspect(
             task_dict = {
                 "task_id": task_payload["task_id"],
                 "phase": task_payload["phase"],
+                "stored_phase": task_payload["stored_phase"],
+                "phase_detail": task_payload["phase_detail"],
+                "phase_source": task_payload["phase_source"],
+                "a2a_state_hint": task_payload["a2a_state_hint"],
                 "session_id": task_payload["session_id"],
+                "provider_session_id": task_payload["provider_session_id"],
                 "attempt_no": task_payload["attempt_no"],
                 "retry_recommended": task_payload["retry_recommended"],
+                "execution_repo_path": task_payload["execution_repo_path"],
+                "isolation_satisfied": task_payload["isolation_satisfied"],
                 "last_heartbeat_at": task_payload["last_heartbeat_at"],
                 "last_workspace_activity_at": task_payload["last_workspace_activity_at"],
                 "setup_commands": task_payload["setup_commands"],
                 "teardown_commands": task_payload["teardown_commands"],
                 "worktree_boundary": task_payload["worktree_boundary"],
+                "bridge_state": task_payload["bridge_state"],
+                "status_sync": task_payload["status_sync"],
             }
             if task_payload.get("terminal_receipt"):
                 task_dict["latest_receipt_summary"] = task_payload["terminal_receipt"].get("summary")
@@ -161,10 +170,20 @@ def inspect(
         typer.echo(f"Session ID:  {task_record.antigravity_session_id}")
         typer.echo(f"Attempt No:  {task_record.attempt_no} (Retry recommended: {task_record.retry_recommended})")
         if task_payload:
+            if task_payload["phase_detail"]:
+                typer.echo(f"Phase:       {task_payload['phase']} [{task_payload['phase_detail']}]")
+            if task_payload["execution_repo_path"]:
+                typer.echo(f"Exec Path:   {task_payload['execution_repo_path']}")
+                typer.echo(f"Isolation:   {task_payload['isolation_satisfied']}")
             if task_payload["last_workspace_activity_at"]:
                 typer.echo(f"Workspace:   {task_payload['last_workspace_activity_at']}")
             if task_payload["last_heartbeat_at"]:
                 typer.echo(f"Heartbeat:   {task_payload['last_heartbeat_at']}")
+            if task_payload.get("status_sync"):
+                typer.echo(
+                    "Sync:        "
+                    + json.dumps(task_payload["status_sync"], ensure_ascii=False, sort_keys=True)
+                )
             if task_payload.get("failure_context"):
                 typer.echo(f"Blocked:     {task_payload['failure_context'].get('summary')}")
             if task_payload.get("committed_result"):

@@ -43,6 +43,38 @@ def test_gemini_executor_dispatch_command_construction(tmp_path):
         assert "do some work" in wrapper_content
 
 
+def test_gemini_executor_dispatch_uses_isolated_worktree_for_cwd(tmp_path):
+    worktree_path = tmp_path / "wt"
+
+    with patch("agpair.executors.local_cli._git_toplevel", return_value=tmp_path.resolve()), \
+         patch("agpair.executors.local_cli._git_head", return_value="fake-head"), \
+         patch("agpair.executors.local_cli.subprocess.run") as mock_run, \
+         patch("agpair.executors.local_cli.subprocess.check_output") as mock_check_output, \
+         patch("agpair.executors.local_cli.subprocess.Popen") as mock_popen:
+        mock_process = Mock()
+        mock_process.pid = 12345
+        mock_popen.return_value = mock_process
+        mock_run.return_value = Mock(returncode=0)
+        mock_check_output.return_value = f"worktree {tmp_path.resolve()}\nworktree {worktree_path.resolve()}\n"
+
+        executor = GeminiExecutor()
+        dispatch_res = executor.dispatch(
+            task_id="test_gemini_iso",
+            body="do isolated work",
+            repo_path=str(tmp_path),
+            isolated_worktree=True,
+            worktree_boundary=str(worktree_path),
+        )
+
+    wrapper_script_path = Path(mock_popen.call_args[0][0][0])
+    assert wrapper_script_path.exists()
+    wrapper_content = wrapper_script_path.read_text(encoding="utf-8")
+    assert "gemini" in wrapper_content
+    assert "do isolated work" in wrapper_content
+    assert dispatch_res.execution_repo_path == str(worktree_path.resolve())
+    assert mock_popen.call_args.kwargs["cwd"] == str(worktree_path.resolve())
+
+
 def test_gemini_executor_dispatch_uses_yolo_by_default(monkeypatch):
     monkeypatch.delenv("AGPAIR_GEMINI_APPROVAL_MODE", raising=False)
     executor = GeminiExecutor()

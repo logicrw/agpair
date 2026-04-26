@@ -12,6 +12,11 @@ DEFAULT_BUSY_TIMEOUT_MS = 5000
 def _migrate_schema(conn: sqlite3.Connection) -> None:
     """Apply incremental schema migrations for existing databases."""
     task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    # Migration 0: add execution_repo_path
+    if "execution_repo_path" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN execution_repo_path TEXT")
+        conn.commit()
+        task_cols.add("execution_repo_path")
     # Migration 1: add last_heartbeat_at
     if "last_heartbeat_at" not in task_cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN last_heartbeat_at TEXT")

@@ -9,10 +9,10 @@ from agpair.transport import messages
 
 
 class BusPullError(RuntimeError):
-    """Raised when an ``agent-bus pull`` invocation fails transiently.
+    """Raised when a receipt-consumption invocation fails transiently.
 
-    Wraps subprocess failures and JSON-decode errors so callers only need
-    to catch a single, domain-specific exception type.
+    Covers both the deprecated ``pull`` compatibility path and the newer
+    ``reserve``-based receipt flow so callers only need one exception type.
     """
 
 
@@ -24,6 +24,10 @@ class BusSendError(RuntimeError):
     """
 
 
+class BusSettleError(RuntimeError):
+    """Raised when an ``agent-bus settle`` invocation fails."""
+
+
 class AgentBusClient:
     def __init__(self, executable: str = "agent-bus") -> None:
         self.executable = executable
@@ -33,15 +37,37 @@ class AgentBusClient:
         return self._send(task_id=task_id, status=messages.TASK, body=full_body)
 
     def pull_receipts(self, *, task_id: str | None = None, limit: int = 20) -> list[dict]:
+        try:
+            messages_reserved = self.reserve_receipts(task_id=task_id, limit=limit)
+            claim_ids = [
+                claim_id
+                for claim_id in (msg.get("claim_id") for msg in messages_reserved)
+                if isinstance(claim_id, str) and claim_id
+            ]
+            if claim_ids:
+                self.settle_claims(reader=messages.DESKTOP_READER, claims=claim_ids)
+            return messages_reserved
+        except BusSettleError as exc:
+            raise BusPullError(f"agent-bus pull compatibility settle failed: {exc}") from exc
+
+    def reserve_receipts(
+        self,
+        *,
+        task_id: str | None = None,
+        limit: int = 20,
+        lease_ms: int = 30000,
+    ) -> list[dict]:
         argv = [
             self.executable,
-            "pull",
+            "reserve",
             "--sender",
             messages.CODE_SENDER,
             "--reader",
             messages.DESKTOP_READER,
             "--limit",
             str(limit),
+            "--lease-ms",
+            str(lease_ms),
             "--full",
         ]
         if task_id:
@@ -51,11 +77,35 @@ class AgentBusClient:
             payload = json.loads(proc.stdout or "{}")
         except subprocess.CalledProcessError as exc:
             raise BusPullError(
-                f"agent-bus pull failed (rc={exc.returncode}): {exc.stderr or exc.stdout}"
+                f"agent-bus reserve failed (rc={exc.returncode}): {exc.stderr or exc.stdout}"
             ) from exc
         except (json.JSONDecodeError, ValueError) as exc:
-            raise BusPullError(f"agent-bus pull returned invalid JSON: {exc}") from exc
+            raise BusPullError(f"agent-bus reserve returned invalid JSON: {exc}") from exc
         return list(payload.get("messages", []))
+
+    def settle_claims(self, *, reader: str, claims: list[str]) -> int:
+        try:
+            proc = subprocess.run(
+                [
+                    self.executable,
+                    "settle",
+                    "--reader",
+                    reader,
+                    "--claims",
+                    ",".join(claims),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            payload = json.loads(proc.stdout or "{}")
+        except subprocess.CalledProcessError as exc:
+            raise BusSettleError(
+                f"agent-bus settle failed (rc={exc.returncode}): {exc.stderr or exc.stdout}"
+            ) from exc
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise BusSettleError(f"agent-bus settle returned invalid JSON: {exc}") from exc
+        return int(payload.get("settled", 0))
 
     def _send(self, *, task_id: str, status: str, body: str) -> int:
         tmp_path: Path | None = None

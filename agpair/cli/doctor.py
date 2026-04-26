@@ -280,6 +280,7 @@ def _build_repo_bridge_report(repo_path: Path) -> dict:
     receipt_watcher_running = None
     pending_task_count = None
     pending_task_ids = None
+    pending_tasks = None
 
     if isinstance(delegation_status, dict):
         raw = delegation_status.get("receipt_watcher_running")
@@ -297,6 +298,19 @@ def _build_repo_bridge_report(repo_path: Path) -> dict:
                     str(t.get("taskId"))
                     for t in tasks
                     if isinstance(t, dict) and t.get("terminalSentAt") is None and "taskId" in t
+                ]
+                pending_tasks = [
+                    {
+                        "task_id": str(t.get("taskId")),
+                        "provider_status": str(t.get("status")) if isinstance(t.get("status"), str) else None,
+                        "provider_session_id": str(t.get("sessionId")) if isinstance(t.get("sessionId"), str) else None,
+                        "provider_acked_at": str(t.get("ackedAt")) if isinstance(t.get("ackedAt"), str) else None,
+                        "provider_last_activity_at": str(t.get("lastActivityAt")) if isinstance(t.get("lastActivityAt"), str) else None,
+                        "provider_last_heartbeat_at": str(t.get("lastHeartbeatAt")) if isinstance(t.get("lastHeartbeatAt"), str) else None,
+                        "terminal_sent_at": str(t.get("terminalSentAt")) if isinstance(t.get("terminalSentAt"), str) else None,
+                    }
+                    for t in tasks
+                    if isinstance(t, dict) and "taskId" in t and t.get("terminalSentAt") is None
                 ]
 
     sdk_initialized = bool(payload.get("sdk_initialized"))
@@ -384,6 +398,7 @@ def _build_repo_bridge_report(repo_path: Path) -> dict:
             "repo_bridge_receipt_watcher_running": receipt_watcher_running,
             "repo_bridge_pending_task_count": pending_task_count,
             "repo_bridge_pending_task_ids": pending_task_ids,
+            "repo_bridge_pending_tasks": pending_tasks,
             "repo_bridge_session_ready": not warning_reasons,
             "repo_bridge_warning": "; ".join(warning_reasons) or None,
             "repo_bridge_version": running_extension_version,

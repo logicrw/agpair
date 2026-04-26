@@ -22,6 +22,7 @@ class ExecutorSafetyMetadata:
 class TaskRecord:
     task_id: str
     repo_path: str
+    execution_repo_path: str | None
     phase: str
     antigravity_session_id: str | None
     attempt_no: int
@@ -85,6 +86,9 @@ def a2a_state_hint_from_phase(phase: str, blocker_type: str | None = None) -> st
         return "auth-required"
     mapping = {
         "new": "submitted",
+        "queued_unclaimed": "submitted",
+        "provider_consumed_no_ack": "working",
+        "running_without_receipt": "working",
         "acked": "working",
         "evidence_ready": "input-required",
         "committed": "completed",

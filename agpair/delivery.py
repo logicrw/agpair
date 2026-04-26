@@ -19,7 +19,8 @@ _DELIVERY_HEADER_RE = re.compile(
     r"^X-Delivery-Id:\s*(?P<delivery_id>\S+)\s*\n?",
 )
 
-_TERMINAL_STATUSES = frozenset({
+_DELIVERY_ID_STATUSES = frozenset({
+    messages.ACK,
     messages.EVIDENCE_PACK,
     messages.BLOCKED,
     messages.COMMITTED,
@@ -35,11 +36,11 @@ class ParsedBody:
 
 
 def parse_delivery_header(status: str, body: str) -> ParsedBody:
-    """Extract ``X-Delivery-Id`` from *body* if *status* is terminal.
+    """Extract ``X-Delivery-Id`` from *body* if *status* supports delivery ids.
 
-    Non-terminal statuses bypass parsing entirely, returning the body
+    Unsupported statuses bypass parsing entirely, returning the body
     unchanged with ``delivery_id=None``.  This prevents accidental
-    activation for ACK / RUNNING bodies that might coincidentally
+    activation for RUNNING / TASK bodies that might coincidentally
     contain the header text.
 
     Returns
@@ -48,7 +49,7 @@ def parse_delivery_header(status: str, body: str) -> ParsedBody:
         ``delivery_id`` is the extracted id (or ``None``), and
         ``clean_body`` is the body with the header line stripped.
     """
-    if status not in _TERMINAL_STATUSES:
+    if status not in _DELIVERY_ID_STATUSES:
         return ParsedBody(delivery_id=None, clean_body=body)
 
     match = _DELIVERY_HEADER_RE.match(body)

@@ -71,6 +71,36 @@ def test_codex_executor_dispatch():
         assert kwargs["text"] is True
 
 
+def test_codex_executor_dispatch_uses_isolated_worktree_for_command_and_cwd(tmp_path: pathlib.Path):
+    executor = CodexExecutor(codex_bin="fake-codex")
+    worktree_path = tmp_path / "wt"
+
+    with mock.patch("agpair.executors.local_cli._git_toplevel", return_value=tmp_path.resolve()), \
+         mock.patch("agpair.executors.local_cli._git_head", return_value="fake-head"), \
+         mock.patch("agpair.executors.local_cli.subprocess.run") as mock_run, \
+         mock.patch("agpair.executors.local_cli.subprocess.check_output") as mock_check_output, \
+         mock.patch("subprocess.Popen") as mock_popen:
+        mock_process = mock.Mock()
+        mock_process.pid = 12345
+        mock_popen.return_value = mock_process
+        mock_run.return_value = mock.Mock(returncode=0)
+        mock_check_output.return_value = f"worktree {tmp_path.resolve()}\nworktree {worktree_path.resolve()}\n"
+
+        dispatch_res = executor.dispatch(
+            task_id="task-iso-123",
+            body="Do isolated work",
+            repo_path=str(tmp_path),
+            isolated_worktree=True,
+            worktree_boundary=str(worktree_path),
+        )
+
+    wrapper_content = (pathlib.Path(dispatch_res.session_id) / "wrapper.sh").read_text(encoding="utf-8")
+    assert f"-C {worktree_path.resolve()}" in wrapper_content
+
+    _, kwargs = mock_popen.call_args
+    assert kwargs["cwd"] == str(worktree_path.resolve())
+
+
 def test_codex_executor_dispatch_uses_bypass_all_by_default(monkeypatch):
     monkeypatch.delenv("AGPAIR_CODEX_APPROVAL_MODE", raising=False)
     executor = CodexExecutor(codex_bin="fake-codex")

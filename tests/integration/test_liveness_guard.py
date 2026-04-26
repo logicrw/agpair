@@ -261,6 +261,12 @@ def test_workspace_activity_prevents_watchdog_on_acked_task(tmp_path: Path) -> N
         def pull_receipts(self, **kw):
             return []
 
+        def reserve_receipts(self, **kw):
+            return []
+
+        def settle_claims(self, **kw):
+            return 0
+
     run_once(
         paths,
         now=now,
@@ -298,6 +304,12 @@ def test_stale_workspace_activity_does_not_prevent_watchdog(tmp_path: Path) -> N
     class EmptyBus:
         def pull_receipts(self, **kw):
             return []
+
+        def reserve_receipts(self, **kw):
+            return []
+
+        def settle_claims(self, **kw):
+            return 0
 
     run_once(
         paths,

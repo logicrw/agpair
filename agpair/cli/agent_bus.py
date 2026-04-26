@@ -7,7 +7,9 @@ Replaces ad-hoc hand-written SQL with clean subcommands:
 
     relay_bus.py send   --sender code --task-id X --status ACK --body "..."
     relay_bus.py fetch  [--sender desktop] [--unread] [--limit 10]
-    relay_bus.py pull   --sender desktop --reader code --full
+    relay_bus.py reserve --sender desktop --reader code --full
+    relay_bus.py settle  --reader code --claims clm_123,clm_456
+    relay_bus.py pull   --sender desktop --reader code --full   # deprecated compatibility wrapper
     relay_bus.py watch  --sender desktop --reader code --full
     relay_bus.py ack    --ids 501,502 --reader code
     relay_bus.py health
@@ -25,6 +27,7 @@ import signal
 import sqlite3
 import sys
 import time
+import uuid
 from pathlib import Path
 
 DEFAULT_DB = os.path.expanduser("~/.relay_buffer.db")
@@ -48,7 +51,11 @@ CREATE TABLE IF NOT EXISTS messages (
     message TEXT NOT NULL,
     timestamp TEXT NOT NULL,
     read_by_desktop_at TEXT,
-    read_by_code_at TEXT
+    read_by_code_at TEXT,
+    reserved_by_desktop_claim_id TEXT,
+    reserved_by_desktop_until TEXT,
+    reserved_by_code_claim_id TEXT,
+    reserved_by_code_until TEXT
 );
 """
 
@@ -67,13 +74,23 @@ def _connect(db: str | None = None, *, timeout: float = 10) -> sqlite3.Connectio
     conn = sqlite3.connect(path, timeout=timeout)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA busy_timeout=5000;")
-    if not exists:
-        conn.execute(CREATE_TABLE_SQL)
-        conn.commit()
-    else:
-        conn.execute(CREATE_TABLE_SQL)
-        conn.commit()
+    conn.execute(CREATE_TABLE_SQL)
+    conn.commit()
+    _ensure_schema(conn)
     return conn
+
+
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    for col in (
+        "reserved_by_desktop_claim_id",
+        "reserved_by_desktop_until",
+        "reserved_by_code_claim_id",
+        "reserved_by_code_until",
+    ):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE messages ADD COLUMN {col} TEXT")
+            conn.commit()
 
 
 def _is_lock_error(exc: sqlite3.Error) -> bool:
@@ -122,6 +139,16 @@ def _parse_message(raw: str) -> dict:
         body_lines.pop(0)
     result["body"] = "\n".join(body_lines)
     return result
+
+
+def _reservation_columns(reader: str) -> tuple[str, str]:
+    return (f"reserved_by_{reader}_claim_id", f"reserved_by_{reader}_until")
+
+
+def _lease_expires_at(lease_ms: int) -> str:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    future = now + datetime.timedelta(milliseconds=max(lease_ms, 1))
+    return future.isoformat()
 
 
 def _resolve_body(args: argparse.Namespace) -> str:
@@ -228,6 +255,103 @@ def _pull_messages(
             conn.close()
 
     return _with_lock_retry(_op, action="pull")
+
+
+def _reserve_messages(
+    *,
+    db: str | None,
+    reader: str,
+    sender: str | None,
+    task_id: str | None,
+    repo_path: str | None,
+    limit: int,
+    full: bool,
+    lease_ms: int,
+) -> list[dict]:
+    conditions = [f"read_by_{reader}_at IS NULL"]
+    params: list = []
+    claim_col, until_col = _reservation_columns(reader)
+    now = _now_iso()
+
+    conditions.append(f"({claim_col} IS NULL OR {until_col} IS NULL OR {until_col} < ?)")
+    params.append(now)
+
+    if sender:
+        conditions.append("sender = ?")
+        params.append(sender)
+
+    if task_id:
+        conditions.append("message LIKE ?")
+        params.append(f"%TASK_ID: {task_id}%")
+
+    if repo_path:
+        conditions.append("message LIKE ?")
+        params.append(f"%repo_path: {repo_path}%")
+
+    where = " AND ".join(conditions)
+    limit = min(limit or 20, 100)
+    lease_until = _lease_expires_at(lease_ms)
+
+    def _op():
+        conn = _connect(db)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                f"SELECT id, sender, message, timestamp, read_by_desktop_at, read_by_code_at "
+                f"FROM messages WHERE {where} ORDER BY id ASC LIMIT ?",
+                [*params, limit],
+            ).fetchall()
+            results = []
+            for row in rows:
+                claim_id = f"clm_{uuid.uuid4().hex}"
+                conn.execute(
+                    f"UPDATE messages SET {claim_col}=?, {until_col}=? WHERE id=?",
+                    (claim_id, lease_until, row[0]),
+                )
+                parsed = _parse_message(row[2])
+                results.append(
+                    {
+                        "id": row[0],
+                        "sender": row[1],
+                        "task_id": parsed["task_id"],
+                        "status": parsed["status"],
+                        "body": parsed["body"][:500] if not full else parsed["body"],
+                        "timestamp": row[3],
+                        "read_by_desktop": row[4] is not None,
+                        "read_by_code": row[5] is not None,
+                        "claim_id": claim_id,
+                        "lease_expires_at": lease_until,
+                    }
+                )
+            conn.commit()
+            return results
+        finally:
+            conn.close()
+
+    return _with_lock_retry(_op, action="reserve")
+
+
+def _settle_claims(*, db: str | None, reader: str, claims: list[str]) -> int:
+    now = _now_iso()
+    claim_col, until_col = _reservation_columns(reader)
+    read_col = f"read_by_{reader}_at"
+
+    def _op():
+        conn = _connect(db)
+        try:
+            placeholders = ",".join("?" for _ in claims)
+            cur = conn.execute(
+                f"UPDATE messages "
+                f"SET {read_col}=?, {claim_col}=NULL, {until_col}=NULL "
+                f"WHERE {claim_col} IN ({placeholders}) AND {read_col} IS NULL",
+                [now, *claims],
+            )
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+
+    return _with_lock_retry(_op, action="settle")
 
 
 def _handle_signal(signum, frame) -> None:  # type: ignore[no-untyped-def]
@@ -345,7 +469,9 @@ def cmd_pull(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        results = _pull_messages(
+        # Compatibility path: preserve the old "fetch + immediately mark read"
+        # behavior on top of the newer reserve/settle transport.
+        results = _reserve_messages(
             db=args.db,
             reader=reader,
             sender=args.sender,
@@ -353,11 +479,79 @@ def cmd_pull(args: argparse.Namespace) -> int:
             repo_path=getattr(args, "repo_path", None),
             limit=args.limit,
             full=args.full,
+            lease_ms=max(getattr(args, "lease_ms", 30000), 1),
         )
+        claims = [
+            claim_id
+            for claim_id in (msg.get("claim_id") for msg in results)
+            if isinstance(claim_id, str) and claim_id
+        ]
+        if claims:
+            _settle_claims(db=args.db, reader=reader, claims=claims)
         print(json.dumps({"ok": True, "reader": reader, "claimed": len(results), "messages": results}, indent=2))
         return 0
     except Exception as exc:
         print(json.dumps({"ok": False, "error": str(exc), "action": "pull"}), file=sys.stderr)
+        return 1
+
+
+def cmd_reserve(args: argparse.Namespace) -> int:
+    reader = args.reader
+    if reader not in VALID_SENDERS:
+        print(
+            json.dumps({"ok": False, "error": f"reader must be one of {VALID_SENDERS}", "action": "reserve"}),
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        results = _reserve_messages(
+            db=args.db,
+            reader=reader,
+            sender=args.sender,
+            task_id=args.task_id,
+            repo_path=getattr(args, "repo_path", None),
+            limit=args.limit,
+            full=args.full,
+            lease_ms=args.lease_ms,
+        )
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "reader": reader,
+                    "reserved": len(results),
+                    "messages": results,
+                },
+                indent=2,
+            )
+        )
+        return 0
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": str(exc), "action": "reserve"}), file=sys.stderr)
+        return 1
+
+
+def cmd_settle(args: argparse.Namespace) -> int:
+    reader = args.reader
+    if reader not in VALID_SENDERS:
+        print(
+            json.dumps({"ok": False, "error": f"reader must be one of {VALID_SENDERS}", "action": "settle"}),
+            file=sys.stderr,
+        )
+        return 1
+
+    claims = [item.strip() for item in args.claims.split(",") if item.strip()]
+    if not claims:
+        print(json.dumps({"ok": False, "error": "no claim IDs provided", "action": "settle"}), file=sys.stderr)
+        return 1
+
+    try:
+        settled = _settle_claims(db=args.db, reader=reader, claims=claims)
+        print(json.dumps({"ok": True, "reader": reader, "settled": settled, "claims": claims}))
+        return 0
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": str(exc), "action": "settle"}), file=sys.stderr)
         return 1
 
 
@@ -381,7 +575,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
     try:
         while not STOP:
-            messages = _pull_messages(
+            messages = _reserve_messages(
                 db=args.db,
                 reader=reader,
                 sender=args.sender,
@@ -389,6 +583,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
                 repo_path=getattr(args, "repo_path", None),
                 limit=args.limit,
                 full=args.full,
+                lease_ms=args.lease_ms,
             )
             if messages:
                 emitted_batches += 1
@@ -397,6 +592,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
                     "ok": True,
                     "mode": "watch",
                     "reader": reader,
+                    "reserved": len(messages),
                     "claimed": len(messages),
                     "messages": messages,
                     "emitted_at": _now_iso(),
@@ -489,9 +685,19 @@ def cmd_health(args: argparse.Namespace) -> int:
         unread_by_desktop = conn.execute(
             "SELECT COUNT(*) FROM messages WHERE sender='code' AND read_by_desktop_at IS NULL"
         ).fetchone()[0]
+        reserved_by_code = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE reserved_by_code_claim_id IS NOT NULL AND (reserved_by_code_until IS NULL OR reserved_by_code_until >= ?)",
+            (_now_iso(),),
+        ).fetchone()[0]
+        reserved_by_desktop = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE reserved_by_desktop_claim_id IS NOT NULL AND (reserved_by_desktop_until IS NULL OR reserved_by_desktop_until >= ?)",
+            (_now_iso(),),
+        ).fetchone()[0]
         report["total_messages"] = total
         report["unread_by_code"] = unread_by_code
         report["unread_by_desktop"] = unread_by_desktop
+        report["reserved_by_code"] = reserved_by_code
+        report["reserved_by_desktop"] = reserved_by_desktop
 
         latest = conn.execute(
             "SELECT id, sender, timestamp, substr(message,1,120) FROM messages ORDER BY id DESC LIMIT 1"
@@ -543,25 +749,42 @@ def build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--full", action="store_true", help="Show full body (default truncates)")
     fetch.set_defaults(func=cmd_fetch)
 
-    pull = sub.add_parser("pull", help="Atomically fetch unread messages and mark them read")
+    pull = sub.add_parser("pull", help="Deprecated compatibility wrapper: reserve unread messages then settle them immediately")
     pull.add_argument("--sender", help="Filter by sender")
-    pull.add_argument("--reader", required=True, help="Reader role that is claiming the unread messages")
+    pull.add_argument("--reader", required=True, help="Reader role consuming the reserved messages")
     pull.add_argument("--task-id", help="Filter by task ID")
     pull.add_argument("--repo-path", help="Filter by repo path included in the body")
     pull.add_argument("--limit", type=int, default=20, help="Max results (<=100)")
     pull.add_argument("--full", action="store_true", help="Show full body (default truncates)")
+    pull.add_argument("--lease-ms", type=int, default=30000, help="Temporary reservation lease in milliseconds before compatibility settle")
     pull.set_defaults(func=cmd_pull)
 
-    watch = sub.add_parser("watch", help="Continuously claim unread messages and emit JSONL batches")
+    reserve = sub.add_parser("reserve", help="Reserve unread messages with a temporary lease before settle")
+    reserve.add_argument("--sender", help="Filter by sender")
+    reserve.add_argument("--reader", required=True, help="Reader role taking the temporary reservation")
+    reserve.add_argument("--task-id", help="Filter by task ID")
+    reserve.add_argument("--repo-path", help="Filter by repo path included in the body")
+    reserve.add_argument("--limit", type=int, default=20, help="Max results (<=100)")
+    reserve.add_argument("--full", action="store_true", help="Show full body (default truncates)")
+    reserve.add_argument("--lease-ms", type=int, default=30000, help="Reservation lease in milliseconds")
+    reserve.set_defaults(func=cmd_reserve)
+
+    settle = sub.add_parser("settle", help="Mark reserved messages as settled/read by claim ID")
+    settle.add_argument("--claims", required=True, help="Comma-separated reservation claim IDs")
+    settle.add_argument("--reader", required=True, help="desktop or code")
+    settle.set_defaults(func=cmd_settle)
+
+    watch = sub.add_parser("watch", help="Continuously reserve unread messages and emit JSONL batches")
     watch.add_argument("--sender", help="Filter by sender")
-    watch.add_argument("--reader", required=True, help="Reader role that is claiming the unread messages")
+    watch.add_argument("--reader", required=True, help="Reader role that will reserve the unread messages")
     watch.add_argument("--task-id", help="Filter by task ID")
     watch.add_argument("--repo-path", help="Filter by repo path included in the body")
-    watch.add_argument("--limit", type=int, default=20, help="Max results per claimed batch (<=100)")
+    watch.add_argument("--limit", type=int, default=20, help="Max results per reserved batch (<=100)")
     watch.add_argument("--full", action="store_true", help="Show full body (default truncates)")
     watch.add_argument("--interval-ms", type=int, default=1000, help="Polling interval in milliseconds")
+    watch.add_argument("--lease-ms", type=int, default=30000, help="Reservation lease in milliseconds")
     watch.add_argument("--idle-exit", type=int, default=0, help="Exit after N consecutive empty polls (0 = never)")
-    watch.add_argument("--max-batches", type=int, default=0, help="Exit after N claimed batches (0 = never)")
+    watch.add_argument("--max-batches", type=int, default=0, help="Exit after N reserved batches (0 = never)")
     watch.set_defaults(func=cmd_watch)
 
     ack = sub.add_parser("ack", help="Mark messages as read")

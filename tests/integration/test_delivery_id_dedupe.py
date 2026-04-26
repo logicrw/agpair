@@ -1,10 +1,10 @@
-"""Tests for delivery-id deduplication of terminal receipts.
+"""Tests for delivery-id deduplication of receipts.
 
 Covers:
-- parse_delivery_header parsing (terminal vs non-terminal, presence vs absence)
+- parse_delivery_header parsing (ACK/terminal vs non-terminal, presence vs absence)
 - DB-backed dedup via (task_id, delivery_id) unique index
 - Existing message-id dedup preserved
-- ACK / RUNNING unaffected even when body contains X-Delivery-Id
+- RUNNING unaffected even when body contains X-Delivery-Id
 - Journal / task state sees clean body, not header
 - Migration evidence for delivery_id column + unique index
 - Stale message-id watermark still works alongside delivery-id dedup
@@ -33,9 +33,20 @@ class FakePullBus:
     def __init__(self, receipts: list[dict]) -> None:
         self._receipts = receipts
         self.sent_messages: list[tuple[str, tuple, dict]] = []
+        self.settled_claims: list[tuple[str, list[str]]] = []
 
     def pull_receipts(self, *, task_id: str | None = None, limit: int = 20) -> list[dict]:
         return list(self._receipts)
+
+    def reserve_receipts(self, *, task_id: str | None = None, limit: int = 20, lease_ms: int = 30000) -> list[dict]:
+        reserved = []
+        for index, receipt in enumerate(self._receipts, start=1):
+            reserved.append({**receipt, "claim_id": f"clm-{index}"})
+        return reserved
+
+    def settle_claims(self, *, reader: str, claims: list[str]) -> int:
+        self.settled_claims.append((reader, list(claims)))
+        return len(claims)
 
     def send_task(self, *args, **kwargs):
         self.sent_messages.append(("send_task", args, kwargs))
@@ -69,11 +80,11 @@ class TestParseDeliveryHeader:
         result = parse_delivery_header("BLOCKED", body)
         assert result == ParsedBody(delivery_id=None, clean_body="just plain body")
 
-    def test_nonterminal_ack_ignores_header(self) -> None:
-        body = "X-Delivery-Id: dlv-should-not-parse\nsession_id=foo"
+    def test_ack_with_header(self) -> None:
+        body = "X-Delivery-Id: ack-should-parse\nsession_id=foo"
         result = parse_delivery_header("ACK", body)
-        assert result.delivery_id is None
-        assert result.clean_body == body  # unchanged
+        assert result.delivery_id == "ack-should-parse"
+        assert result.clean_body == "session_id=foo"
 
     def test_nonterminal_running_ignores_header(self) -> None:
         body = "X-Delivery-Id: dlv-999\nheartbeat"
@@ -245,12 +256,11 @@ def test_terminal_without_header_still_works(tmp_path: Path) -> None:
 
 
 # ===========================================================================
-# 6. ACK / RUNNING unaffected even if body contains X-Delivery-Id text
+# 6. ACK dedup / RUNNING unaffected
 # ===========================================================================
 
 
-def test_ack_unaffected_by_delivery_header_in_body(tmp_path: Path) -> None:
-    """ACK bodies are never parsed for X-Delivery-Id."""
+def test_ack_accepts_delivery_header_and_strips_it_from_body(tmp_path: Path) -> None:
     from agpair.daemon.loop import run_once
 
     paths = make_paths(tmp_path)
@@ -270,6 +280,42 @@ def test_ack_unaffected_by_delivery_header_in_body(tmp_path: Path) -> None:
     assert task is not None
     assert task.phase == "acked"
     assert task.antigravity_session_id == "session-ack-test"
+    with connect(paths.db_path) as conn:
+        row = conn.execute("SELECT delivery_id FROM receipts WHERE message_id='60'").fetchone()
+    assert row is not None
+    assert row["delivery_id"] == "dlv-sneaky"
+
+
+def test_duplicate_ack_delivery_id_is_ignored_after_terminal_progress(tmp_path: Path) -> None:
+    from agpair.daemon.loop import run_once
+
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    tasks = TaskRepository(paths.db_path)
+    tasks.create_task(task_id="TASK-1", repo_path="/tmp/repo")
+
+    first_ack = {
+        "id": 60,
+        "task_id": "TASK-1",
+        "status": "ACK",
+        "body": "X-Delivery-Id: dlv-ack-1\nsession_id=session-ack-test",
+    }
+    run_once(paths, now=datetime(2026, 3, 24, 12, 0, tzinfo=UTC), bus=FakePullBus([first_ack]))
+
+    tasks.mark_committed(task_id="TASK-1", last_receipt_id="terminal-1", terminal_source="receipt")
+
+    replay_ack = {
+        "id": 61,
+        "task_id": "TASK-1",
+        "status": "ACK",
+        "body": "X-Delivery-Id: dlv-ack-1\nsession_id=session-ack-test",
+    }
+    run_once(paths, now=datetime(2026, 3, 24, 12, 1, tzinfo=UTC), bus=FakePullBus([replay_ack]))
+
+    task = tasks.get_task("TASK-1")
+    assert task is not None
+    assert task.phase == "committed"
+    assert task.last_receipt_id == "terminal-1"
 
 
 def test_running_unaffected_by_delivery_header_in_body(tmp_path: Path) -> None:

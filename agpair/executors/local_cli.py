@@ -18,6 +18,10 @@ from agpair.models import ExecutorSafetyMetadata
 logger = logging.getLogger(__name__)
 
 
+class WorktreeProvisionError(RuntimeError):
+    """Raised when an isolated git worktree cannot be prepared safely."""
+
+
 def _git_head(repo_path: str) -> str | None:
     """获取当前 HEAD commit hash。"""
     try:
@@ -28,6 +32,41 @@ def _git_head(repo_path: str) -> str | None:
         return res or None
     except Exception:
         return None
+
+
+def _git_toplevel(repo_path: str) -> pathlib.Path:
+    try:
+        raw = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=repo_path,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
+        raise WorktreeProvisionError(
+            f"Failed to resolve git toplevel for {repo_path}: {exc}"
+        ) from exc
+    if not raw:
+        raise WorktreeProvisionError(f"Failed to resolve git toplevel for {repo_path}")
+    return pathlib.Path(raw).resolve()
+
+
+def _git_dir(repo_path: str) -> pathlib.Path | None:
+    try:
+        raw = subprocess.check_output(
+            ["git", "rev-parse", "--git-dir"],
+            cwd=repo_path,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    git_dir = pathlib.Path(raw)
+    if not git_dir.is_absolute():
+        git_dir = pathlib.Path(repo_path) / git_dir
+    return git_dir.resolve()
 
 
 def _git_diff_stat(repo_path: str, start: str, end: str) -> str:
@@ -182,6 +221,92 @@ def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def resolve_worktree_root(repo_path: str, task_id: str, worktree_boundary: str | None = None) -> pathlib.Path:
+    """Resolve the concrete worktree root for an isolated task."""
+    base_root = _git_toplevel(repo_path)
+    if worktree_boundary:
+        boundary = pathlib.Path(worktree_boundary)
+        if not boundary.is_absolute():
+            boundary = base_root / boundary
+        return boundary.resolve()
+    return (base_root / ".agpair" / "worktrees" / task_id).resolve()
+
+
+def resolve_execution_repo_path(repo_path: str, task_id: str, worktree_boundary: str | None = None) -> pathlib.Path:
+    """Resolve the actual cwd inside the worktree, preserving repo subdirectories."""
+    base_root = _git_toplevel(repo_path)
+    repo_resolved = pathlib.Path(repo_path).resolve()
+    try:
+        relative_repo_path = repo_resolved.relative_to(base_root)
+    except ValueError as exc:
+        raise WorktreeProvisionError(
+            f"Repo path {repo_path} is not inside git root {base_root}"
+        ) from exc
+    worktree_root = resolve_worktree_root(repo_path, task_id, worktree_boundary)
+    if not relative_repo_path.parts:
+        return worktree_root
+    return (worktree_root / relative_repo_path).resolve()
+
+
+def ensure_worktree_exists(base_repo_path: str, worktree_root: pathlib.Path) -> pathlib.Path:
+    """Create or validate a linked git worktree root before execution."""
+    base_root = _git_toplevel(base_repo_path)
+    worktree_root = worktree_root.resolve()
+    if worktree_root == base_root:
+        raise WorktreeProvisionError("Isolated worktree cannot reuse the base repository root.")
+    if worktree_root.exists():
+        if not worktree_root.is_dir():
+            raise WorktreeProvisionError(f"Path {worktree_root} exists but is not a directory.")
+        try:
+            top = subprocess.check_output(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=str(worktree_root),
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
+            raise WorktreeProvisionError(
+                f"Path {worktree_root} exists but is not a valid git worktree."
+            ) from exc
+        if pathlib.Path(top).resolve() != worktree_root:
+            raise WorktreeProvisionError(
+                f"Path {worktree_root} is inside a git worktree, but is not the worktree root."
+            )
+    else:
+        try:
+            subprocess.run(
+                ["git", "-C", str(base_root), "worktree", "add", "--detach", "--", str(worktree_root)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "").strip()
+            raise WorktreeProvisionError(
+                f"Failed to create isolated worktree at {worktree_root}: {detail or exc}"
+            ) from exc
+    try:
+        listing = subprocess.check_output(
+            ["git", "-C", str(base_root), "worktree", "list", "--porcelain"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
+        raise WorktreeProvisionError(
+            f"Failed to validate isolated worktree registration for {worktree_root}: {exc}"
+        ) from exc
+    registered_roots = {
+        pathlib.Path(line.removeprefix("worktree ").strip()).resolve()
+        for line in listing.splitlines()
+        if line.startswith("worktree ")
+    }
+    if worktree_root not in registered_roots:
+        raise WorktreeProvisionError(
+            f"Path {worktree_root} is not registered as a linked git worktree."
+        )
+    return worktree_root
+
+
 def _seconds_since(iso_str: str) -> float:
     from datetime import datetime, timezone
     try:
@@ -272,11 +397,29 @@ class LocalCLIExecutor(ExecutorAdapter):
             requires_human_interaction=False,
         )
 
-    def dispatch(self, *, task_id: str, body: str, repo_path: str) -> DispatchResult:
+    def dispatch(self, *, task_id: str, body: str, repo_path: str, isolated_worktree: bool = False, worktree_boundary: str | None = None) -> DispatchResult:
+        execution_repo_path = repo_path
+        if isolated_worktree:
+            worktree_root = ensure_worktree_exists(
+                repo_path,
+                resolve_worktree_root(repo_path, task_id, worktree_boundary),
+            )
+            execution_repo_path = str(
+                resolve_execution_repo_path(repo_path, task_id, str(worktree_root))
+            )
+            if pathlib.Path(execution_repo_path).resolve() == pathlib.Path(repo_path).resolve():
+                raise WorktreeProvisionError(
+                    "Isolated worktree resolved back to the base repository path."
+                )
+
         temp_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"agpair_{self._backend_id}_{task_id}_"))
 
-        start_head = _git_head(repo_path)
-        cli_cmd = self._build_cmd(_body_with_task_contract(task_id, body), repo_path, temp_dir)
+        start_head = _git_head(execution_repo_path)
+        cli_cmd = self._build_cmd(
+            _body_with_task_contract(task_id, body),
+            execution_repo_path,
+            temp_dir,
+        )
 
         wrapper_script = temp_dir / "wrapper.sh"
         cmd_str = " ".join(shlex.quote(str(x)) for x in cli_cmd)
@@ -295,7 +438,7 @@ exit $RC
             "pid": None,
             "pgid": None,
             "started_at": _now_iso(),
-            "repo_path": repo_path,
+            "repo_path": execution_repo_path,
             "start_head": start_head,
             "current_head": None,
             "exit_code": None,
@@ -320,7 +463,7 @@ exit $RC
                 [str(wrapper_script)],
                 stdout=stdout_fh, 
                 stderr=stderr_fh,
-                cwd=repo_path, 
+                cwd=execution_repo_path,
                 text=True,
                 start_new_session=True,
             )
@@ -337,7 +480,10 @@ exit $RC
         state["process_start_time"] = time.time()
         _atomic_write_state(temp_dir / "state.json", state)
 
-        return DispatchResult(session_id=str(temp_dir))
+        return DispatchResult(
+            session_id=str(temp_dir),
+            execution_repo_path=execution_repo_path,
+        )
 
     def poll(self, task_id: str, session_id: str, attempt_no: int = 1) -> TaskState | None:
         temp_dir = pathlib.Path(session_id)
@@ -650,8 +796,8 @@ exit $RC
         """仅在确认锁文件无人持有且更可能由本任务遗留时清理 git 锁。"""
         if not repo_path:
             return
-        git_dir = pathlib.Path(repo_path) / ".git"
-        if not git_dir.exists():
+        git_dir = _git_dir(repo_path)
+        if git_dir is None or not git_dir.exists():
             return
         started_at_epoch: float | None = None
         if started_at:

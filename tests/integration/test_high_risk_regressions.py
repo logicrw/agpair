@@ -24,9 +24,17 @@ from agpair.storage.tasks import TaskRepository
 class FakePullBus:
     def __init__(self, receipts: list[dict] | None = None) -> None:
         self._receipts = receipts or []
+        self.settled_claims: list[tuple[str, list[str]]] = []
 
     def pull_receipts(self, *, task_id: str | None = None, limit: int = 20) -> list[dict]:
         return list(self._receipts)
+
+    def reserve_receipts(self, *, task_id: str | None = None, limit: int = 20, lease_ms: int = 30000) -> list[dict]:
+        return [{**receipt, "claim_id": f"clm-{idx}"} for idx, receipt in enumerate(self._receipts, start=1)]
+
+    def settle_claims(self, *, reader: str, claims: list[str]) -> int:
+        self.settled_claims.append((reader, list(claims)))
+        return len(claims)
 
     def send_task(self, *args, **kwargs):
         pass
@@ -423,4 +431,3 @@ def test_cleanup_permission_denied_preserves_session_dir(tmp_path: Path) -> None
     # Verify state.json still marks process as alive
     state = json.loads((session_dir / "state.json").read_text(encoding="utf-8"))
     assert state["is_process_alive"] is True, "Process must remain marked as alive after PermissionError"
-
