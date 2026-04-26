@@ -2,7 +2,9 @@ from pathlib import Path
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 import sqlite3
+import subprocess
 import threading
 from typer.testing import CliRunner
 
@@ -1161,6 +1163,19 @@ def test_task_start_persists_dependencies_and_isolation(tmp_path: Path, monkeypa
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
 
     runner = CliRunner()
+    # Create prerequisite task first so --depends-on validation passes
+    prereq = runner.invoke(
+        app,
+        [
+            "task", "start",
+            "--repo-path", "/tmp/repo",
+            "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--task-id", "TASK-0",
+            "--no-wait",
+        ],
+    )
+    assert prereq.exit_code == 0
+
     result = runner.invoke(
         app,
         [
@@ -1410,3 +1425,225 @@ def test_task_repository_spotlight_testing_roundtrip(tmp_path: Path) -> None:
     task3 = repo.get_task("TASK-SPOT-RT-3")
     assert task3 is not None
     assert task3.spotlight_testing is False
+
+def test_task_start_isolated_worktree_persists_boundary(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    from unittest.mock import patch
+
+    from agpair.executors.base import DispatchResult
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    subprocess.run(["git", "init"], cwd=repo_path, check=True)
+    expected_boundary = str((repo_path / ".agpair" / "worktrees" / "TASK-ISO-DB").resolve())
+
+    with patch("agpair.executors.codex.CodexExecutor.dispatch") as mock_dispatch:
+        mock_dispatch.return_value = DispatchResult(
+            session_id="dummy-session",
+            execution_repo_path=expected_boundary,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "task", "start",
+                "--repo-path", str(repo_path),
+                "--body", "Goal: test isolated\nScope: test\nRequired changes: test\nExit criteria: test",
+                "--task-id", "TASK-ISO-DB",
+                "--executor", "codex",
+                "--isolated-worktree",
+                "--no-wait",
+            ],
+        )
+
+        assert result.exit_code == 0
+        mock_dispatch.assert_called_once_with(
+            task_id="TASK-ISO-DB",
+            body="Goal: test isolated\nScope: test\nRequired changes: test\nExit criteria: test",
+            repo_path=str(repo_path.resolve()),
+            isolated_worktree=True,
+            worktree_boundary=expected_boundary,
+        )
+
+        status_result = runner.invoke(app, ["task", "status", "TASK-ISO-DB", "--json"])
+        payload = json.loads(status_result.stdout)
+
+        assert payload["isolated_worktree"] is True
+        assert payload["worktree_boundary"] == expected_boundary
+        assert payload["execution_repo_path"] == expected_boundary
+        assert payload["isolation_satisfied"] is True
+
+
+def test_task_status_derives_provider_consumed_no_ack_from_bridge_health(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-UNACKED", repo_path=str(repo_path))
+
+    def fake_build_doctor_report(*args, **kwargs):
+        return {
+            "repo_bridge_reachable": True,
+            "repo_bridge_session_ready": True,
+            "repo_bridge_pending_task_count": 0,
+            "repo_bridge_pending_task_ids": [],
+            "repo_bridge_pending_tasks": [
+                {
+                    "task_id": "TASK-UNACKED",
+                    "provider_status": "ACKED",
+                    "provider_session_id": "sess-bridge-1",
+                    "provider_acked_at": "2026-04-20T10:00:00Z",
+                    "provider_last_activity_at": "2026-04-20T10:00:12Z",
+                    "provider_last_heartbeat_at": None,
+                    "terminal_sent_at": None,
+                }
+            ],
+        }
+
+    monkeypatch.setattr("agpair.cli.doctor.build_doctor_report", fake_build_doctor_report)
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-UNACKED", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["phase"] == "new"
+    assert payload["stored_phase"] == "new"
+    assert payload["phase_detail"] == "provider_consumed_no_ack"
+    assert payload["phase_source"] == "derived"
+    assert payload["bridge_state"] == "provider_consumed_no_ack"
+    assert payload["a2a_state_hint"] == "working"
+    assert payload["provider_session_id"] == "sess-bridge-1"
+    assert payload["status_sync"]["source"] == "bridge_tracker"
+
+
+def test_task_status_derives_running_without_receipt_from_workspace_activity(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+
+    subprocess.run(["git", "init"], cwd=repo_path, check=True)
+    subprocess.run(["git", "config", "user.email", "tests@example.com"], cwd=repo_path, check=True)
+    subprocess.run(["git", "config", "user.name", "AGPair Tests"], cwd=repo_path, check=True)
+    (repo_path / "tracked.txt").write_text("baseline", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo_path, check=True)
+    subprocess.run(["git", "commit", "-m", "baseline"], cwd=repo_path, check=True)
+
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-WORKING", repo_path=str(repo_path))
+    untracked = repo_path / "untracked.txt"
+    untracked.write_text("fresh activity", encoding="utf-8")
+    future_mtime = untracked.stat().st_mtime + 2
+    os.utime(untracked, (future_mtime, future_mtime))
+
+    def fake_build_doctor_report(*args, **kwargs):
+        return {
+            "repo_bridge_reachable": True,
+            "repo_bridge_session_ready": True,
+            "repo_bridge_pending_task_count": 0,
+            "repo_bridge_pending_task_ids": [],
+            "repo_bridge_pending_tasks": [],
+        }
+
+    monkeypatch.setattr("agpair.cli.doctor.build_doctor_report", fake_build_doctor_report)
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-WORKING", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["phase"] == "new"
+    assert payload["stored_phase"] == "new"
+    assert payload["phase_detail"] == "running_without_receipt"
+    assert payload["bridge_state"] == "running_without_receipt"
+    assert payload["last_workspace_activity_at"] is not None
+
+
+def test_inspect_json_surfaces_derived_antigravity_phase(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-INSPECT-UNACKED", repo_path=str(repo_path))
+
+    def fake_build_doctor_report(*args, **kwargs):
+        return {
+            "repo_bridge_reachable": True,
+            "repo_bridge_session_ready": True,
+            "repo_bridge_pending_task_count": 0,
+            "repo_bridge_pending_task_ids": [],
+            "repo_bridge_pending_tasks": [
+                {
+                    "task_id": "TASK-INSPECT-UNACKED",
+                    "provider_status": "RUNNING",
+                    "provider_session_id": "sess-bridge-2",
+                    "provider_acked_at": "2026-04-20T10:00:00Z",
+                    "provider_last_activity_at": "2026-04-20T10:00:12Z",
+                    "provider_last_heartbeat_at": None,
+                    "terminal_sent_at": None,
+                }
+            ],
+        }
+
+    monkeypatch.setattr("agpair.cli.doctor.build_doctor_report", fake_build_doctor_report)
+
+    result = CliRunner().invoke(
+        app,
+        ["inspect", "--repo-path", str(repo_path), "--task-id", "TASK-INSPECT-UNACKED", "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["task"]["phase"] == "new"
+    assert payload["task"]["stored_phase"] == "new"
+    assert payload["task"]["phase_detail"] == "provider_consumed_no_ack"
+    assert payload["task"]["bridge_state"] == "provider_consumed_no_ack"
+
+
+def test_task_retry_preserves_isolated_worktree_metadata_for_local_cli(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    execution_repo_path = str((repo_path / ".agpair" / "worktrees" / "TASK-RETRY-ISO").resolve())
+    repo.create_task(
+        task_id="TASK-RETRY-ISO",
+        repo_path=str(repo_path),
+        executor_backend="codex_cli",
+        isolated_worktree=True,
+        worktree_boundary=execution_repo_path,
+    )
+    repo.mark_blocked(task_id="TASK-RETRY-ISO", reason="dispatch failed: previous attempt")
+
+    class FakeExecutor:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def dispatch(self, **kwargs):
+            self.calls.append(kwargs)
+            return DispatchResult(
+                session_id="retry-session",
+                execution_repo_path=execution_repo_path,
+            )
+
+    fake_executor = FakeExecutor()
+    monkeypatch.setattr("agpair.executors.get_executor", lambda backend_id, **kwargs: fake_executor)
+
+    result = CliRunner().invoke(app, ["task", "retry", "TASK-RETRY-ISO", "--no-wait"])
+
+    assert result.exit_code == 0
+    assert fake_executor.calls == [
+        {
+            "task_id": "TASK-RETRY-ISO",
+            "body": "Fresh retry requested for TASK-RETRY-ISO attempt 2",
+            "repo_path": str(repo_path),
+            "isolated_worktree": True,
+            "worktree_boundary": execution_repo_path,
+        }
+    ]
+
+    updated = repo.get_task("TASK-RETRY-ISO")
+    assert updated is not None
+    assert updated.phase == "acked"
+    assert updated.execution_repo_path == execution_repo_path

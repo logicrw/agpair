@@ -192,3 +192,146 @@ class TestAutoAdvanceDependentTasks:
         # Should have logged the skip
         entries = journal.tail("T-B", limit=10)
         assert any("auto_advance_skipped" in e.event for e in entries)
+
+    # --- R3: terminal failure detection ---
+
+    def test_dep_blocked_marks_downstream_blocked(self, tmp_paths, tasks, journal):
+        """If dependency is blocked, downstream should be immediately blocked."""
+        _create_task(tasks, journal, "T-A")
+        tasks.mark_acked(task_id="T-A", session_id="s-a")
+        tasks.mark_blocked(task_id="T-A", reason="executor crashed")
+
+        _create_task(tasks, journal, "T-B", depends_on=["T-A"])
+
+        result = auto_advance_dependent_tasks(tmp_paths)
+        assert result == 0
+        task_b = tasks.get_task("T-B")
+        assert task_b.phase == "blocked"
+        assert "terminal failure" in task_b.stuck_reason
+        assert "T-A=blocked" in task_b.stuck_reason
+
+    def test_dep_abandoned_marks_downstream_blocked(self, tmp_paths, tasks, journal):
+        """If dependency is abandoned, downstream should be immediately blocked."""
+        _create_task(tasks, journal, "T-A")
+        tasks.mark_abandoned(task_id="T-A", reason="user cancelled")
+
+        _create_task(tasks, journal, "T-B", depends_on=["T-A"])
+
+        result = auto_advance_dependent_tasks(tmp_paths)
+        assert result == 0
+        task_b = tasks.get_task("T-B")
+        assert task_b.phase == "blocked"
+        assert "terminal failure" in task_b.stuck_reason
+        assert "T-A=abandoned" in task_b.stuck_reason
+
+    def test_dep_not_found_marks_downstream_blocked(self, tmp_paths, tasks, journal):
+        """If dependency ID doesn't exist, downstream should be blocked (R1 daemon defense)."""
+        _create_task(tasks, journal, "T-B", depends_on=["T-GHOST"])
+
+        result = auto_advance_dependent_tasks(tmp_paths)
+        assert result == 0
+        task_b = tasks.get_task("T-B")
+        assert task_b.phase == "blocked"
+        assert "terminal failure" in task_b.stuck_reason
+        assert "T-GHOST=not_found" in task_b.stuck_reason
+
+
+# ---- CLI integration tests for depends_on validation (R1/R2) ----
+
+from typer.testing import CliRunner
+from agpair.cli.app import app
+
+
+def _setup_cli_env(tmp_path: Path, monkeypatch):
+    """Set up AGPAIR_HOME and return (runner, paths)."""
+    agpair_home = tmp_path / ".agpair"
+    monkeypatch.setenv("AGPAIR_HOME", str(agpair_home))
+    paths = AppPaths.from_root(agpair_home)
+    ensure_database(paths.db_path)
+    return CliRunner(), paths
+
+
+class TestCLIDependsOnValidation:
+    """R1/R2: CLI must reject invalid --depends-on before creating a task."""
+
+    def test_invalid_json_rejected(self, tmp_path, monkeypatch):
+        runner, paths = _setup_cli_env(tmp_path, monkeypatch)
+        result = runner.invoke(app, [
+            "task", "start", "--repo-path", "/tmp/repo",
+            "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--depends-on", "not valid json",
+            "--no-wait",
+        ])
+        assert result.exit_code != 0
+        assert "valid JSON array" in result.stdout or "valid JSON array" in (result.stderr or "")
+
+    def test_empty_array_rejected(self, tmp_path, monkeypatch):
+        runner, paths = _setup_cli_env(tmp_path, monkeypatch)
+        result = runner.invoke(app, [
+            "task", "start", "--repo-path", "/tmp/repo",
+            "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--depends-on", "[]",
+            "--no-wait",
+        ])
+        assert result.exit_code != 0
+        assert "empty" in result.stdout.lower() or "empty" in (result.stderr or "").lower()
+
+    def test_nonexistent_dep_rejected(self, tmp_path, monkeypatch):
+        runner, paths = _setup_cli_env(tmp_path, monkeypatch)
+        result = runner.invoke(app, [
+            "task", "start", "--repo-path", "/tmp/repo",
+            "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--depends-on", '["TASK-DOES-NOT-EXIST"]',
+            "--no-wait",
+        ])
+        assert result.exit_code != 0
+        assert "nonexistent" in result.stdout.lower() or "nonexistent" in (result.stderr or "").lower()
+
+    def test_valid_depends_on_creates_deferred_task(self, tmp_path, monkeypatch):
+        """Valid deps that aren't yet committed → task created as deferred (phase=new, no dispatch)."""
+        from tests.fixtures.fake_agent_bus import write_fake_agent_bus, read_calls
+
+        binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+        monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+        monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+        monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+        monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+
+        runner = CliRunner()
+
+        # Create prerequisite task A
+        result_a = runner.invoke(app, [
+            "task", "start", "--repo-path", "/tmp/repo",
+            "--body", "Goal: test A\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--task-id", "TASK-A", "--no-wait",
+        ])
+        assert result_a.exit_code == 0
+
+        # Create dependent task B
+        result_b = runner.invoke(app, [
+            "task", "start", "--repo-path", "/tmp/repo",
+            "--body", "Goal: test B\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--task-id", "TASK-B", "--depends-on", '["TASK-A"]', "--no-wait",
+        ])
+        assert result_b.exit_code == 0
+        assert "TASK-B" in result_b.stdout
+
+        # B should be created (phase=new) but NOT dispatched
+        paths = AppPaths.from_root(tmp_path / ".agpair")
+        task_b = TaskRepository(paths.db_path).get_task("TASK-B")
+        assert task_b is not None
+        assert task_b.phase == "new"
+
+        # Journal should show 'deferred'
+        journal_entries = JournalRepository(paths.db_path).tail("TASK-B", limit=10)
+        assert any("deferred" in e.event for e in journal_entries)
+
+        # Agent-bus should NOT have been called for TASK-B (only TASK-A)
+        calls = read_calls(calls_path)
+        task_ids_dispatched = [
+            c["argv"][c["argv"].index("--task-id") + 1]
+            for c in calls if "--task-id" in c["argv"]
+        ]
+        assert "TASK-A" in task_ids_dispatched
+        assert "TASK-B" not in task_ids_dispatched
+

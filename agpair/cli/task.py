@@ -646,6 +646,21 @@ def start_task(
                 waiter_command="task_start_auto_wait",
             )
             return
+    # --- Validate depends_on BEFORE creating the task ---
+    parsed_dep_ids: list[str] = []
+    if depends_on:
+        try:
+            parsed_dep_ids = json.loads(depends_on)
+        except (json.JSONDecodeError, TypeError):
+            raise typer.BadParameter(f"--depends-on must be a valid JSON array, got: {depends_on!r}")
+        if not isinstance(parsed_dep_ids, list) or not all(isinstance(d, str) for d in parsed_dep_ids):
+            raise typer.BadParameter(f"--depends-on must be a JSON array of strings, got: {depends_on!r}")
+        if not parsed_dep_ids:
+            raise typer.BadParameter("--depends-on must not be an empty array; omit the flag if there are no dependencies")
+        missing = [d for d in parsed_dep_ids if tasks.get_task(d) is None]
+        if missing:
+            raise typer.BadParameter(f"--depends-on references nonexistent task(s): {missing}")
+
     try:
         tasks.create_task(
             task_id=final_task_id,
@@ -683,25 +698,29 @@ def start_task(
     journal.append(final_task_id, "cli", "created", body)
 
     # --- Deferred dispatch for unsatisfied depends_on ---
-    if depends_on:
-        try:
-            dep_ids = json.loads(depends_on)
-        except (json.JSONDecodeError, TypeError):
-            dep_ids = []
-        if isinstance(dep_ids, list) and dep_ids:
-            all_met = all(
-                (dep_task := tasks.get_task(d)) is not None and dep_task.phase == "committed"
-                for d in dep_ids
+    if parsed_dep_ids:
+        all_met = all(
+            (dep_task := tasks.get_task(d)) is not None and dep_task.phase == "committed"
+            for d in parsed_dep_ids
+        )
+        if not all_met:
+            journal.append(
+                final_task_id,
+                "cli",
+                "deferred",
+                f"dependencies not yet satisfied: {parsed_dep_ids}; daemon will auto-advance",
             )
-            if not all_met:
-                journal.append(
-                    final_task_id,
-                    "cli",
-                    "deferred",
-                    f"dependencies not yet satisfied: {dep_ids}; daemon will auto-advance",
-                )
-                typer.echo(final_task_id)
-                return
+            typer.echo(final_task_id)
+            maybe_auto_wait(
+                paths.db_path,
+                final_task_id,
+                wait=wait,
+                success_phases=DISPATCH_SUCCESS_PHASES,
+                interval_seconds=interval_seconds,
+                timeout_seconds=timeout_seconds,
+                waiter_command="task_start_auto_wait",
+            )
+            return
 
     try:
         dispatch_result = exec_instance.dispatch(

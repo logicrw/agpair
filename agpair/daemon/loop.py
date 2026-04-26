@@ -124,10 +124,14 @@ def scan_workspace_activity(paths: AppPaths, *, current: datetime) -> None:
 
 def _get_task_body_from_journal(journal: JournalRepository, task_id: str) -> str | None:
     """Retrieve the original task body from the 'created' journal entry."""
-    for row in journal.tail(task_id, limit=50):
+    for row in journal.tail(task_id, limit=200):
         if row.event == "created" and row.source == "cli":
             return row.body
     return None
+
+
+# Phases that mean a dependency will never be satisfied.
+_DEP_TERMINAL_FAILURE_PHASES = frozenset({"blocked", "abandoned"})
 
 
 def auto_advance_dependent_tasks(
@@ -137,10 +141,14 @@ def auto_advance_dependent_tasks(
 ) -> int:
     """Auto-dispatch deferred tasks whose depends_on are now fully satisfied.
 
-    Scans all ``new``-phase tasks that have a ``depends_on`` value. For each,
-    checks whether every listed dependency has reached the ``committed`` phase.
-    If so, dispatches the task using its stored executor and the original body
-    from the journal.
+    Scans all ``new``-phase tasks that have a ``depends_on`` value.  For each
+    dependency the outcome is:
+
+    * ``committed`` → satisfied
+    * ``blocked`` / ``abandoned`` → permanently failed; mark the downstream
+      task as ``blocked`` immediately instead of waiting forever
+    * anything else (``new`` / ``acked`` / ``evidence_ready`` / ``stuck``) →
+      still in progress, keep waiting
 
     Returns the number of tasks successfully advanced.
     """
@@ -158,13 +166,30 @@ def auto_advance_dependent_tasks(
         if not isinstance(dep_ids, list) or not dep_ids:
             continue
 
-        # Check all dependencies are committed
+        # --- R3: classify each dependency ---
         all_satisfied = True
+        permanently_failed: list[tuple[str, str]] = []  # (dep_id, phase)
         for dep_id in dep_ids:
             dep_task = tasks.get_task(dep_id)
-            if dep_task is None or dep_task.phase != "committed":
+            if dep_task is None:
+                permanently_failed.append((dep_id, "not_found"))
                 all_satisfied = False
                 break
+            if dep_task.phase in _DEP_TERMINAL_FAILURE_PHASES:
+                permanently_failed.append((dep_id, dep_task.phase))
+                all_satisfied = False
+                break
+            if dep_task.phase != "committed":
+                all_satisfied = False
+                break
+
+        # If any dependency reached a terminal failure, block downstream now
+        if permanently_failed:
+            reasons = ", ".join(f"{did}={ph}" for did, ph in permanently_failed)
+            reason = f"dependency reached terminal failure: {reasons}"
+            journal.append(task.task_id, "daemon", "auto_advance_failed", reason)
+            tasks.mark_blocked(task_id=task.task_id, reason=reason)
+            continue
 
         if not all_satisfied:
             continue
@@ -178,6 +203,11 @@ def auto_advance_dependent_tasks(
                 "auto_advance_skipped",
                 "no task body found in journal",
             )
+            continue
+
+        # --- R4: re-check phase before dispatch to narrow race window ---
+        fresh_task = tasks.get_task(task.task_id)
+        if fresh_task is None or fresh_task.phase != "new":
             continue
 
         # Resolve executor and dispatch
