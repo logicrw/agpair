@@ -174,6 +174,7 @@ Exit criteria:
 | `agpair daemon status` shows `running: false` | `agpair daemon start`, then re-dispatch |
 | Task stuck in `acked` past expected runtime | Wait for daemon detection; on `blocked`, retry next executor |
 | Task `blocked` | Stop watch. `agpair task retry <ID> --body "..."` with the next executor |
+| Serial chain dep blocked/abandoned | Downstream tasks are auto-blocked. After retrying the upstream dep to `committed`, you must also `task retry` each downstream task — they do not auto-unblock. |
 | Two parallel tasks edit the same file | Abandon the later one; redo serially after the first lands |
 | Cherry-pick conflict in main | Resolve in main. Do **not** push the resolution back into the worktree |
 
