@@ -115,6 +115,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "is_approved" not in task_cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN is_approved INTEGER NOT NULL DEFAULT 0")
         conn.commit()
+    # Migration 14: add execution_repo_path
+    if "execution_repo_path" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN execution_repo_path TEXT")
+        conn.commit()
 
 
 def _configure_connection(conn: sqlite3.Connection) -> None:

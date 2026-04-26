@@ -151,7 +151,7 @@ def build_doctor_report(
         "stuck_marked": status.get("stuck_marked", 0),
         "latest_receipt_id": latest_receipt_id,
         "active_executor_backend": AntigravityExecutor("").backend_id,
-        "supported_executor_backends": [AntigravityExecutor("").backend_id, CodexExecutor("").backend_id, GeminiExecutor().backend_id],
+        "supported_executor_backends": [AntigravityExecutor("").backend_id, CodexExecutor().backend_id, GeminiExecutor().backend_id],
         "desktop_reader_conflict": desktop_reader_conflict is not None,
         "desktop_reader_conflict_detail": desktop_reader_conflict,
         "doctor_cache_hit": False,
