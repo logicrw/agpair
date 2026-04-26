@@ -235,8 +235,17 @@ export async function activate(
         receipt_watcher_running: false,
         heartbeat_running: false,
         heartbeat_interval_ms: 0,
+        ack_replay_running: false,
+        ack_replay_interval_ms: 0,
         receipt_dir: "",
-        tracker_summary: { total: 0, pending: 0, completed: 0, tasks: [] },
+        tracker_summary: {
+          total: 0,
+          pending: 0,
+          completed: 0,
+          pendingAckDeliveries: 0,
+          pendingTerminalDeliveries: 0,
+          tasks: [],
+        },
       },
     () => delegationTaskTimeoutMs,
   );

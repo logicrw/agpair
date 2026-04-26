@@ -26,13 +26,19 @@ export interface DelegationAutoReturnStatus {
     total: number;
     pending: number;
     completed: number;
+    pendingAckDeliveries: number;
+    pendingTerminalDeliveries: number;
     tasks: Array<{
       taskId: string;
       status: string;
       sessionId: string;
       ackedAt: string;
+      ackSentAt: string | null;
       lastActivityAt: string;
       lastHeartbeatAt: string | null;
+      pendingAckPreparedAt: string | null;
+      pendingAckInflightAt: string | null;
+      pendingAckDeliveryId: string | null;
       terminalSentAt: string | null;
     }>;
   };
@@ -93,7 +99,14 @@ export class HealthService {
       heartbeat_running: false,
       heartbeat_interval_ms: 0,
       receipt_dir: "",
-      tracker_summary: { total: 0, pending: 0, completed: 0, tasks: [] },
+      tracker_summary: {
+        total: 0,
+        pending: 0,
+        completed: 0,
+        pendingAckDeliveries: 0,
+        pendingTerminalDeliveries: 0,
+        tasks: [],
+      },
     }),
     private readonly delegationTimeoutMsProvider: () => number = () => 0,
   ) {}

@@ -1142,6 +1142,59 @@ describe("DelegationTaskTracker", () => {
     assert.equal(restored!.lastActivityAt, "2026-01-01T00:05:00Z");
   });
 
+  it("does not send terminal receipts before ACK is durably delivered", async () => {
+    const dir = makeTempDir();
+    const tracker = new DelegationTaskTracker();
+    tracker.register({
+      taskId: "T-ACK-GATED",
+      sessionId: "s-ack-gated-1",
+      repoPath: "/tmp",
+      receiptPath: path.join(dir, "T-ACK-GATED.receipt.json"),
+      status: "ACKED",
+      ackedAt: "2026-01-01T00:00:00Z",
+      ackSentAt: null,
+      lastActivityAt: "2026-01-01T00:00:00Z",
+      terminalSentAt: null,
+      terminalStatus: null,
+      terminalBody: null,
+      pendingAckBody:
+        "Accepted by Antigravity auto-handoff. session_id=s-ack-gated-1 repo_path=/tmp",
+      pendingAckPreparedAt: "2026-01-01T00:00:01Z",
+      pendingAckInflightAt: null,
+      pendingAckDeliveryId: "ack_gate_1",
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
+    });
+
+    fs.writeFileSync(
+      path.join(dir, "T-ACK-GATED.receipt.json"),
+      JSON.stringify({
+        task_id: "T-ACK-GATED",
+        status: "COMMITTED",
+        body: "done",
+      }),
+      "utf-8",
+    );
+
+    const sent: Array<{ taskId: string; status: string; body: string }> = [];
+    const watcher = new DelegationReceiptWatcher({
+      tracker,
+      receiptDir: dir,
+      pollIntervalMs: 60000,
+      outputChannel: { appendLine: () => undefined },
+      sendTerminal: async (taskId, status, body) => {
+        sent.push({ taskId, status, body });
+      },
+    });
+
+    await watcher.poll();
+
+    assert.equal(sent.length, 0);
+    assert.equal(tracker.get("T-ACK-GATED")!.terminalSentAt, null);
+    assert.equal(tracker.get("T-ACK-GATED")!.pendingTerminalStatus, null);
+  });
+
   it("can reopen a terminal task so continuation can emit another terminal receipt", () => {
     const tracker = new DelegationTaskTracker();
     tracker.register({

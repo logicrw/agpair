@@ -134,6 +134,7 @@ export class DelegationReceiptWatcher {
     // These survive restarts and do NOT need the original receipt file.
     const pendingDeliveries = this.tracker.getPendingTerminalDeliveries();
     for (const task of pendingDeliveries) {
+      if (!task.ackSentAt) continue;
       await this.retryPendingTerminalDelivery(task.taskId);
     }
 
@@ -144,6 +145,8 @@ export class DelegationReceiptWatcher {
     for (const task of pending) {
       // Skip if this task already has a pending delivery (handled in phase 1)
       if (this.tracker.hasPendingTerminalDelivery(task.taskId)) continue;
+      // ACK must be durably delivered before any terminal auto-return.
+      if (!task.ackSentAt) continue;
 
       const receiptPath = task.receiptPath;
       if (!receiptPath) continue;
@@ -547,6 +550,6 @@ export const DELIVERY_ID_HEADER = "X-Delivery-Id:";
  * Prepend a parseable delivery-id header line to the body.
  * The header is the first line; the original body follows on the next line.
  */
-function wrapBodyWithDeliveryId(body: string, deliveryId: string): string {
+export function wrapBodyWithDeliveryId(body: string, deliveryId: string): string {
   return `${DELIVERY_ID_HEADER} ${deliveryId}\n${body}`;
 }

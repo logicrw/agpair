@@ -118,6 +118,9 @@ export class DelegationHeartbeatService {
     const now = new Date().toISOString();
 
     for (const task of pending) {
+      if (!task.ackSentAt) {
+        continue;
+      }
       try {
         const body = buildHeartbeatBody(
           task.taskId,

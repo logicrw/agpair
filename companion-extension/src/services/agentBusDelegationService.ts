@@ -7,6 +7,7 @@ import type { SessionController } from "../sdk/sessionController";
 import type { AgentBusMessage } from "./agentBusWatchService";
 import type { DelegationTaskTracker } from "../state/delegationTaskTracker";
 import { DelegationReceiptWatcher } from "./delegationReceiptWatcher";
+import { wrapBodyWithDeliveryId } from "./delegationReceiptWatcher";
 import {
   DelegationHeartbeatService,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
@@ -51,12 +52,14 @@ export class AgentBusDelegationService {
   private readonly sendReplyFn: (
     reply: AgentBusDelegationReply,
   ) => Promise<void>;
-  private readonly processedMessageIds = new Set<number>();
   private readonly tracker: DelegationTaskTracker;
   private readonly receiptWatcher: DelegationReceiptWatcher;
   private readonly heartbeatService: DelegationHeartbeatService;
   private readonly receiptDir: string;
   private readonly sessionOperationTimeoutMs: number;
+  private readonly ackReplayIntervalMs: number;
+  private ackReplayTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly inFlightAckTaskIds = new Set<string>();
 
   constructor(options: AgentBusDelegationServiceOptions) {
     this.enabled = options.enabled;
@@ -74,6 +77,7 @@ export class AgentBusDelegationService {
         AgentBusDelegationService.DEFAULT_SESSION_OPERATION_TIMEOUT_MS,
       1_000,
     );
+    this.ackReplayIntervalMs = Math.max(options.receiptPollIntervalMs ?? 3000, 500);
 
     this.receiptWatcher = new DelegationReceiptWatcher({
       tracker: this.tracker,
@@ -100,6 +104,17 @@ export class AgentBusDelegationService {
     if (this.enabled) {
       this.receiptWatcher.start();
       this.heartbeatService.start();
+      this.startAckReplayLoop();
+      if (this.tracker.getPendingAckDeliveries().length > 0) {
+        const startupReplay = setTimeout(() => {
+          this.retryPendingAckDeliveries().catch((err) => {
+            this.outputChannel.appendLine(
+              `[companion] delegation-ack-replay startup error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+        }, 0);
+        startupReplay.unref?.();
+      }
     }
   }
 
@@ -113,18 +128,15 @@ export class AgentBusDelegationService {
   }
 
   private async handleMessage(message: AgentBusMessage): Promise<void> {
-    if (typeof message.id === "number") {
-      if (this.processedMessageIds.has(message.id)) {
-        return;
-      }
-      this.processedMessageIds.add(message.id);
-    }
-
     const status = typeof message.status === "string" ? message.status : "";
     const taskId =
       typeof message.task_id === "string" && message.task_id.length > 0
         ? message.task_id
         : "";
+    const sourceMessageId =
+      typeof message.id === "number" && Number.isFinite(message.id)
+        ? message.id
+        : null;
 
     if (!taskId) {
       return; // no task_id — nothing to act on
@@ -147,6 +159,27 @@ export class AgentBusDelegationService {
 
     const sameTask = this.tracker.get(taskId);
     if (sameTask && !sameTask.terminalSentAt) {
+      const isRedelivery =
+        sourceMessageId != null &&
+        sameTask.sourceMessageId != null &&
+        sameTask.sourceMessageId === sourceMessageId;
+      if (isRedelivery) {
+        if (sameTask.ackSentAt) {
+          this.outputChannel.appendLine(
+            `[companion] redelivered TASK ${taskId} for source message ${sourceMessageId}; ACK already durable, reusing existing session ${sameTask.sessionId}.`,
+          );
+          return;
+        }
+        this.outputChannel.appendLine(
+          `[companion] redelivered TASK ${taskId} for source message ${sourceMessageId}; replaying pending ACK for existing session ${sameTask.sessionId}.`,
+        );
+        await this.sendAckDurably(
+          taskId,
+          sameTask.pendingAckBody ??
+            `Accepted by Antigravity auto-handoff. session_id=${sameTask.sessionId} repo_path=${sameTask.repoPath}`,
+        );
+        return;
+      }
       this.outputChannel.appendLine(
         `[companion] retry/preempt same TASK ${taskId}: terminating old session ${sameTask.sessionId} before creating a fresh retry session...`,
       );
@@ -224,19 +257,25 @@ export class AgentBusDelegationService {
     this.outputChannel.appendLine(
       `[companion] delegated TASK ${taskId} to Antigravity session ${result.session_id}`,
     );
-    // Register in tracker for receipt-based terminal auto-return before ACK.
+    // Register in tracker before ACK so crash recovery can replay the ACK durably.
     const registered = this.tracker.register({
       taskId,
+      sourceMessageId,
       sessionId: result.session_id,
       repoPath,
       receiptPath,
       taskBody: prompt,
       status: "ACKED",
       ackedAt: new Date().toISOString(),
+      ackSentAt: null,
       lastActivityAt: new Date().toISOString(),
       terminalSentAt: null,
       terminalStatus: null,
       terminalBody: null,
+      pendingAckBody: null,
+      pendingAckPreparedAt: null,
+      pendingAckInflightAt: null,
+      pendingAckDeliveryId: null,
       pendingTerminalStatus: null,
       pendingTerminalBody: null,
       pendingTerminalPreparedAt: null,
@@ -254,11 +293,13 @@ export class AgentBusDelegationService {
       return;
     }
 
-    await this.sendReplyFn({
-      taskId,
-      status: "ACK",
-      body: `Accepted by Antigravity auto-handoff. session_id=${result.session_id} repo_path=${repoPath}`,
-    });
+    const ackBody = `Accepted by Antigravity auto-handoff. session_id=${result.session_id} repo_path=${repoPath}`;
+    const ackDelivered = await this.sendAckDurably(taskId, ackBody);
+    if (!ackDelivered) {
+      this.outputChannel.appendLine(
+        `[companion] ACK delivery deferred for ${taskId}; pending durable replay.`,
+      );
+    }
 
     this.outputChannel.appendLine(
       `[companion] delegation auto-return registered for ${taskId} (receipt=${receiptPath})`,
@@ -274,6 +315,8 @@ export class AgentBusDelegationService {
     receipt_watcher_running: boolean;
     heartbeat_running: boolean;
     heartbeat_interval_ms: number;
+    ack_replay_running: boolean;
+    ack_replay_interval_ms: number;
     receipt_dir: string;
     tracker_summary: ReturnType<DelegationTaskTracker["getSummary"]>;
   } {
@@ -282,6 +325,8 @@ export class AgentBusDelegationService {
       receipt_watcher_running: this.receiptWatcher.isRunning,
       heartbeat_running: this.heartbeatService.isRunning,
       heartbeat_interval_ms: this.heartbeatService.heartbeatIntervalMs,
+      ack_replay_running: this.ackReplayTimer !== null,
+      ack_replay_interval_ms: this.ackReplayIntervalMs,
       receipt_dir: this.receiptDir,
       tracker_summary: this.tracker.getSummary(),
     };
@@ -312,8 +357,86 @@ export class AgentBusDelegationService {
    * Dispose the service and its receipt watcher.
    */
   dispose(): void {
+    this.stopAckReplayLoop();
     this.heartbeatService.dispose();
     this.receiptWatcher.dispose();
+  }
+
+  private startAckReplayLoop(): void {
+    if (this.ackReplayTimer) return;
+    this.ackReplayTimer = setInterval(() => {
+      this.retryPendingAckDeliveries().catch((err) => {
+        this.outputChannel.appendLine(
+          `[companion] delegation-ack-replay error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    }, this.ackReplayIntervalMs);
+    this.ackReplayTimer.unref?.();
+    this.outputChannel.appendLine(
+      `[companion] delegation-ack-replay started (interval=${this.ackReplayIntervalMs}ms).`,
+    );
+  }
+
+  private stopAckReplayLoop(): void {
+    if (this.ackReplayTimer) {
+      clearInterval(this.ackReplayTimer);
+      this.ackReplayTimer = null;
+    }
+  }
+
+  private async sendAckDurably(taskId: string, body: string): Promise<boolean> {
+    const task = this.tracker.get(taskId);
+    if (!task) {
+      return false;
+    }
+    if (task.ackSentAt) {
+      return true;
+    }
+    if (!task.pendingAckBody) {
+      const prepared = this.tracker.preparePendingAck(taskId, body);
+      if (!prepared) {
+        return this.tracker.get(taskId)?.ackSentAt != null;
+      }
+    }
+    const pending = this.tracker.get(taskId);
+    if (!pending?.pendingAckBody) {
+      return pending?.ackSentAt != null;
+    }
+    this.tracker.markPendingAckInflight(taskId);
+    this.inFlightAckTaskIds.add(taskId);
+    try {
+      const wireBody = pending.pendingAckDeliveryId
+        ? wrapBodyWithDeliveryId(pending.pendingAckBody, pending.pendingAckDeliveryId)
+        : pending.pendingAckBody;
+      await this.sendReplyFn({
+        taskId,
+        status: "ACK",
+        body: wireBody,
+      });
+      this.tracker.markPendingAckDelivered(taskId);
+      return true;
+    } catch (err: any) {
+      this.tracker.clearPendingAckInflight(taskId);
+      this.outputChannel.appendLine(
+        `[companion] delegation-ack-replay: ACK send failed for ${taskId}: ${err?.message ?? String(err)}`,
+      );
+      return false;
+    } finally {
+      this.inFlightAckTaskIds.delete(taskId);
+    }
+  }
+
+  private async retryPendingAckDeliveries(): Promise<void> {
+    const pending = this.tracker.getPendingAckDeliveries();
+    if (pending.length === 0) {
+      return;
+    }
+    for (const task of pending) {
+      if (this.inFlightAckTaskIds.has(task.taskId)) {
+        continue;
+      }
+      await this.sendAckDurably(task.taskId, task.pendingAckBody ?? "");
+    }
   }
 
   private sendReply(reply: AgentBusDelegationReply): Promise<void> {

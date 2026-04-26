@@ -28,6 +28,7 @@ export type DelegationTaskStatus =
 
 export interface DelegationTask {
   taskId: string;
+  sourceMessageId?: number | null;
   sessionId: string;
   repoPath: string;
   receiptPath: string;
@@ -35,9 +36,18 @@ export interface DelegationTask {
   taskBody?: string | null;
   status: DelegationTaskStatus;
   ackedAt: string;
+  ackSentAt?: string | null;
   lastActivityAt?: string | null;
   /** Timestamp of the most recent RUNNING heartbeat sent for this task. */
   lastHeartbeatAt?: string | null;
+  /**
+   * Pending ACK delivery fields.
+   * ACK must be made durable before any heartbeat or terminal auto-return can proceed.
+   */
+  pendingAckBody?: string | null;
+  pendingAckPreparedAt?: string | null;
+  pendingAckInflightAt?: string | null;
+  pendingAckDeliveryId?: string | null;
   terminalSentAt: string | null;
   terminalStatus: string | null;
   terminalBody: string | null;
@@ -89,9 +99,15 @@ export class DelegationTaskTracker {
     }
     this.tasks.set(task.taskId, {
       ...task,
+      sourceMessageId: task.sourceMessageId ?? null,
       taskBody: task.taskBody ?? null,
+      ackSentAt: task.ackSentAt === undefined ? task.ackedAt : task.ackSentAt,
       lastActivityAt: task.lastActivityAt ?? task.ackedAt,
       lastHeartbeatAt: task.lastHeartbeatAt ?? null,
+      pendingAckBody: task.pendingAckBody ?? null,
+      pendingAckPreparedAt: task.pendingAckPreparedAt ?? null,
+      pendingAckInflightAt: task.pendingAckInflightAt ?? null,
+      pendingAckDeliveryId: task.pendingAckDeliveryId ?? null,
       pendingTerminalStatus: task.pendingTerminalStatus ?? null,
       pendingTerminalBody: task.pendingTerminalBody ?? null,
       pendingTerminalPreparedAt: task.pendingTerminalPreparedAt ?? null,
@@ -144,6 +160,10 @@ export class DelegationTaskTracker {
     task.pendingTerminalPreparedAt = null;
     task.pendingTerminalInflightAt = null;
     task.pendingTerminalDeliveryId = null;
+    task.pendingAckBody = null;
+    task.pendingAckPreparedAt = null;
+    task.pendingAckInflightAt = null;
+    task.pendingAckDeliveryId = null;
     this.persist();
     return true;
   }
@@ -170,7 +190,7 @@ export class DelegationTaskTracker {
    */
   touchHeartbeat(taskId: string, at?: string): boolean {
     const task = this.tasks.get(taskId);
-    if (!task || task.terminalSentAt) {
+    if (!task || task.terminalSentAt || !task.ackSentAt) {
       return false;
     }
     task.lastHeartbeatAt = at ?? new Date().toISOString();
@@ -321,6 +341,65 @@ export class DelegationTaskTracker {
     return task?.pendingTerminalStatus != null && task?.terminalSentAt == null;
   }
 
+  preparePendingAck(
+    taskId: string,
+    body: string,
+    at?: string,
+  ): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    if (task.ackSentAt) return false;
+    if (task.pendingAckBody) return false;
+    task.pendingAckBody = body;
+    task.pendingAckPreparedAt = at ?? new Date().toISOString();
+    task.pendingAckDeliveryId = `ack_${randomBytes(12).toString("hex")}`;
+    this.persist();
+    return true;
+  }
+
+  markPendingAckInflight(taskId: string, at?: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    if (task.ackSentAt) return false;
+    if (!task.pendingAckBody) return false;
+    task.pendingAckInflightAt = at ?? new Date().toISOString();
+    this.persist();
+    return true;
+  }
+
+  clearPendingAckInflight(taskId: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    task.pendingAckInflightAt = null;
+    this.persist();
+    return true;
+  }
+
+  markPendingAckDelivered(taskId: string, at?: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    if (task.ackSentAt) return false;
+    if (!task.pendingAckBody) return false;
+    task.ackSentAt = at ?? new Date().toISOString();
+    task.pendingAckBody = null;
+    task.pendingAckPreparedAt = null;
+    task.pendingAckInflightAt = null;
+    task.pendingAckDeliveryId = null;
+    this.persist();
+    return true;
+  }
+
+  hasPendingAckDelivery(taskId: string): boolean {
+    const task = this.tasks.get(taskId);
+    return task?.pendingAckBody != null && task?.ackSentAt == null;
+  }
+
+  getPendingAckDeliveries(): DelegationTask[] {
+    return this.getAll().filter(
+      (t) => t.pendingAckBody != null && t.ackSentAt == null,
+    );
+  }
+
   /**
    * Get all tasks that have pending terminal deliveries (not yet transported).
    */
@@ -377,14 +456,20 @@ export class DelegationTaskTracker {
     total: number;
     pending: number;
     completed: number;
+    pendingAckDeliveries: number;
     pendingTerminalDeliveries: number;
     tasks: Array<{
       taskId: string;
+      sourceMessageId: number | null;
       status: DelegationTaskStatus;
       sessionId: string;
       ackedAt: string;
+      ackSentAt: string | null;
       lastActivityAt: string;
       lastHeartbeatAt: string | null;
+      pendingAckPreparedAt: string | null;
+      pendingAckInflightAt: string | null;
+      pendingAckDeliveryId: string | null;
       terminalSentAt: string | null;
       pendingTerminalStatus: string | null;
       pendingTerminalPreparedAt: string | null;
@@ -394,19 +479,26 @@ export class DelegationTaskTracker {
   } {
     const all = this.getAll();
     const pending = all.filter((t) => t.terminalSentAt === null);
+    const pendingAckDeliveries = this.getPendingAckDeliveries();
     const pendingTerminalDeliveries = this.getPendingTerminalDeliveries();
     return {
       total: all.length,
       pending: pending.length,
       completed: all.length - pending.length,
+      pendingAckDeliveries: pendingAckDeliveries.length,
       pendingTerminalDeliveries: pendingTerminalDeliveries.length,
       tasks: all.map((t) => ({
         taskId: t.taskId,
+        sourceMessageId: t.sourceMessageId ?? null,
         status: t.status,
         sessionId: t.sessionId,
         ackedAt: t.ackedAt,
+        ackSentAt: t.ackSentAt ?? null,
         lastActivityAt: t.lastActivityAt ?? t.ackedAt,
         lastHeartbeatAt: t.lastHeartbeatAt ?? null,
+        pendingAckPreparedAt: t.pendingAckPreparedAt ?? null,
+        pendingAckInflightAt: t.pendingAckInflightAt ?? null,
+        pendingAckDeliveryId: t.pendingAckDeliveryId ?? null,
         terminalSentAt: t.terminalSentAt,
         pendingTerminalStatus: t.pendingTerminalStatus ?? null,
         pendingTerminalPreparedAt: t.pendingTerminalPreparedAt ?? null,
@@ -483,18 +575,40 @@ function normalizeTask(value: unknown): DelegationTask | null {
   }
   return {
     taskId: entry.taskId,
+    sourceMessageId:
+      typeof entry.sourceMessageId === "number" && Number.isFinite(entry.sourceMessageId)
+        ? entry.sourceMessageId
+        : null,
     sessionId: entry.sessionId,
     repoPath: entry.repoPath,
     receiptPath: entry.receiptPath,
     taskBody: typeof entry.taskBody === "string" ? entry.taskBody : null,
     status: entry.status as DelegationTaskStatus,
     ackedAt: entry.ackedAt,
+    ackSentAt:
+      Object.prototype.hasOwnProperty.call(entry, "ackSentAt")
+        ? (typeof entry.ackSentAt === "string" ? entry.ackSentAt : null)
+        : entry.ackedAt,
     lastActivityAt:
       typeof entry.lastActivityAt === "string"
         ? entry.lastActivityAt
         : entry.ackedAt,
     lastHeartbeatAt:
       typeof entry.lastHeartbeatAt === "string" ? entry.lastHeartbeatAt : null,
+    pendingAckBody:
+      typeof entry.pendingAckBody === "string" ? entry.pendingAckBody : null,
+    pendingAckPreparedAt:
+      typeof entry.pendingAckPreparedAt === "string"
+        ? entry.pendingAckPreparedAt
+        : null,
+    pendingAckInflightAt:
+      typeof entry.pendingAckInflightAt === "string"
+        ? entry.pendingAckInflightAt
+        : null,
+    pendingAckDeliveryId:
+      typeof entry.pendingAckDeliveryId === "string"
+        ? entry.pendingAckDeliveryId
+        : null,
     terminalSentAt:
       typeof entry.terminalSentAt === "string" ? entry.terminalSentAt : null,
     terminalStatus:

@@ -21,8 +21,12 @@ function makeTempDir(): string {
 function registerPendingTask(
   tracker: DelegationTaskTracker,
   taskId: string,
-  opts?: Partial<{ sessionId: string; repoPath: string; ackedAt: string }>,
+  opts?: Partial<{ sessionId: string; repoPath: string; ackedAt: string; ackSentAt: string | null }>,
 ): void {
+  const ackSentAt =
+    opts && Object.prototype.hasOwnProperty.call(opts, "ackSentAt")
+      ? opts.ackSentAt ?? null
+      : opts?.ackedAt ?? "2026-01-01T00:00:00Z";
   tracker.register({
     taskId,
     sessionId: opts?.sessionId ?? `sess-${taskId}`,
@@ -30,10 +34,15 @@ function registerPendingTask(
     receiptPath: `/tmp/receipts/${taskId}.receipt.json`,
     status: "ACKED",
     ackedAt: opts?.ackedAt ?? "2026-01-01T00:00:00Z",
+    ackSentAt,
     lastActivityAt: opts?.ackedAt ?? "2026-01-01T00:00:00Z",
     terminalSentAt: null,
     terminalStatus: null,
     terminalBody: null,
+    pendingAckBody: null,
+    pendingAckPreparedAt: null,
+    pendingAckInflightAt: null,
+    pendingAckDeliveryId: null,
     pendingTerminalStatus: null,
     pendingTerminalBody: null,
     pendingTerminalPreparedAt: null,
@@ -186,6 +195,219 @@ describe("DelegationHeartbeatService", () => {
 // ── Integration: TASK → ACK → RUNNING heartbeat → EVIDENCE_PACK ──
 
 describe("Heartbeat integration scenarios", () => {
+  it("ACK send failure leaves a durable pending ACK that can be replayed after restart", async () => {
+    const dir = makeTempDir();
+    const statePath = path.join(dir, "delegation-state.json");
+    const tracker = new DelegationTaskTracker(statePath);
+    let ackAttempts = 0;
+
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo-ack-pending"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async createBackgroundSession() {
+          return { ok: true, session_id: "sess-ack-pending-1" };
+        },
+        async sendPrompt() {
+          return { ok: true };
+        },
+      } as any,
+      tracker,
+      receiptDir: dir,
+      receiptPollIntervalMs: 60000,
+      heartbeatIntervalMs: 60000,
+      sendReply: async ({ status }: AgentBusDelegationReply) => {
+        if (status === "ACK") {
+          ackAttempts += 1;
+          throw new Error("ack transport down");
+        }
+      },
+    });
+
+    await service.handleMessages([
+      { id: 501, task_id: "TASK-ACK-PENDING", status: "TASK", body: "Goal:\nAck persistence." },
+    ]);
+
+    assert.equal(ackAttempts, 1);
+    const task = tracker.get("TASK-ACK-PENDING");
+    assert.ok(task);
+    assert.equal(task!.ackSentAt, null);
+    assert.ok(task!.pendingAckBody);
+    assert.ok(task!.pendingAckPreparedAt);
+    assert.ok(task!.pendingAckDeliveryId);
+
+    const restored = new DelegationTaskTracker(statePath).get("TASK-ACK-PENDING");
+    assert.ok(restored);
+    assert.equal(restored!.ackSentAt, null);
+    assert.ok(restored!.pendingAckBody);
+    assert.ok(restored!.pendingAckDeliveryId);
+
+    service.dispose();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("replays pending ACK on startup before heartbeat or terminal delivery", async () => {
+    const dir = makeTempDir();
+    const statePath = path.join(dir, "delegation-state.json");
+    const trackerBefore = new DelegationTaskTracker(statePath);
+    trackerBefore.register({
+      taskId: "TASK-ACK-REPLAY",
+      sessionId: "sess-ack-replay-1",
+      repoPath: "/tmp/repo-ack-replay",
+      receiptPath: DelegationReceiptWatcher.receiptPath(dir, "TASK-ACK-REPLAY"),
+      status: "ACKED",
+      ackedAt: "2026-01-01T00:00:00Z",
+      ackSentAt: null,
+      lastActivityAt: "2026-01-01T00:00:00Z",
+      terminalSentAt: null,
+      terminalStatus: null,
+      terminalBody: null,
+      pendingAckBody: "Accepted by Antigravity auto-handoff. session_id=sess-ack-replay-1 repo_path=/tmp/repo-ack-replay",
+      pendingAckPreparedAt: "2026-01-01T00:00:01Z",
+      pendingAckInflightAt: null,
+      pendingAckDeliveryId: "ack_abc123",
+      pendingTerminalStatus: null,
+      pendingTerminalBody: null,
+      pendingTerminalPreparedAt: null,
+    });
+
+    const trackerAfter = new DelegationTaskTracker(statePath);
+    const sent: Array<{ status: string; body: string }> = [];
+
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo-ack-replay"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async createBackgroundSession() {
+          return { ok: true, session_id: "unused" };
+        },
+        async sendPrompt() {
+          return { ok: true };
+        },
+      } as any,
+      tracker: trackerAfter,
+      receiptDir: dir,
+      receiptPollIntervalMs: 60000,
+      heartbeatIntervalMs: 60000,
+      sendReply: async ({ status, body }: AgentBusDelegationReply) => {
+        sent.push({ status, body });
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].status, "ACK");
+    assert.match(sent[0].body, /^X-Delivery-Id:\s*ack_abc123\n/);
+
+    const restored = trackerAfter.get("TASK-ACK-REPLAY");
+    assert.ok(restored);
+    assert.ok(restored!.ackSentAt);
+    assert.equal(restored!.pendingAckBody, null);
+    assert.equal(restored!.pendingAckDeliveryId, null);
+
+    service.dispose();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("redelivered TASK after ACK failure reuses the existing session and retries ACK", async () => {
+    const tracker = new DelegationTaskTracker();
+    const terminated: string[] = [];
+    let created = 0;
+    let ackAttempts = 0;
+
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo-ack-redelivery"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async createBackgroundSession() {
+          created += 1;
+          return { ok: true, session_id: "sess-ack-redelivery-1" };
+        },
+        async terminateSession(sessionId: string) {
+          terminated.push(sessionId);
+          return true;
+        },
+        async sendPrompt() {
+          return { ok: true };
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      receiptPollIntervalMs: 60000,
+      heartbeatIntervalMs: 60000,
+      sendReply: async ({ status }: AgentBusDelegationReply) => {
+        if (status === "ACK") {
+          ackAttempts += 1;
+          if (ackAttempts === 1) {
+            throw new Error("ack transport down");
+          }
+        }
+      },
+    });
+
+    try {
+      await service.handleMessages([
+        {
+          id: 801,
+          task_id: "TASK-ACK-REDLIVERY",
+          status: "TASK",
+          body: "Goal:\nAck redelivery.",
+        },
+      ]);
+      assert.equal(created, 1);
+      assert.equal(tracker.get("TASK-ACK-REDLIVERY")!.ackSentAt, null);
+
+      await service.handleMessages([
+        {
+          id: 801,
+          task_id: "TASK-ACK-REDLIVERY",
+          status: "TASK",
+          body: "Goal:\nAck redelivery.",
+        },
+      ]);
+
+      assert.equal(created, 1, "redelivery must not create a new session");
+      assert.deepEqual(terminated, []);
+      assert.equal(ackAttempts, 2, "redelivery should retry the pending ACK");
+      assert.ok(tracker.get("TASK-ACK-REDLIVERY")!.ackSentAt);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("does not send RUNNING heartbeat until ACK is durably delivered", async () => {
+    const tracker = new DelegationTaskTracker();
+    const sent: Array<{ status: string }> = [];
+    registerPendingTask(tracker, "TASK-HB-GATED", { ackSentAt: null });
+    tracker.preparePendingAck(
+      "TASK-HB-GATED",
+      "Accepted by Antigravity auto-handoff. session_id=sess-TASK-HB-GATED repo_path=/tmp/repo",
+      "2026-01-01T00:00:01Z",
+    );
+
+    const hb = new DelegationHeartbeatService({
+      tracker,
+      intervalMs: 60000,
+      outputChannel: { appendLine: () => undefined },
+      sendRunning: async (reply) => {
+        sent.push({ status: reply.status });
+      },
+    });
+
+    await hb.tick();
+
+    assert.deepEqual(sent, []);
+    assert.equal(tracker.get("TASK-HB-GATED")!.lastHeartbeatAt, null);
+    hb.dispose();
+  });
+
   it("TASK handoff uses the stable interactive session creation fallback path", async () => {
     const tracker = new DelegationTaskTracker();
     let capturedOptions: unknown = null;
@@ -315,6 +537,112 @@ describe("Heartbeat integration scenarios", () => {
         1,
         "old pending entry must be replaced, not duplicated",
       );
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("redelivered TASK with the same source message id replays ACK without recreating the session", async () => {
+    const tracker = new DelegationTaskTracker();
+    const replies: Array<{ taskId: string; status: string; body: string }> = [];
+    const terminated: string[] = [];
+    let created = 0;
+
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo-redelivery"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async createBackgroundSession() {
+          created += 1;
+          return { ok: true, session_id: "sess-redelivery-1" };
+        },
+        async terminateSession(sessionId: string) {
+          terminated.push(sessionId);
+          return true;
+        },
+        async sendPrompt() {
+          return { ok: true };
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      receiptPollIntervalMs: 60000,
+      heartbeatIntervalMs: 60000,
+      sendReply: async ({ taskId, status, body }: AgentBusDelegationReply) => {
+        replies.push({ taskId, status, body });
+      },
+    });
+
+    try {
+      await service.handleMessages([
+        {
+          id: 701,
+          task_id: "TASK-REDLIVERY",
+          status: "TASK",
+          body: "Goal:\nFirst delivery.",
+        },
+      ]);
+      await service.handleMessages([
+        {
+          id: 701,
+          task_id: "TASK-REDLIVERY",
+          status: "TASK",
+          body: "Goal:\nFirst delivery.",
+        },
+      ]);
+
+      assert.equal(created, 1);
+      assert.deepEqual(terminated, []);
+      assert.equal(replies.filter((r) => r.status === "ACK").length, 1);
+      assert.equal(tracker.get("TASK-REDLIVERY")!.sessionId, "sess-redelivery-1");
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("same task_id with a different source message id still preempts as a fresh retry", async () => {
+    const tracker = new DelegationTaskTracker();
+    const terminated: string[] = [];
+    let created = 0;
+
+    const service = new AgentBusDelegationService({
+      enabled: true,
+      command: "agent-bus",
+      workspacePathsProvider: () => ["/tmp/repo-redelivery-retry"],
+      outputChannel: { appendLine: () => undefined },
+      sessionCtrl: {
+        async createBackgroundSession() {
+          created += 1;
+          return { ok: true, session_id: created === 1 ? "sess-retry-1" : "sess-retry-2" };
+        },
+        async terminateSession(sessionId: string) {
+          terminated.push(sessionId);
+          return true;
+        },
+        async sendPrompt() {
+          return { ok: true };
+        },
+      } as any,
+      tracker,
+      receiptDir: makeTempDir(),
+      receiptPollIntervalMs: 60000,
+      heartbeatIntervalMs: 60000,
+      sendReply: async () => undefined,
+    });
+
+    try {
+      await service.handleMessages([
+        { id: 901, task_id: "TASK-REDLIVERY-RETRY", status: "TASK", body: "Goal:\nAttempt one." },
+      ]);
+      await service.handleMessages([
+        { id: 902, task_id: "TASK-REDLIVERY-RETRY", status: "TASK", body: "Goal:\nAttempt two." },
+      ]);
+
+      assert.equal(created, 2);
+      assert.deepEqual(terminated, ["sess-retry-1"]);
+      assert.equal(tracker.get("TASK-REDLIVERY-RETRY")!.sessionId, "sess-retry-2");
     } finally {
       service.dispose();
     }

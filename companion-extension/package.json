@@ -51,17 +51,17 @@
         "antigravityCompanion.agentBusWatchEnabled": {
           "type": "boolean",
           "default": true,
-          "description": "Start a local agent-bus watch loop on extension activation so Antigravity begins receiving AI agent task briefs automatically."
+          "description": "Start a local agent-bus reservation watch loop on extension activation so Antigravity begins receiving AI agent task briefs automatically."
         },
         "antigravityCompanion.agentBusWatchIntervalMs": {
           "type": "number",
           "default": 1000,
-          "description": "Polling interval for the background agent-bus watch loop (milliseconds)."
+          "description": "Polling interval for the background agent-bus reserve/settle watch loop (milliseconds)."
         },
         "antigravityCompanion.agentBusWatchCommand": {
           "type": "string",
           "default": "agent-bus",
-          "description": "Command used to start the shared agent-bus watcher. Defaults to agent-bus and falls back to ~/.local/bin/agent-bus when available."
+          "description": "Command used to start the shared agent-bus reserve/settle watcher. Defaults to agent-bus and falls back to ~/.local/bin/agent-bus when available."
         },
         "antigravityCompanion.delegationTaskTimeoutMs": {
           "type": "number",

@@ -42,6 +42,8 @@ type WatchBatchMessage = {
   status?: string | null;
   body?: string | null;
   timestamp?: string | null;
+  claim_id?: string | null;
+  lease_expires_at?: string | null;
 };
 
 export type AgentBusMessage = WatchBatchMessage;
@@ -50,6 +52,7 @@ type WatchBatchEvent = {
   ok?: boolean;
   mode?: string;
   claimed?: number;
+  reserved?: number;
   messages?: WatchBatchMessage[];
   emitted_at?: string;
 };
@@ -157,6 +160,8 @@ export class AgentBusWatchService {
         "--full",
         "--interval-ms",
         String(this.intervalMs),
+        "--lease-ms",
+        String(Math.max(this.intervalMs * 5, 30_000)),
       ];
 
       const repoPath = this.workspacePathsProvider()[0];
@@ -370,13 +375,17 @@ export class AgentBusWatchService {
             ),
         ),
       );
-      const summary = `[companion] agent-bus claimed ${event.claimed ?? event.messages.length} message(s) for task(s): ${taskIds.join(", ")}`;
+      const reservedCount =
+        typeof event.reserved === "number"
+          ? event.reserved
+          : (event.claimed ?? event.messages.length);
+      const summary = `[companion] agent-bus reserved ${reservedCount} message(s) for task(s): ${taskIds.join(", ")}`;
       this.outputChannel.appendLine(summary);
       this.notify(
         `Antigravity inbox received ${event.messages.length} message(s): ${taskIds.join(", ")}`,
       );
       if (this.onMessages) {
-        void Promise.resolve(this.onMessages(event.messages)).catch((err) => {
+        void this.handleReservedMessages(event.messages).catch((err) => {
           this.outputChannel.appendLine(
             `[companion] agent-bus handoff failed: ${err instanceof Error ? err.message : String(err)}`,
           );
@@ -396,6 +405,64 @@ export class AgentBusWatchService {
         `[companion] Failed to append agent-bus inbox log: ${err?.message ?? String(err)}`,
       );
     }
+  }
+
+  private async handleReservedMessages(messages: AgentBusMessage[]): Promise<void> {
+    if (!this.onMessages) return;
+    for (const message of messages) {
+      await Promise.resolve(this.onMessages([message]));
+      const claimId =
+        typeof message.claim_id === "string" && message.claim_id.length > 0
+          ? message.claim_id
+          : null;
+      if (!claimId) {
+        continue;
+      }
+      await this.settleClaim(claimId);
+    }
+  }
+
+  private settleClaim(claimId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = this.spawnFn(
+        this.status.command,
+        [
+          "settle",
+          "--reader",
+          "code",
+          "--claims",
+          claimId,
+        ],
+        {
+          cwd: this.workspacePathsProvider()[0] || os.homedir(),
+          env: process.env,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => {
+        stdout += chunk;
+      });
+      child.stderr.on("data", (chunk: string) => {
+        stderr += chunk;
+      });
+      child.on("error", reject);
+      child.on("exit", (code) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        reject(
+          new Error(
+            stderr.trim() || stdout.trim() || `agent-bus settle exited ${code ?? 1}`,
+          ),
+        );
+      });
+    });
   }
 
   private readLock(): WatchLockRecord | null {
