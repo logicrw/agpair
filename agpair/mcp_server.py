@@ -8,6 +8,8 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from agpair.executors.routing import validate_supported_executor
+
 
 class ProtectedFastMCP(FastMCP):
     """An MCP server that protects its built-in tools from being silently overridden."""
@@ -113,10 +115,11 @@ def _append_start_metadata_args(
     spotlight_testing: bool,
 ) -> None:
     if executor is not None:
-        allowed = {"antigravity", "codex", "gemini"}
-        if executor not in allowed:
-            raise RuntimeError(f"executor must be one of {sorted(allowed)}")
-        args.extend(["--executor", executor])
+        try:
+            normalized_executor = validate_supported_executor(executor)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        args.extend(["--executor", normalized_executor])
     if depends_on:
         args.extend(["--depends-on", json.dumps(depends_on, ensure_ascii=False)])
     if isolated_worktree:

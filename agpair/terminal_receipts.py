@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 
 TerminalReceiptStatus = Literal["EVIDENCE_PACK", "BLOCKED", "COMMITTED"]
@@ -20,8 +20,47 @@ class StructuredTerminalReceipt:
     raw_body: str
 
 
+@dataclass(frozen=True)
+class ReceiptValidationResult:
+    ok: bool
+    required_missing: tuple[str, ...] = ()
+
+
 _VALID_STATUSES = frozenset({"EVIDENCE_PACK", "BLOCKED", "COMMITTED"})
 _LISTISH_COMMITTED_FIELDS = frozenset({"changed_files", "validation", "residual_risks"})
+
+
+def validate_terminal_receipt_payload(
+    kind: str,
+    payload: Mapping[str, Any],
+) -> ReceiptValidationResult:
+    if kind == "BLOCKED" and payload.get("blocker_type") == "approval_required":
+        required = (
+            "requested_authorization_profile",
+            "requested_actions",
+            "authorization_delta",
+            "request_reason",
+            "risk_assessment",
+            "safe_to_retry",
+            "raw_log_path",
+        )
+    elif kind in {"COMMITTED", "EVIDENCE_PACK"} or payload.get("claimed_state") == "ready_for_review":
+        required = (
+            "changed_files",
+            "scope_violations",
+            "raw_log_path",
+            "receipt_path",
+        )
+        missing = tuple(field for field in required if field not in payload)
+        has_validation = bool(payload.get("validation")) or bool(payload.get("validation_not_run"))
+        if not has_validation:
+            missing = (*missing, "validation")
+        return ReceiptValidationResult(ok=not missing, required_missing=missing)
+    else:
+        required = ()
+
+    missing = tuple(field for field in required if field not in payload)
+    return ReceiptValidationResult(ok=not missing, required_missing=missing)
 
 
 def validate_structured_receipt_dict(

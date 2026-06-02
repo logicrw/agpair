@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agpair.models import TaskRecord, utcnow_iso
+from agpair.models import (
+    TaskRecord,
+    authorization_profile_summary as default_authorization_summary,
+    utcnow_iso,
+    validate_authorization_profile,
+)
 from agpair.storage.db import connect
 
 
@@ -39,8 +44,12 @@ class TaskRepository:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
 
-    def create_task(self, *, task_id: str, repo_path: str, client_idempotency_key: str | None = None, executor_backend: str | None = None, depends_on: str | None = None, isolated_worktree: bool = False, setup_commands: str | None = None, teardown_commands: str | None = None, env_vars: str | None = None, worktree_boundary: str | None = None, spotlight_testing: bool = False) -> None:
+    def create_task(self, *, task_id: str, repo_path: str, client_idempotency_key: str | None = None, executor_backend: str | None = None, depends_on: str | None = None, isolated_worktree: bool = False, setup_commands: str | None = None, teardown_commands: str | None = None, env_vars: str | None = None, worktree_boundary: str | None = None, spotlight_testing: bool = False, authorization_profile: str = "local_mutating", authorization_summary: str | None = None) -> None:
         now = utcnow_iso()
+        normalized_authorization_profile = validate_authorization_profile(authorization_profile)
+        normalized_authorization_summary = authorization_summary or default_authorization_summary(
+            normalized_authorization_profile
+        )
         with connect(self.db_path) as conn:
             conn.execute(
                 """
@@ -49,8 +58,9 @@ class TaskRepository:
                   last_receipt_id, stuck_reason, retry_recommended, last_activity_at, created_at, updated_at,
                   last_heartbeat_at, last_workspace_activity_at, client_idempotency_key, executor_backend,
                   depends_on, isolated_worktree, setup_commands, teardown_commands, env_vars, worktree_boundary,
-                  spotlight_testing, completion_policy, terminal_source, is_approved
-                ) VALUES (?, ?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'direct_commit', NULL, 0)
+                  spotlight_testing, completion_policy, terminal_source, is_approved, authorization_profile,
+                  authorization_summary
+                ) VALUES (?, ?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'direct_commit', NULL, 0, ?, ?)
                 """,
                 (
                     task_id,
@@ -68,6 +78,8 @@ class TaskRepository:
                     env_vars,
                     worktree_boundary,
                     1 if spotlight_testing else 0,
+                    normalized_authorization_profile,
+                    normalized_authorization_summary,
                 ),
             )
             conn.commit()
@@ -310,13 +322,20 @@ class TaskRepository:
             raise TaskNotFoundError(f"task not found: {task_id}")
         return task
 
-    def apply_retry_dispatch(self, *, task_id: str) -> TaskRecord:
+    def apply_retry_dispatch(self, *, task_id: str, executor_backend: str | None = None, authorization_profile: str | None = None, authorization_summary: str | None = None) -> TaskRecord:
         task = self.get_task(task_id)
         if task is None:
             raise TaskNotFoundError(f"task not found: {task_id}")
         now = utcnow_iso()
         next_attempt = task.attempt_no + 1
         next_retry_count = task.retry_count + 1
+        next_executor_backend = executor_backend if executor_backend is not None else task.executor_backend
+        next_authorization_profile = validate_authorization_profile(
+            authorization_profile or task.authorization_profile
+        )
+        next_authorization_summary = authorization_summary or default_authorization_summary(
+            next_authorization_profile
+        )
         with connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
@@ -334,10 +353,22 @@ class TaskRepository:
                     last_heartbeat_at=NULL,
                     last_workspace_activity_at=NULL,
                     is_approved=0,
-                    terminal_source=NULL
+                    terminal_source=NULL,
+                    executor_backend=?,
+                    authorization_profile=?,
+                    authorization_summary=?
                 WHERE task_id=?
                 """,
-                (next_attempt, next_retry_count, now, now, task_id),
+                (
+                    next_attempt,
+                    next_retry_count,
+                    now,
+                    now,
+                    next_executor_backend,
+                    next_authorization_profile,
+                    next_authorization_summary,
+                    task_id,
+                ),
             )
             if cursor.rowcount == 0:
                 raise TaskNotFoundError(f"task not found: {task_id}")
@@ -524,12 +555,21 @@ class TaskRepository:
             is_approved = bool(row["is_approved"])
         except (IndexError, KeyError):
             is_approved = False
+        try:
+            authorization_profile = validate_authorization_profile(row["authorization_profile"])
+        except (IndexError, KeyError, ValueError):
+            authorization_profile = "local_mutating"
+        try:
+            authorization_summary = row["authorization_summary"]
+        except (IndexError, KeyError):
+            authorization_summary = None
+        antigravity_session_id = row["antigravity_session_id"]
         return TaskRecord(
             task_id=row["task_id"],
             repo_path=row["repo_path"],
             execution_repo_path=execution_repo_path,
             phase=row["phase"],
-            antigravity_session_id=row["antigravity_session_id"],
+            antigravity_session_id=antigravity_session_id,
             attempt_no=row["attempt_no"],
             retry_count=row["retry_count"],
             last_receipt_id=row["last_receipt_id"],
@@ -552,4 +592,7 @@ class TaskRepository:
             completion_policy=completion_policy,
             terminal_source=terminal_source,
             is_approved=is_approved,
+            authorization_profile=authorization_profile,
+            authorization_summary=authorization_summary,
+            executor_session_id=antigravity_session_id,
         )

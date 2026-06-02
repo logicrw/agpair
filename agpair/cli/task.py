@@ -25,7 +25,18 @@ from agpair.cli.wait import (
     wait_for_terminal_phase,
 )
 from agpair.config import AppPaths
-from agpair.models import a2a_state_hint_from_phase
+from agpair.executors.routing import (
+    default_executor_id,
+    is_legacy_executor,
+    is_supported_executor,
+    supported_executor_ids,
+    validate_supported_executor,
+)
+from agpair.models import (
+    a2a_state_hint_from_phase,
+    authorization_profile_summary,
+    validate_authorization_profile,
+)
 from agpair.runtime_liveness import LivenessState, classify_liveness, is_task_live
 from agpair.terminal_receipts import (
     blocked_failure_context_from_receipt,
@@ -69,11 +80,12 @@ def _configured_default_executor(*, target: str | None, paths: AppPaths) -> str 
 
     env_executor = os.environ.get("AGPAIR_DEFAULT_EXECUTOR", "").strip().lower()
     if env_executor:
-        if env_executor not in {"antigravity", "codex", "gemini"}:
+        try:
+            return validate_supported_executor(env_executor)
+        except ValueError as exc:
             raise typer.BadParameter(
-                "AGPAIR_DEFAULT_EXECUTOR must be one of: antigravity, codex, gemini"
-            )
-        return env_executor
+                f"AGPAIR_DEFAULT_EXECUTOR {exc}"
+            ) from exc
     return None
 
 
@@ -334,38 +346,28 @@ def build_task_payload(paths: AppPaths, task) -> dict:
     committed_result = _committed_result_payload(terminal_receipt)
     failure_context = _failure_context_payload(task, terminal_receipt)
     blocker_type = failure_context["blocker_type"] if failure_context else None
-    from agpair.executors import AntigravityExecutor, CodexExecutor, GeminiExecutor
-    
-    ag_exec = AntigravityExecutor("")
-    cx_exec = CodexExecutor()
-    gm_exec = GeminiExecutor()
+    from agpair.executors import get_executor
 
-    if task.executor_backend == cx_exec.backend_id:
-        active_exec = cx_exec
-    elif task.executor_backend == gm_exec.backend_id:
-        active_exec = gm_exec
-    else:
-        active_exec = ag_exec
+    active_backend_id = task.executor_backend or "antigravity"
+    active_exec = get_executor(active_backend_id, agent_bus_bin="")
+    supported_backends = {}
+    for supported_backend_id in supported_executor_ids():
+        supported_exec = get_executor(supported_backend_id, agent_bus_bin="")
+        if supported_exec is None:
+            continue
+        supported_backends[supported_backend_id] = {
+            "continuation_capability": supported_exec.continuation_capability.value,
+            "safety_metadata": dataclasses.asdict(supported_exec.safety_metadata),
+        }
+    if active_exec is None:
+        active_exec = get_executor("antigravity", agent_bus_bin="")
 
     return {
         "task_id": task.task_id,
-        "active_executor_backend": active_exec.backend_id,
+        "active_executor_backend": active_backend_id,
         "active_executor_continuation_capability": active_exec.continuation_capability.value,
         "active_executor_safety_metadata": dataclasses.asdict(active_exec.safety_metadata),
-        "supported_backends": {
-            ag_exec.backend_id: {
-                "continuation_capability": ag_exec.continuation_capability.value,
-                "safety_metadata": dataclasses.asdict(ag_exec.safety_metadata),
-            },
-            cx_exec.backend_id: {
-                "continuation_capability": cx_exec.continuation_capability.value,
-                "safety_metadata": dataclasses.asdict(cx_exec.safety_metadata),
-            },
-            gm_exec.backend_id: {
-                "continuation_capability": gm_exec.continuation_capability.value,
-                "safety_metadata": dataclasses.asdict(gm_exec.safety_metadata),
-            },
-        },
+        "supported_backends": supported_backends,
         "phase": task.phase,
         "stored_phase": task.phase,
         "phase_detail": phase_detail,
@@ -375,9 +377,14 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "execution_repo_path": execution_repo_path,
         "isolation_satisfied": isolation_satisfied,
         "session_id": task.antigravity_session_id,
+        "executor_session_id": task.executor_session_id or task.antigravity_session_id,
+        "legacy_executor": is_legacy_executor(active_backend_id) and not is_supported_executor(active_backend_id),
+        "retry_supported": is_supported_executor(active_backend_id),
         "provider_session_id": derived_bridge_state.get("provider_session_id"),
         "attempt_no": task.attempt_no,
         "retry_count": task.retry_count,
+        "authorization_profile": task.authorization_profile,
+        "authorization_summary": task.authorization_summary,
         "retry_recommended": task.retry_recommended,
         "stuck_reason": task.stuck_reason,
         "last_heartbeat_at": task.last_heartbeat_at,
@@ -577,7 +584,8 @@ def start_task(
     body: str = typer.Option(..., "--body"),
     task_id: str | None = typer.Option(None, "--task-id"),
     idempotency_key: str | None = typer.Option(None, "--idempotency-key"),
-    executor: str | None = typer.Option(None, "--executor", help="Executor backend to run the task (antigravity, codex, or gemini)."),
+    executor: str | None = typer.Option(None, "--executor", help=f"Executor backend to run the task ({', '.join(supported_executor_ids())})."),
+    authorization_profile: str = typer.Option("local_mutating", "--authorization-profile", help="Dispatch-time authorization profile."),
     depends_on: str | None = typer.Option(None, "--depends-on", help="JSON array of task IDs this task depends on."),
     isolated_worktree: bool = typer.Option(False, "--isolated-worktree", help="Whether the task requires a parallel-safe isolated worktree."),
     setup_commands: str | None = typer.Option(None, "--setup-commands", help="JSON array of setup commands to run before the task."),
@@ -589,36 +597,35 @@ def start_task(
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
 ) -> None:
-    from agpair.executors import AntigravityExecutor, CodexExecutor, GeminiExecutor, is_local_cli_backend
+    from agpair.executors import get_executor, is_local_cli_backend
     from agpair.executors.local_cli import WorktreeProvisionError, resolve_worktree_root
     from agpair.targets import resolve_repo_path
 
     _validate_task_body(body)
+    try:
+        normalized_authorization_profile = validate_authorization_profile(authorization_profile)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    normalized_authorization_summary = authorization_profile_summary(normalized_authorization_profile)
 
     paths = _paths()
     resolved_repo_path = resolve_repo_path(repo_path, target, paths)
     if not resolved_repo_path:
-        raise typer.BadParameter("Either --repo-path or --target must be provided.")
+        raise typer.BadParameter("Either --repo-path, --target, or a current git repo must be provided.")
 
     selected_executor = executor or _configured_default_executor(
         target=target,
         paths=paths,
-    )
+    ) or default_executor_id()
+    try:
+        selected_executor = validate_supported_executor(selected_executor)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
-    if selected_executor == "codex":
-        exec_instance = CodexExecutor()
-        backend_to_store = exec_instance.backend_id
-    elif selected_executor == "gemini":
-        exec_instance = GeminiExecutor()
-        backend_to_store = exec_instance.backend_id
-    elif selected_executor == "antigravity":
-        exec_instance = AntigravityExecutor(paths.agent_bus_bin)
-        backend_to_store = exec_instance.backend_id
-    elif selected_executor is None:
-        exec_instance = AntigravityExecutor(paths.agent_bus_bin)
-        backend_to_store = None
-    else:
-        raise typer.BadParameter("Invalid --executor. Allowed values are 'antigravity', 'codex', or 'gemini'.")
+    exec_instance = get_executor(selected_executor, agent_bus_bin=paths.agent_bus_bin)
+    if exec_instance is None:
+        raise typer.BadParameter(f"Executor {selected_executor!r} is not available in this build.")
+    backend_to_store = selected_executor
 
     tasks = TaskRepository(paths.db_path)
     journal = JournalRepository(paths.db_path)
@@ -674,6 +681,8 @@ def start_task(
             env_vars=env_vars,
             worktree_boundary=resolved_worktree_boundary,
             spotlight_testing=spotlight_testing,
+            authorization_profile=normalized_authorization_profile,
+            authorization_summary=normalized_authorization_summary,
         )
     except sqlite3.IntegrityError:
         if not idempotency_key:
@@ -729,6 +738,8 @@ def start_task(
             repo_path=resolved_repo_path,
             isolated_worktree=isolated_worktree,
             worktree_boundary=resolved_worktree_boundary,
+            authorization_profile=normalized_authorization_profile,
+            authorization_summary=normalized_authorization_summary,
         )
     except (subprocess.SubprocessError, FileNotFoundError, BusSendError, WorktreeProvisionError) as exc:
         reason = f"dispatch failed: {exc}"
@@ -749,7 +760,7 @@ def start_task(
             final_task_id,
             "cli",
             "dispatched",
-            f"started {selected_executor or 'antigravity'} exec in {dispatch_result.session_id}",
+            f"started {selected_executor} exec in {dispatch_result.session_id}",
         )
     elif dispatch_result.message_id:
         journal.append(final_task_id, "cli", "dispatched", f"sent TASK to provider msg={dispatch_result.message_id}")
@@ -758,7 +769,7 @@ def start_task(
             final_task_id,
             "cli",
             "dispatched",
-            f"dispatched {selected_executor or 'antigravity'} task",
+            f"dispatched {selected_executor} task",
         )
 
     typer.echo(final_task_id)
@@ -1316,10 +1327,78 @@ def _guard_active_waiter(paths: AppPaths, task_id: str, *, force: bool, command:
 # ---------------------------------------------------------------------------
 
 
+def _git_command_text(repo_path: str, args: list[str]) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", *args],
+            cwd=repo_path,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return ""
+
+
+def _original_brief_from_journal(journal: JournalRepository, task_id: str) -> str:
+    for row in reversed(journal.tail(task_id, limit=100)):
+        if row.source == "cli" and row.event == "created" and row.body.strip():
+            return row.body.strip()
+    return ""
+
+
+def _build_retry_from_block_body(
+    *,
+    paths: AppPaths,
+    task,
+    journal: JournalRepository,
+    next_attempt: int,
+    authorization_profile: str,
+    authorization_summary: str,
+) -> str:
+    original_brief = _original_brief_from_journal(journal, task.task_id) or "(original brief unavailable)"
+    terminal_receipt = _latest_terminal_receipt(paths, task.task_id)
+    journal_tail = [
+        {
+            "created_at": row.created_at,
+            "source": row.source,
+            "event": row.event,
+            "body": row.body[:1000],
+        }
+        for row in reversed(journal.tail(task.task_id, limit=8))
+    ]
+    retry_context = {
+        "task_id": task.task_id,
+        "attempt_no": next_attempt,
+        "previous_phase": task.phase,
+        "previous_executor_backend": task.executor_backend,
+        "previous_authorization_profile": task.authorization_profile,
+        "new_authorization_profile": authorization_profile,
+        "previous_blocked_reason": task.stuck_reason,
+        "terminal_receipt": terminal_receipt,
+        "journal_tail": journal_tail,
+        "git_status": _git_command_text(task.repo_path, ["status", "--short"]),
+        "git_diff": _git_command_text(task.repo_path, ["diff", "--stat"]),
+        "recent_commits": _git_command_text(task.repo_path, ["log", "--oneline", "-5"]),
+    }
+    return (
+        f"Fresh retry requested for {task.task_id} attempt {next_attempt}\n\n"
+        f"Authorization profile: {authorization_profile}\n"
+        f"{authorization_summary}\n\n"
+        "Original brief:\n"
+        f"{original_brief}\n\n"
+        f"Previous blocked reason: {task.stuck_reason or 'unknown'}\n\n"
+        "Structured blocked retry context JSON:\n"
+        f"{json.dumps(retry_context, ensure_ascii=False, indent=2, sort_keys=True)}\n"
+    )
+
+
 @app.command("retry")
 def retry_task(
     task_id: str,
     body: str | None = typer.Option(None, "--body"),
+    from_block: bool = typer.Option(False, "--from-block", help="Build a new attempt from structured blocked context."),
+    authorization_profile: str | None = typer.Option(None, "--authorization-profile", help="Authorization profile for the new attempt."),
+    executor: str | None = typer.Option(None, "--executor", help=f"Executor backend for the new attempt ({', '.join(supported_executor_ids())})."),
     force: bool = typer.Option(False, "--force", help="Bypass liveness and waiter guards."),
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
@@ -1338,11 +1417,44 @@ def retry_task(
     _guard_active_waiter(paths, task_id, force=force, command="retry")
     _guard_live_task(task, force=force, command="retry")
     next_attempt = task.attempt_no + 1
-    retry_body = body or f"Fresh retry requested for {task.task_id} attempt {next_attempt}"
-    if is_local_cli_backend(task.executor_backend):
-        exec_instance = get_executor(task.executor_backend)
+    if executor:
+        try:
+            selected_executor = validate_supported_executor(executor)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    else:
+        selected_executor = task.executor_backend
+    if from_block:
+        if task.phase not in {"blocked", "stuck"}:
+            typer.echo("--from-block requires a blocked or stuck task", err=True)
+            raise typer.Exit(code=1)
+        if task.executor_backend == "gemini_cli" and not executor:
+            typer.echo("legacy gemini_cli retry requires --executor", err=True)
+            raise typer.Exit(code=1)
+        if not selected_executor or not is_supported_executor(selected_executor):
+            typer.echo("retry --from-block requires a supported executor", err=True)
+            raise typer.Exit(code=1)
+
+    next_authorization_profile = validate_authorization_profile(
+        authorization_profile or task.authorization_profile
+    )
+    next_authorization_summary = authorization_profile_summary(next_authorization_profile)
+    retry_body = body or (
+        _build_retry_from_block_body(
+            paths=paths,
+            task=task,
+            journal=journal,
+            next_attempt=next_attempt,
+            authorization_profile=next_authorization_profile,
+            authorization_summary=next_authorization_summary,
+        )
+        if from_block
+        else f"Fresh retry requested for {task.task_id} attempt {next_attempt}"
+    )
+    if is_local_cli_backend(selected_executor):
+        exec_instance = get_executor(selected_executor)
         if exec_instance is None:
-            reason = f"dispatch failed: executor backend unavailable for retry ({task.executor_backend})"
+            reason = f"dispatch failed: executor backend unavailable for retry ({selected_executor})"
             journal.append(task.task_id, "cli", "retry_failed", reason)
             typer.echo(reason, err=True)
             raise typer.Exit(code=1)
@@ -1353,6 +1465,8 @@ def retry_task(
                 repo_path=task.repo_path,
                 isolated_worktree=task.isolated_worktree,
                 worktree_boundary=task.worktree_boundary,
+                authorization_profile=next_authorization_profile,
+                authorization_summary=next_authorization_summary,
             )
         except (subprocess.SubprocessError, FileNotFoundError, BusSendError, WorktreeProvisionError) as exc:
             reason = f"dispatch failed: {exc}"
@@ -1360,11 +1474,16 @@ def retry_task(
             typer.echo(reason, err=True)
             raise typer.Exit(code=1)
         if not dispatch_result.session_id:
-            reason = f"dispatch failed: local executor {task.executor_backend} did not return a session_id"
+            reason = f"dispatch failed: local executor {selected_executor} did not return a session_id"
             journal.append(task.task_id, "cli", "retry_failed", reason)
             typer.echo(reason, err=True)
             raise typer.Exit(code=1)
-        updated = tasks.apply_retry_dispatch(task_id=task.task_id)
+        updated = tasks.apply_retry_dispatch(
+            task_id=task.task_id,
+            executor_backend=selected_executor,
+            authorization_profile=next_authorization_profile,
+            authorization_summary=next_authorization_summary,
+        )
         if dispatch_result.execution_repo_path:
             tasks.set_execution_repo_path(
                 task_id=updated.task_id,
@@ -1386,7 +1505,12 @@ def retry_task(
             journal.append(task.task_id, "cli", "retry_failed", reason)
             typer.echo(reason, err=True)
             raise typer.Exit(code=1)
-        updated = tasks.apply_retry_dispatch(task_id=task.task_id)
+        updated = tasks.apply_retry_dispatch(
+            task_id=task.task_id,
+            executor_backend=selected_executor,
+            authorization_profile=next_authorization_profile,
+            authorization_summary=next_authorization_summary,
+        )
         journal.append(updated.task_id, "cli", "retried", f"id={message_id} attempt={updated.attempt_no}")
     typer.echo(task.task_id)
 

@@ -119,6 +119,14 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "execution_repo_path" not in task_cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN execution_repo_path TEXT")
         conn.commit()
+    # Migration 15: add authorization profile metadata
+    task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "authorization_profile" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN authorization_profile TEXT NOT NULL DEFAULT 'local_mutating'")
+        conn.commit()
+    if "authorization_summary" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN authorization_summary TEXT")
+        conn.commit()
 
 
 def _configure_connection(conn: sqlite3.Connection) -> None:

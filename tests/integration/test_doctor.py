@@ -67,8 +67,38 @@ def test_doctor_reports_missing_bus_or_database_paths(tmp_path: Path, monkeypatc
     assert payload["config_root"].endswith(".agpair")
     assert payload["db_exists"] is False
     assert payload["agent_bus_available"] is False
-    assert payload["active_executor_backend"] == "antigravity"
-    assert "codex_cli" in payload["supported_executor_backends"]
+    assert payload["active_executor_backend"] == "antigravity-cli"
+    assert payload["default_executor_backend"] == "antigravity-cli"
+    assert payload["supported_executor_backends"] == ["antigravity-cli", "grok-cli", "claude-code", "codex"]
+    assert "gemini_cli" in payload["legacy_executor_backends"]
+    assert "local_mutating" in payload["authorization_profiles"]
+
+
+def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    _clear_disk_cache(tmp_path)
+    for env_var, filename in (
+        ("AGPAIR_ANTIGRAVITY_CLI", "antigravity"),
+        ("AGPAIR_GROK_CLI", "grok"),
+        ("AGPAIR_CLAUDE_CODE_CLI", "claude"),
+    ):
+        bin_path = tmp_path / "bin" / filename
+        bin_path.parent.mkdir(parents=True, exist_ok=True)
+        bin_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        bin_path.chmod(0o755)
+        monkeypatch.setenv(env_var, str(bin_path))
+
+    result = CliRunner().invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    health = payload["executor_cli_health"]
+    assert health["antigravity-cli"]["available"] is True
+    assert health["antigravity-cli"]["env_var"] == "AGPAIR_ANTIGRAVITY_CLI"
+    assert health["grok-cli"]["available"] is True
+    assert health["claude-code"]["available"] is True
+    assert "codex" in health
+    assert "gemini_cli" not in health
 
 
 def test_doctor_reports_daemon_status_and_latest_receipt(tmp_path: Path, monkeypatch) -> None:

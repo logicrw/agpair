@@ -11,6 +11,8 @@ from urllib import error, request
 
 from agpair.config import AppPaths
 from agpair.daemon.process import daemon_status
+from agpair.executors.routing import LEGACY_EXECUTOR_IDS, default_executor_id, supported_executor_ids
+from agpair.models import VALID_AUTHORIZATION_PROFILES
 
 # ---------------------------------------------------------------------------
 # Doctor result cache  (disk-persisted, cross-process)
@@ -94,9 +96,14 @@ def _is_healthy(report: dict) -> bool:
         return False
     if report.get("db_error"):
         return False
-    if report.get("repo_bridge_error"):
+    repo_bridge_error = report.get("repo_bridge_error")
+    repo_bridge_warning = report.get("repo_bridge_warning")
+    # The Antigravity desktop bridge is no longer the default execution path.
+    # A missing bridge marker is a useful legacy-path warning, but it should not
+    # make an otherwise healthy external-CLI doctor report uncachable.
+    if repo_bridge_error and repo_bridge_error != "bridge marker not found":
         return False
-    if report.get("repo_bridge_warning"):
+    if repo_bridge_warning and repo_bridge_warning != "bridge marker missing":
         return False
     if report.get("repo_git_antigravity_incompatible"):
         return False
@@ -131,7 +138,17 @@ def build_doctor_report(
 
     desktop_reader_conflict = None
 
-    from agpair.executors import AntigravityExecutor, CodexExecutor, GeminiExecutor
+    executor_cli_health = _build_executor_cli_health()
+    available_executor_backends = [
+        executor_id
+        for executor_id, health in executor_cli_health.items()
+        if health["available"]
+    ]
+    missing_executor_backends = [
+        executor_id
+        for executor_id, health in executor_cli_health.items()
+        if not health["available"]
+    ]
 
     report = {
         "config_root": str(paths.root),
@@ -150,8 +167,14 @@ def build_doctor_report(
         "processed_receipts": status.get("processed_receipts", 0),
         "stuck_marked": status.get("stuck_marked", 0),
         "latest_receipt_id": latest_receipt_id,
-        "active_executor_backend": AntigravityExecutor("").backend_id,
-        "supported_executor_backends": [AntigravityExecutor("").backend_id, CodexExecutor().backend_id, GeminiExecutor().backend_id],
+        "active_executor_backend": default_executor_id(),
+        "default_executor_backend": default_executor_id(),
+        "supported_executor_backends": list(supported_executor_ids()),
+        "legacy_executor_backends": sorted(LEGACY_EXECUTOR_IDS),
+        "available_executor_backends": available_executor_backends,
+        "missing_executor_backends": missing_executor_backends,
+        "executor_cli_health": executor_cli_health,
+        "authorization_profiles": list(VALID_AUTHORIZATION_PROFILES),
         "desktop_reader_conflict": desktop_reader_conflict is not None,
         "desktop_reader_conflict_detail": desktop_reader_conflict,
         "doctor_cache_hit": False,
@@ -159,6 +182,7 @@ def build_doctor_report(
     }
     if repo_path:
         report.update(_build_repo_bridge_report(Path(repo_path)))
+        report["client_hook_install_status"] = _build_client_hook_install_status(Path(repo_path))
 
     # --- cache store (healthy results only, persisted to disk) ---
     if _is_healthy(report):
@@ -185,6 +209,74 @@ def _is_agent_bus_available(binary: str) -> bool:
         path = Path(binary)
         return path.exists() and os.access(path, os.X_OK)
     return shutil.which(binary) is not None
+
+
+def _is_cli_available(binary: str) -> bool:
+    if "/" in binary:
+        path = Path(binary).expanduser()
+        return path.exists() and os.access(path, os.X_OK)
+    return shutil.which(binary) is not None
+
+
+def _build_executor_cli_health() -> dict[str, dict[str, object]]:
+    specs = {
+        "antigravity-cli": ("AGPAIR_ANTIGRAVITY_CLI", "antigravity"),
+        "grok-cli": ("AGPAIR_GROK_CLI", "grok"),
+        "claude-code": ("AGPAIR_CLAUDE_CODE_CLI", "claude"),
+        "codex": ("AGPAIR_CODEX_CLI", "codex"),
+    }
+    health: dict[str, dict[str, object]] = {}
+    for executor_id, (env_var, default_binary) in specs.items():
+        configured = os.environ.get(env_var)
+        binary = configured or default_binary
+        health[executor_id] = {
+            "env_var": env_var,
+            "binary": binary,
+            "available": _is_cli_available(binary),
+            "configured": configured is not None,
+        }
+    return health
+
+
+def _settings_contains_commands(path: Path, commands: tuple[str, ...]) -> dict[str, object]:
+    if not path.exists():
+        return {"path": str(path), "exists": False, "installed": False, "missing_commands": list(commands)}
+    try:
+        body = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return {"path": str(path), "exists": True, "installed": False, "error": str(exc)}
+    missing = [command for command in commands if command not in body]
+    return {
+        "path": str(path),
+        "exists": True,
+        "installed": not missing,
+        "missing_commands": missing,
+    }
+
+
+def _build_client_hook_install_status(repo_path: Path) -> dict[str, dict[str, object]]:
+    repo = repo_path.expanduser().resolve()
+    return {
+        "codex": _settings_contains_commands(
+            repo / ".codex" / "hooks.json",
+            (
+                "agpair codex hook user-prompt-submit",
+                "agpair codex hook stop",
+                "agpair codex hook subagent-start",
+            ),
+        ),
+        "claude": _settings_contains_commands(
+            repo / ".claude" / "settings.json",
+            (
+                "agpair claude statusline",
+                "agpair claude hook session-start",
+                "agpair claude hook precompact",
+                "agpair claude hook user-prompt-submit",
+                "agpair claude hook stop",
+                "agpair claude hook subagent-start",
+            ),
+        ),
+    }
 
 
 def _safe_read_latest_receipt_id(db_path: Path) -> tuple[str | None, str | None]:

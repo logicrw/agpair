@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 from agpair.cli.app import app
 from agpair.config import AppPaths
 from agpair.storage.db import ensure_database
+from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
 
 
@@ -55,6 +56,42 @@ def hook_input(cwd: Path, *, event: str, **extra: object) -> str:
         **extra,
     }
     return json.dumps(payload)
+
+
+def hook_commands(payload: dict[str, object], event_name: str) -> list[str]:
+    event_entries = payload["hooks"][event_name]  # type: ignore[index]
+    assert isinstance(event_entries, list)
+    commands: list[str] = []
+    for entry in event_entries:
+        assert isinstance(entry, dict)
+        hooks = entry["hooks"]
+        assert isinstance(hooks, list)
+        for hook in hooks:
+            assert isinstance(hook, dict)
+            command = hook["command"]
+            assert isinstance(command, str)
+            commands.append(command)
+    return commands
+
+
+def terminal_receipt(
+    task_id: str,
+    *,
+    status: str,
+    payload: dict[str, object],
+    summary: str = "terminal receipt",
+) -> str:
+    return json.dumps(
+        {
+            "schema_version": "1",
+            "task_id": task_id,
+            "attempt_no": 1,
+            "review_round": 0,
+            "status": status,
+            "summary": summary,
+            "payload": payload,
+        }
+    )
 
 
 def test_cli_help_lists_claude_group() -> None:
@@ -108,8 +145,14 @@ def test_claude_config_emits_statusline_and_hook_commands() -> None:
     payload = json.loads(result.stdout)
     assert payload["statusLine"]["command"] == "agpair claude statusline"
     assert payload["statusLine"]["refreshInterval"] == 5
-    assert payload["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "agpair claude hook session-start"
-    assert payload["hooks"]["PreCompact"][0]["hooks"][0]["command"] == "agpair claude hook precompact"
+    assert hook_commands(payload, "SessionStart") == ["agpair claude hook session-start"]
+    assert hook_commands(payload, "PreCompact") == ["agpair claude hook precompact"]
+    assert hook_commands(payload, "UserPromptSubmit") == ["agpair claude hook user-prompt-submit"]
+    assert hook_commands(payload, "Stop") == ["agpair claude hook stop"]
+    assert hook_commands(payload, "SubagentStart") == ["agpair claude hook subagent-start"]
+    assert hook_commands(payload, "SubagentStop") == ["agpair claude hook subagent-stop"]
+    assert hook_commands(payload, "TaskCreated") == ["agpair claude hook task-created"]
+    assert hook_commands(payload, "TaskCompleted") == ["agpair claude hook task-completed"]
 
 
 def test_claude_config_install_writes_project_settings(tmp_path: Path, monkeypatch) -> None:
@@ -124,7 +167,8 @@ def test_claude_config_install_writes_project_settings(tmp_path: Path, monkeypat
     settings_path = repo_path / ".claude" / "settings.json"
     payload = json.loads(settings_path.read_text())
     assert payload["statusLine"]["command"] == "agpair claude statusline"
-    assert payload["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "agpair claude hook session-start"
+    assert "agpair claude hook session-start" in hook_commands(payload, "SessionStart")
+    assert "agpair claude hook stop" in hook_commands(payload, "Stop")
 
 
 def test_claude_config_dry_run_prints_diff_without_writing(tmp_path: Path, monkeypatch) -> None:
@@ -175,7 +219,7 @@ def test_claude_config_install_user_scope_writes_home_settings(tmp_path: Path, m
     assert payload["statusLine"]["command"] == "agpair claude statusline"
 
 
-def test_claude_config_install_refuses_foreign_sessionstart_hook_without_force(tmp_path: Path, monkeypatch) -> None:
+def test_claude_config_install_preserves_foreign_event_hooks_without_force(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
@@ -193,9 +237,11 @@ def test_claude_config_install_refuses_foreign_sessionstart_hook_without_force(t
 
     result = CliRunner().invoke(app, ["claude", "config", "--install"])
 
-    assert result.exit_code == 1
-    assert "hooks.SessionStart" in result.output
-    assert "manual merge" in result.output
+    assert result.exit_code == 0
+    updated = json.loads((settings_dir / "settings.json").read_text())
+    commands = hook_commands(updated, "SessionStart")
+    assert "/tmp/custom-session-start.sh" in commands
+    assert "agpair claude hook session-start" in commands
 
 
 def test_claude_config_force_replaces_conflicting_managed_slots(tmp_path: Path, monkeypatch) -> None:
@@ -223,7 +269,8 @@ def test_claude_config_force_replaces_conflicting_managed_slots(tmp_path: Path, 
     assert result.exit_code == 0
     updated = json.loads((settings_dir / "settings.json").read_text())
     assert updated["statusLine"]["command"] == "agpair claude statusline"
-    assert updated["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "agpair claude hook session-start"
+    assert "/tmp/custom-session-start.sh" in hook_commands(updated, "SessionStart")
+    assert "agpair claude hook session-start" in hook_commands(updated, "SessionStart")
     assert updated["hooks"]["Notification"][0]["hooks"][0]["command"] == "/tmp/notify-me.sh"
 
 
@@ -238,7 +285,17 @@ def test_claude_config_uninstall_removes_only_managed_entries(tmp_path: Path, mo
         "statusLine": {"type": "command", "command": "agpair claude statusline", "refreshInterval": 5},
         "hooks": {
             "SessionStart": [
-                {"hooks": [{"type": "command", "command": "agpair claude hook session-start"}]}
+                {"hooks": [{"type": "command", "command": "/tmp/custom-session-start.sh"}]},
+                {"hooks": [{"type": "command", "command": "agpair claude hook session-start"}]},
+            ],
+            "PreCompact": [
+                {"hooks": [{"type": "command", "command": "agpair claude hook precompact"}]}
+            ],
+            "Stop": [
+                {"hooks": [{"type": "command", "command": "agpair claude hook stop"}]}
+            ],
+            "TaskCompleted": [
+                {"hooks": [{"type": "command", "command": "agpair claude hook task-completed"}]}
             ],
             "Notification": [
                 {"hooks": [{"type": "command", "command": "/tmp/notify-me.sh"}]}
@@ -252,7 +309,10 @@ def test_claude_config_uninstall_removes_only_managed_entries(tmp_path: Path, mo
     assert result.exit_code == 0
     updated = json.loads((settings_dir / "settings.json").read_text())
     assert "statusLine" not in updated
-    assert "SessionStart" not in updated["hooks"]
+    assert hook_commands(updated, "SessionStart") == ["/tmp/custom-session-start.sh"]
+    assert "PreCompact" not in updated["hooks"]
+    assert "Stop" not in updated["hooks"]
+    assert "TaskCompleted" not in updated["hooks"]
     assert updated["hooks"]["Notification"][0]["hooks"][0]["command"] == "/tmp/notify-me.sh"
 
 
@@ -277,6 +337,187 @@ def test_claude_session_start_hook_emits_agpair_context(tmp_path: Path, monkeypa
     assert payload["hookSpecificOutput"]["hookEventName"] == "SessionStart"
     assert "TASK-CLAUDE-CTX" in payload["hookSpecificOutput"]["additionalContext"]
     assert "agpair task watch <TASK_ID> --json" in payload["hookSpecificOutput"]["additionalContext"]
+
+
+def test_claude_user_prompt_submit_hook_emits_external_first_context(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    init_git_repo(repo_path)
+
+    result = CliRunner().invoke(
+        app,
+        ["claude", "hook", "user-prompt-submit"],
+        input=hook_input(repo_path, event="UserPromptSubmit", prompt="fix the tests"),
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    output = payload["hookSpecificOutput"]
+    assert output["hookEventName"] == "UserPromptSubmit"
+    assert "prefer AGPair external CLI executors before Claude Code native subagents" in output["additionalContext"]
+    assert "Claude Code remains controller and verifier" in output["additionalContext"]
+
+
+def test_claude_stop_hook_blocks_ready_for_review_terminal_receipt(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    init_git_repo(repo_path)
+
+    paths = make_paths(tmp_path)
+    tasks = make_task_repo(tmp_path)
+    tasks.create_task(task_id="TASK-CLAUDE-RFR", repo_path=str(repo_path))
+    tasks.mark_acked(task_id="TASK-CLAUDE-RFR", session_id="session-rfr")
+    JournalRepository(paths.db_path).append(
+        "TASK-CLAUDE-RFR",
+        "executor",
+        "committed",
+        terminal_receipt(
+            "TASK-CLAUDE-RFR",
+            status="COMMITTED",
+            payload={
+                "claimed_state": "ready_for_review",
+                "changed_files": ["src/app.py"],
+                "scope_violations": [],
+                "raw_log_path": "/tmp/raw.log",
+                "receipt_path": "/tmp/receipt.json",
+                "validation": ["pytest"],
+            },
+        ),
+    )
+    tasks.mark_committed(task_id="TASK-CLAUDE-RFR")
+
+    result = CliRunner().invoke(
+        app,
+        ["claude", "hook", "stop"],
+        input=hook_input(repo_path, event="Stop"),
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "block"
+    assert "ready_for_review" in payload["reason"]
+    assert "TASK-CLAUDE-RFR" in payload["reason"]
+
+
+def test_claude_stop_hook_blocks_approval_required_blocker(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    init_git_repo(repo_path)
+
+    paths = make_paths(tmp_path)
+    tasks = make_task_repo(tmp_path)
+    tasks.create_task(task_id="TASK-CLAUDE-APPROVAL", repo_path=str(repo_path))
+    tasks.mark_acked(task_id="TASK-CLAUDE-APPROVAL", session_id="session-approval")
+    JournalRepository(paths.db_path).append(
+        "TASK-CLAUDE-APPROVAL",
+        "executor",
+        "blocked",
+        terminal_receipt(
+            "TASK-CLAUDE-APPROVAL",
+            status="BLOCKED",
+            payload={"blocker_type": "approval_required", "raw_log_path": "/tmp/raw.log"},
+            summary="needs local_mutating authorization",
+        ),
+    )
+    tasks.mark_blocked(task_id="TASK-CLAUDE-APPROVAL", reason="needs approval")
+
+    result = CliRunner().invoke(
+        app,
+        ["claude", "hook", "stop"],
+        input=hook_input(repo_path, event="Stop"),
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "block"
+    assert "approval_required" in payload["reason"]
+    assert "agpair task retry TASK-CLAUDE-APPROVAL --from-block" in payload["reason"]
+
+
+def test_claude_stop_hook_allows_plain_acked_task(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    init_git_repo(repo_path)
+
+    tasks = make_task_repo(tmp_path)
+    tasks.create_task(task_id="TASK-CLAUDE-ACKED", repo_path=str(repo_path))
+    tasks.mark_acked(task_id="TASK-CLAUDE-ACKED", session_id="session-acked")
+
+    result = CliRunner().invoke(
+        app,
+        ["claude", "hook", "stop"],
+        input=hook_input(repo_path, event="Stop"),
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == ""
+
+
+def test_claude_subagent_start_hook_is_advisory(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    init_git_repo(repo_path)
+
+    result = CliRunner().invoke(
+        app,
+        ["claude", "hook", "subagent-start"],
+        input=hook_input(repo_path, event="SubagentStart"),
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    output = payload["hookSpecificOutput"]
+    assert output["hookEventName"] == "SubagentStart"
+    assert "fallback scope" in output["additionalContext"]
+
+
+def test_claude_observability_hooks_fail_open_without_output(tmp_path: Path, monkeypatch) -> None:
+    bad_home = tmp_path / "not-a-directory"
+    bad_home.write_text("file", encoding="utf-8")
+    monkeypatch.setenv("AGPAIR_HOME", str(bad_home))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    init_git_repo(repo_path)
+
+    for command, event_name in (
+        ("subagent-stop", "SubagentStop"),
+        ("task-created", "TaskCreated"),
+        ("task-completed", "TaskCompleted"),
+    ):
+        result = CliRunner().invoke(
+            app,
+            ["claude", "hook", command],
+            input=hook_input(repo_path, event=event_name),
+        )
+        assert result.exit_code == 0
+        assert result.stdout.strip() == ""
+
+
+def test_claude_external_first_hooks_fail_open_when_state_unavailable(tmp_path: Path, monkeypatch) -> None:
+    bad_home = tmp_path / "not-a-directory"
+    bad_home.write_text("file", encoding="utf-8")
+    monkeypatch.setenv("AGPAIR_HOME", str(bad_home))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    init_git_repo(repo_path)
+
+    for command, event_name in (
+        ("user-prompt-submit", "UserPromptSubmit"),
+        ("stop", "Stop"),
+        ("subagent-start", "SubagentStart"),
+    ):
+        result = CliRunner().invoke(
+            app,
+            ["claude", "hook", command],
+            input=hook_input(repo_path, event=event_name),
+        )
+        assert result.exit_code == 0
+        assert result.stdout.strip() == ""
 
 
 def test_claude_precompact_hook_blocks_when_live_task_exists(tmp_path: Path, monkeypatch) -> None:

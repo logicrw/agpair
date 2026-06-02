@@ -10,6 +10,7 @@ def test_cli_help_lists_top_level_groups() -> None:
     assert "task" in result.stdout
     assert "daemon" in result.stdout
     assert "doctor" in result.stdout
+    assert "codex" in result.stdout
 
 
 def test_doctor_is_a_top_level_command() -> None:

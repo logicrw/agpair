@@ -1,260 +1,140 @@
-# Getting Started with agpair
+# Getting Started with AGPair
 
-This guide walks you through going from zero to your first successful task dispatch.
+This guide gets AGPair installed and dispatching external CLI agents from Codex or Claude Code.
 
-> **Key insight**: In normal use, you talk to your AI coding agent (Codex, Claude Code, etc.) in natural language and it uses `agpair` as its tool belt. You only need the CLI directly when you want to inspect state, debug, or manually take over.
-
-## Prerequisites
-
-| Requirement | Notes |
-|-------------|-------|
-| **macOS** | Primary tested platform. Linux is untested but may work. |
-| **Python 3.12+** | For the `agpair` CLI |
-| **Node.js 18+** | For building the companion extension |
-| **[Antigravity](https://antigravity.google/) IDE** | The companion extension runs inside it (Antigravity executor only) |
-
-### What is `agent-bus`?
-
-`agent-bus` is the local message bus that agpair uses for its Antigravity-backed execution path. It is **bundled with agpair** and installed automatically when you run `pip install -e .` — no separate download is needed.
-
-If you use `--executor codex` or `--executor gemini`, the same agpair lifecycle still applies, but the executor process is local CLI-based rather than Antigravity-session-based. This guide still uses Antigravity examples for the “single current worktree” path, because that remains the default fallback and has the richest runtime surface.
-
-Supported executor choices today are:
-
-- `antigravity`
-- `codex`
-- `gemini`
-
-Default executor resolution order:
-
-1. explicit `--executor`
-2. target-level `default_executor`
-3. `AGPAIR_DEFAULT_EXECUTOR`
-4. fallback `antigravity`
-
-Typical controller-side recommendations:
-
-- Claude Code
-  - single-worktree: `antigravity`
-  - parallel / isolated-worktree: `codex`, then `gemini`
-- Codex
-  - single-worktree: `antigravity`
-  - parallel / isolated-worktree: `gemini`
-  - use `codex` as executor only when you explicitly want a second Codex worker
-
-### What is the Antigravity IDE?
-
-The [Antigravity](https://antigravity.google/) IDE is a VS Code-compatible IDE that provides the execution environment for agpair tasks. The companion extension in this repo (`companion-extension/`) runs inside it, providing the HTTP bridge between `agpair` CLI and Antigravity's execution capabilities. The `antigravity --install-extension` command used below is the Antigravity IDE's CLI for sideloading `.vsix` extensions, analogous to `code --install-extension` in VS Code.
-
-## Step 1: Install agpair
+## 1. Install
 
 ```bash
-git clone https://github.com/logicrw/agpair.git agpair
+git clone https://github.com/logicrw/agpair.git
 cd agpair
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -e '.[dev]'
 ```
 
-To make `agpair` available globally (so any AI coding agent can use it):
+Optional global CLI link:
 
 ```bash
+mkdir -p ~/.local/bin
 ln -sf "$PWD/.venv/bin/agpair" ~/.local/bin/agpair
-which agpair   # should print ~/.local/bin/agpair
+which agpair
 ```
 
-### Step 1b: Install the companion extension
-
-The companion extension provides the HTTP bridge between `agpair` CLI and the [Antigravity](https://antigravity.google/) IDE. It is bundled in this repo:
+## 2. Check Health
 
 ```bash
-cd companion-extension
-npm install
-npm run build
-npm run package
-antigravity --install-extension antigravity-companion-extension-*.vsix
-cd ..
+agpair doctor
+agpair doctor --repo-path /path/to/repo
 ```
 
-Reload the Antigravity window after installing. The extension activates on startup.
+Important fields:
 
-> **Security note**: The bridge listens on `127.0.0.1` only. By default, it is secured with an auto-generated bearer token stored in VS Code's SecretStorage — no manual configuration is needed. Mutating endpoints (`/run_task`, `/write_receipt`, etc.) require a valid `Authorization: Bearer <token>` header; read-only endpoints (`/health`, `/task_status`) are accessible without auth so that `agpair doctor` works out of the box. For local debugging, you can disable auth by setting `antigravityCompanion.bridgeInsecure = true` in IDE settings — this is not recommended for normal use. Request bodies are limited to 1 MiB.
+- `supported_executor_backends`: `antigravity-cli`, `grok-cli`, `claude-code`, `codex`.
+- `default_executor_backend`: `antigravity-cli`.
+- `executor_cli_health`: whether each CLI binary is available.
+- `authorization_profiles`: dispatch-time permission budgets.
+- `client_hook_install_status`: Codex/Claude hook status when a repo path is provided.
 
-## Step 2: Confirm agent-bus is available
+Missing non-default executor binaries are warnings. They do not prevent AGPair from managing other executors.
+
+## 3. Configure Your Controller
+
+Codex:
 
 ```bash
-agent-bus --help
+mkdir -p ~/.codex/skills/agpair
+cp "$PWD/skills/Codex/SKILL.md" ~/.codex/skills/agpair/SKILL.md
+agpair codex config --install --scope project --repo-path /path/to/repo
 ```
 
-If this fails, make sure you ran `pip install -e .` (or `pip install -e '.[dev]'`) — `agent-bus` is bundled with agpair and should be installed automatically.
-
-## Step 3: Check target repo health
-
-Before dispatching your first task, make sure the environment is ready:
+Claude Code:
 
 ```bash
-agpair doctor --repo-path /path/to/your/project
+mkdir -p ~/.claude/skills/agpair
+cp "$PWD/skills/Claude/SKILL.md" ~/.claude/skills/agpair/SKILL.md
+claude mcp add --transport stdio agpair -- agpair-mcp
+agpair claude config --install --scope project --repo-path /path/to/repo
 ```
 
-The three fields that matter most:
+Hooks fail open if AGPair is unavailable. They are routing hints and completion guardrails, not a replacement for controller verification.
 
-| Field | What you want |
-|-------|---------------|
-| `agent_bus_available` | `true` |
-| `desktop_reader_conflict` | `false` |
-| `repo_bridge_session_ready` | `true` |
+## 4. Dispatch A Task
 
-**Example `doctor` output (healthy):**
-
-```
-agpair doctor — target: /Users/you/projects/my-app
-
-  agent_bus_available ............ true
-  desktop_reader_conflict ........ false
-  repo_bridge_session_ready ...... true
-  bridge_url ..................... http://127.0.0.1:8765
-
-All checks passed.
-```
-
-**If `desktop_reader_conflict=true`**: Another desktop watcher is consuming the same receipts. Stop it before continuing.
-
-**If `repo_bridge_session_ready=false`**: The Antigravity window for this repo is not healthy. Confirm the correct repo is open, reload/restart the Antigravity window, and re-run `doctor`.
-
-## Step 4: Start the daemon
-
-```bash
-agpair daemon start
-agpair daemon status
-```
-
-The daemon is a lightweight background helper. It handles:
-
-- Receipt ingestion (`ACK`, `EVIDENCE_PACK`, `BLOCKED`, `COMMITTED`)
-- Task → session continuity
-- Stuck detection (soft watchdog → hard timeout)
-
-It is **not** a semantic reviewer — it does not interpret code or make decisions.
-
-## Step 5: Dispatch your first task
+`task start` waits by default:
 
 ```bash
 agpair task start \
-  --repo-path /path/to/your/project \
-  --body "Goal: fix the failing test and return EVIDENCE_PACK."
+  --repo-path /path/to/repo \
+  --executor antigravity-cli \
+  --authorization-profile local_mutating \
+  --body "Goal: fix the failing smoke test. Required evidence: run the focused test."
 ```
 
-This returns a `TASK_ID` and, by default, **waits** until the task reaches a terminal phase.
-
-**Example output:**
-
-```
-Task created: TASK-MY-APP-SMOKE-FIX-20260324-01
-Waiting for terminal phase ...
-Phase changed: new → acked
-Phase changed: acked → evidence_ready
-Task reached terminal phase: evidence_ready
-```
-
-To fire-and-forget instead:
+For async or parallel work:
 
 ```bash
 agpair task start \
-  --repo-path /path/to/your/project \
+  --repo-path /path/to/repo \
+  --executor antigravity-cli \
+  --authorization-profile local_mutating \
   --body "Goal: ..." \
   --no-wait
+
+agpair task watch TASK-123 --json
 ```
 
-## Step 6: Inspect the task
+`watch --json` emits state changes and paths to raw logs/receipts. It does not stream full logs.
+
+## 5. Review The Result
 
 ```bash
-agpair task status <TASK_ID>
-agpair task logs <TASK_ID>
+agpair task status TASK-123 --json
+agpair task logs TASK-123
+git -C /path/to/repo status --short
+git -C /path/to/repo diff
 ```
 
-**Example `task status` output:**
+Treat `ready_for_review`, `evidence_ready`, and `committed` as review gates. The external executor has claimed progress; Codex or Claude Code still verifies diff, receipt, raw evidence paths, and tests before reporting success.
 
-```
-task_id:    TASK-MY-APP-SMOKE-FIX-20260324-01
-phase:      evidence_ready
-attempt_no: 1
-session_id: sess-abc123
-created_at: 2026-03-24T10:00:00Z
-```
+`commit_ref` is optional unless the brief or authorization profile required a commit.
 
-### Task phases
+## 6. Retry An Approval Block
 
-| Phase | Meaning |
-|-------|---------|
-| `new` | Task created locally, not yet acknowledged |
-| `acked` | Antigravity accepted and started a session |
-| `evidence_ready` | Antigravity returned `EVIDENCE_PACK` — review the logs |
-| `blocked` | Execution failed, blocker reason available |
-| `committed` | Task completed and committed |
-| `stuck` | No progress for too long (daemon-detected) |
-
-## Step 7: Choose the next action
-
-After reviewing `task logs`, pick exactly one:
-
-# Retry with a fresh executor session
-agpair task retry <TASK_ID> --body "Retry with a fresh session."
-
-# Stop tracking locally (does not notify Antigravity)
-agpair task abandon <TASK_ID> --reason "No longer needed."
-```
-
-## Step 8: Using agpair with your AI coding agent (the normal workflow)
-
-In daily use, the intended flow is:
-
-1. You tell your AI agent (Codex, Claude Code, etc.) what you want in natural language
-2. The agent calls `agpair doctor`, `task start`, `task status`, etc.
-3. The selected executor runs the work
-4. You review the results and give the next instruction
-
-The CLI exists as a manual fallback for when you need to:
-
-- Inspect a stuck task directly
-- List all locally tracked tasks
-- Manually retry or abandon a task
-- Confirm the bridge is healthy
-- Take over when the agent is unavailable
-
-## Common Problems
-
-### `desktop_reader_conflict=true`
-
-Another desktop watcher is consuming the same receipts. Stop it, then start `agpair daemon`.
-
-### `repo_bridge_session_ready=false`
-
-The Antigravity window for this repo is not ready. Confirm the correct repo is open, reload/restart the window, and re-run `agpair doctor`.
-
-### `BLOCKED`
-
-The current attempt failed. Inspect with `agpair task logs <TASK_ID>`, then decide whether to `retry` with a fresh session.
-
-## Optional: Auto-start daemon on login
+If the task returns `blocked(approval_required)`, stop polling and retry from the structured block context:
 
 ```bash
-# Install launchd agent
-python3 -m agpair.tools.install_agpair_daemon_launchd install \
-  --agpair-home ~/.agpair
-
-# Check status
-python3 -m agpair.tools.install_agpair_daemon_launchd status
-
-# Remove
-python3 -m agpair.tools.install_agpair_daemon_launchd uninstall
+agpair task retry TASK-123 \
+  --from-block \
+  --authorization-profile local_mutating
 ```
 
-This is entirely optional — start with manual `agpair daemon start` until you are comfortable with the workflow.
+The retry includes the original brief, blocked reason, terminal receipt, journal tail, current git status, diff/commits, and the new authorization profile.
 
-## Task Metadata and Parallelism
+## 7. Executor Selection
 
-`agpair` supports parallel task execution, but you must adhere to the **parallelism rule: parallelize across worktrees, not inside one worktree**.
+Use this order unless the task gives a better reason:
 
-To orchestrate parallel work, the AI controller can add execution metadata to tasks. These fields include `depends_on`, `isolated_worktree`, `worktree_boundary`, `setup_commands`, `teardown_commands`, `env_vars`, and `spotlight_testing`.
+1. `antigravity-cli`: default external implementation executor.
+2. `grok-cli`: cheap challenger / backup.
+3. `claude-code`: quality escalation or Claude-specific external run.
+4. `codex`: fallback external Codex worker.
 
-*Note: These features are currently metadata-only. They persist and are surfaced to help the AI controller plan execution safely, but are not runtime-enforced by the `agpair` daemon itself.*
+Do not use Gemini for new work. Legacy `gemini_cli` records may be inspected or cleaned up only.
+
+## 8. Local Files
+
+Do not commit local runtime or personal config:
+
+- `~/.agpair`
+- `~/.codex/*`
+- `~/.claude/settings.json`
+- `.claude/settings.local.json`
+- raw AGPair logs
+- session transcripts
+- generated hook debug output
+
+Project-level `.claude/settings.json` or Codex hook config should be committed only when sanitized and intentionally shared.
+
+## Legacy Note
+
+The Antigravity desktop companion extension and bridge diagnostics remain for older installations. New tasks should use `antigravity-cli`.

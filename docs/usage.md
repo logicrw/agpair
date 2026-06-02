@@ -4,7 +4,7 @@
 
 Use it when:
 - Your AI coding agent is the main controller
-- You are using Antigravity, Codex CLI, or Gemini CLI as the executor
+- You are using Antigravity CLI, Grok CLI, Claude Code, or Codex CLI as the executor
 - You want light mechanical automation without turning the tool into a second brain
 
 ## Environment
@@ -118,52 +118,48 @@ agpair task start \
   --body "Goal: implement the smoke fix and show evidence."
 ```
 
-To explicitly use the Codex backend:
+To explicitly use the default external CLI backend:
 
 ```bash
 agpair task start \
-  --executor codex \
+  --executor antigravity-cli \
   --repo-path /absolute/path/to/repo \
+  --authorization-profile local_mutating \
   --body "Goal: ..."
 ```
 
-To explicitly use the Gemini backend:
+Other new-task executor ids are:
 
-```bash
-agpair task start \
-  --executor gemini \
-  --repo-path /absolute/path/to/repo \
-  --body "Goal: ..."
-```
+- `antigravity-cli`: default external implementation executor
+- `grok-cli`: cheap alternate external executor
+- `claude-code`: external Claude Code executor
+- `codex`: Codex CLI executor
 
-Current backend policy summary:
-
-- `antigravity`: interactive IDE executor
-- `codex`: CLI executor
-- `gemini`: CLI executor
+`gemini_cli` is legacy-read-only for historical tasks. New `task start` and `task retry` dispatches reject Gemini.
 
 Executor resolution order when `--executor` is omitted:
 
 1. target-level `default_executor`
 2. `AGPAIR_DEFAULT_EXECUTOR`
-3. fallback `antigravity`
+3. fallback `antigravity-cli`
 
 Recommended controller-side defaults:
 
-- Claude Code
-  - single-worktree: `antigravity`
-  - parallel / isolated-worktree: `codex`, then `gemini`
-- Codex
-  - single-worktree: `antigravity`
-  - parallel / isolated-worktree: `gemini`
-  - `codex` as executor only when explicitly requested
+- Codex and Claude Code should prefer external AGPair executors first.
+- Native Codex or Claude subagents are fallback/review resources.
+- Review `ready_for_review` receipts, diffs, and tests before reporting success.
 
 Local CLI approval modes can be adjusted with environment variables:
 
+- `AGPAIR_ANTIGRAVITY_CLI=/absolute/path/to/antigravity`
+- `AGPAIR_ANTIGRAVITY_APPROVAL_MODE=default|auto_edit|yolo`
+  Default: `yolo`
+- `AGPAIR_GROK_CLI=/absolute/path/to/grok`
+- `AGPAIR_CLAUDE_CODE_CLI=/absolute/path/to/claude`
+- `AGPAIR_CLAUDE_CODE_PERMISSION_MODE=<claude --permission-mode value>`
+  Default: `bypassPermissions`
 - `AGPAIR_CODEX_APPROVAL_MODE=default|full_auto|bypass_all`
   Default: `bypass_all`
-- `AGPAIR_GEMINI_APPROVAL_MODE=default|auto_edit|yolo`
-  Default: `yolo`
 
 Note: all executors use fresh sessions for retries.
 
@@ -225,6 +221,14 @@ agpair task retry TASK-SMOKE-001 --body "Retry with a fresh executor session."
 `retry` is always explicit CLI control in v1. The daemon only marks `retry_recommended=true`; it does not auto-retry.
 It also waits by default unless you pass `--no-wait`.
 
+For an approval block, retry from the structured terminal context:
+
+```bash
+agpair task retry TASK-SMOKE-001 \
+  --from-block \
+  --authorization-profile local_mutating
+```
+
 ### List local tasks
 
 ```bash
@@ -256,6 +260,9 @@ agpair claude config
 agpair claude statusline
 agpair claude hook session-start
 agpair claude hook precompact
+agpair claude hook user-prompt-submit
+agpair claude hook stop
+agpair claude hook subagent-start
 ```
 
 `agpair claude config` prints a ready-to-paste Claude Code settings snippet wiring:
@@ -263,6 +270,10 @@ agpair claude hook precompact
 - `statusLine.command` → `agpair claude statusline`
 - `SessionStart` hook → `agpair claude hook session-start`
 - `PreCompact` hook → `agpair claude hook precompact`
+- `UserPromptSubmit` hook → `agpair claude hook user-prompt-submit`
+- `Stop` hook → `agpair claude hook stop`
+- `SubagentStart` hook → `agpair claude hook subagent-start`
+- `SubagentStop` / `TaskCreated` / `TaskCompleted` observability hooks
 
 Config management flags:
 
@@ -271,21 +282,45 @@ Config management flags:
 - `--scope project|user`: choose `.claude/settings.json` in the current repo or `~/.claude/settings.json`; default is `project`
 - `--dry-run`: print a unified diff without writing
 - `--uninstall`: remove only AGPair-managed entries
-- `--force`: replace conflicting `statusLine`, `hooks.SessionStart`, or `hooks.PreCompact` slots instead of aborting
+- `--force`: replace a conflicting non-AGPair `statusLine`
 
 Safety rules:
 
 - AGPair never overwrites a foreign `statusLine` unless `--force` is passed.
-- AGPair never “smart merges” unknown hook entries inside `SessionStart` / `PreCompact`; it either aborts or replaces that event slot under `--force`.
+- AGPair preserves unrelated hook entries and only de-duplicates by AGPair command identity.
 - Uninstall removes only AGPair-managed entries and leaves unrelated settings untouched.
 
 Notes:
 
 - `statusline` reads the Claude Code JSON payload on stdin, resolves the current repo/worktree, and prints a compact AGPair summary.
-- `session-start` injects a short reminder that AGPair is available for durable task orchestration in the current repo.
+- `session-start` injects a short reminder that AGPair external-first routing is available in the current repo.
 - `precompact` blocks compaction only while an AGPair task is `acked` or `evidence_ready`; other visible states may still appear in the status line without blocking compaction.
+- `user-prompt-submit` injects external-first routing context.
+- `stop` blocks only actionable terminal states such as `ready_for_review` and `approval_required`.
+- `subagent-start` is advisory; Claude Code native subagents remain fallback/review resources.
 - AGPair intentionally does **not** provide a default `InstructionsLoaded` reminder hook because Claude Code documents that event as observability-only.
 - AGPair intentionally does **not** provide a default `WorktreeCreate` hook because that hook replaces Claude Code’s built-in git-worktree behavior entirely.
+
+### Codex helpers
+
+AGPair can emit Codex hook config so Codex prefers external CLI executors for non-trivial work and avoids model-token polling loops:
+
+```bash
+agpair codex config
+agpair codex config --install --scope project --repo-path "$REPO"
+```
+
+Managed hooks:
+
+- `UserPromptSubmit`: adds short external-first context.
+- `Stop`: blocks only actionable AGPair terminal states such as `ready_for_review` and `approval_required`.
+- `SubagentStart`: advisory context only; Codex native subagents remain fallback/review resources.
+
+For async tasks, attach with:
+
+```bash
+agpair task watch TASK-123 --json
+```
 
 ### Abandon a local task
 
@@ -293,7 +328,7 @@ Notes:
 agpair task abandon TASK-SMOKE-001 --reason "manual cleanup"
 ```
 
-This is a local bookkeeping command. It does **not** send anything to Antigravity.
+This is a local bookkeeping command. It does **not** contact the executor.
 Use it when you want to stop tracking a hanging local task without editing SQLite by hand.
 
 ### Wait for a task (standalone)
@@ -342,20 +377,3 @@ If transport dispatch fails:
 - the CLI exits with code `1`
 - a failure event is written to the local journal
 - the task is not silently advanced
-
-## Live troubleshooting note
-
-In a real smoke on this machine, `agpair` successfully:
-- dispatched a task
-- owned the receipt path exclusively after the old desktop watcher was stopped
-- persisted the returned terminal state into the local task journal
-
-The live terminal result was still `BLOCKED`, because Antigravity failed to create a fresh executor session and returned:
-
-- `LS StartCascade: 403 -- Invalid CSRF token`
-
-Treat that as a host/runtime problem on the Antigravity side, not as an `agpair` CLI transport failure. The practical recovery path is:
-
-1. reload or restart the Antigravity window
-2. re-authenticate if the host session is stale
-3. run a fresh `agpair task retry <TASK_ID> --body "..."`

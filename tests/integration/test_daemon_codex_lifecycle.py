@@ -103,11 +103,11 @@ def test_codex_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
     task = tasks.get_task("TASK-CODEX-TEST")
     assert task is not None
     assert task.phase == "acked"
-    assert task.executor_backend == "codex_cli"
+    assert task.executor_backend == "codex"
     
     session_id = task.antigravity_session_id
     assert session_id is not None
-    assert "agpair_codex_cli_TASK-CODEX-TEST_" in session_id
+    assert "agpair_codex_TASK-CODEX-TEST_" in session_id
     
     # Wait for the fake subprocess to finish writing its output
     temp_dir = pathlib.Path(session_id)

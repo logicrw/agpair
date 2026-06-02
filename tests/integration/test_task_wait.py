@@ -43,6 +43,20 @@ def _make_repo(tmp_path: Path) -> TaskRepository:
     return TaskRepository(paths.db_path)
 
 
+def _write_fake_antigravity_cli(tmp_path: Path) -> Path:
+    bin_path = tmp_path / "fake-antigravity"
+    bin_path.write_text("#!/usr/bin/env sh\nprintf '{}\\n'\n", encoding="utf-8")
+    bin_path.chmod(0o755)
+    return bin_path
+
+
+def _make_execution_repo(tmp_path: Path, monkeypatch) -> Path:
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_CLI", str(_write_fake_antigravity_cli(tmp_path)))
+    return repo_path
+
+
 class FakeClock:
     """Injectable clock that advances time on each ``sleep()`` call."""
 
@@ -531,17 +545,14 @@ def test_task_wait_help():
 
 
 def test_task_start_no_wait_returns_immediately(tmp_path: Path, monkeypatch):
-    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
-    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
-    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    repo_path = _make_execution_repo(tmp_path, monkeypatch)
 
     result = CliRunner().invoke(
         app,
         [
             "task", "start",
-            "--repo-path", "/tmp/repo",
+            "--repo-path", str(repo_path),
             "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "T-NW1",
             "--no-wait",
@@ -555,11 +566,8 @@ def test_task_start_no_wait_returns_immediately(tmp_path: Path, monkeypatch):
 
 def test_task_start_auto_wait_exits_0_when_terminal(tmp_path: Path, monkeypatch):
     """task start with auto-wait: simulate daemon marking evidence_ready."""
-    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
-    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
-    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    repo_path = _make_execution_repo(tmp_path, monkeypatch)
 
     # Pre-mark the task as evidence_ready BEFORE the wait loop checks
     # We do this by first creating the task in the DB, then running
@@ -580,8 +588,11 @@ def test_task_start_auto_wait_exits_0_when_terminal(tmp_path: Path, monkeypatch)
 
     def patched_auto_wait(db_path, task_id, **kw):
         # Simulate daemon marking evidence_ready before wait polls
-        TaskRepository(db_path).mark_acked(task_id=task_id, session_id="test-session")
-        TaskRepository(db_path).mark_evidence_ready(task_id=task_id)
+        repo = TaskRepository(db_path)
+        task = repo.get_task(task_id)
+        if task is not None and task.phase == "new":
+            repo.mark_acked(task_id=task_id, session_id="test-session")
+        repo.mark_evidence_ready(task_id=task_id)
         return original_auto_wait(db_path, task_id, **kw)
 
     monkeypatch.setattr(task_mod, "maybe_auto_wait", patched_auto_wait)
@@ -590,7 +601,7 @@ def test_task_start_auto_wait_exits_0_when_terminal(tmp_path: Path, monkeypatch)
         app,
         [
             "task", "start",
-            "--repo-path", "/tmp/repo",
+            "--repo-path", str(repo_path),
             "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "T-AW1",
             "--interval-seconds", "0.01",
@@ -788,11 +799,8 @@ def test_task_wait_exits_1_on_watchdog(tmp_path: Path, monkeypatch):
 
 def test_auto_wait_exits_1_on_watchdog(tmp_path: Path, monkeypatch):
     """Default auto-wait on start also exits 1 for watchdog-marked tasks."""
-    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
-    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
-    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    repo_path = _make_execution_repo(tmp_path, monkeypatch)
 
     from agpair.storage.tasks import TaskRepository
     from agpair.storage.db import ensure_database as ed
@@ -805,8 +813,11 @@ def test_auto_wait_exits_1_on_watchdog(tmp_path: Path, monkeypatch):
 
     def patched_auto_wait(db_path, task_id, **kw):
         # Simulate daemon marking retry_recommended before wait polls
-        TaskRepository(db_path).mark_acked(task_id=task_id, session_id="s-auto")
-        TaskRepository(db_path).recommend_retry(task_id=task_id)
+        repo = TaskRepository(db_path)
+        task = repo.get_task(task_id)
+        if task is not None and task.phase == "new":
+            repo.mark_acked(task_id=task_id, session_id="s-auto")
+        repo.recommend_retry(task_id=task_id)
         return original_auto_wait(db_path, task_id, **kw)
 
     monkeypatch.setattr(task_mod, "maybe_auto_wait", patched_auto_wait)
@@ -815,7 +826,7 @@ def test_auto_wait_exits_1_on_watchdog(tmp_path: Path, monkeypatch):
         app,
         [
             "task", "start",
-            "--repo-path", "/tmp/repo",
+            "--repo-path", str(repo_path),
             "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "T-AWD1",
             "--interval-seconds", "0.01",

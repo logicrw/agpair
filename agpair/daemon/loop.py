@@ -387,30 +387,31 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
     all_messages: list[dict] = []
     from agpair.executors import get_executor, is_local_cli_backend
     for task in active_tasks:
-        exec_instance = get_executor(task.executor_backend)
-        if exec_instance and task.phase == "acked" and task.antigravity_session_id:
-            state = exec_instance.poll(task.task_id, task.antigravity_session_id, attempt_no=task.attempt_no)
-            if state is not None:
-                if state.is_done:
-                    msg_id = f"{task.executor_backend}-{task.task_id}-{task.attempt_no}-{task.antigravity_session_id}-done"
-                    receipt = state.receipt or {}
-                    msg = {
-                        "id": msg_id,
-                        "task_id": task.task_id,
-                        "status": receipt.get("status", messages.BLOCKED),
-                        "body": json.dumps(receipt, ensure_ascii=False)
-                    }
-                    all_messages.append(msg)
-                else:
-                    msg_id = f"{task.executor_backend}-{task.task_id}-running-{int(current.timestamp()) // 10}"
-                    msg = {
-                        "id": msg_id,
-                        "task_id": task.task_id,
-                        "status": messages.RUNNING,
-                        "body": f"local {task.executor_backend} is still running"
-                    }
-                    all_messages.append(msg)
-                continue
+        if is_local_cli_backend(task.executor_backend):
+            exec_instance = get_executor(task.executor_backend)
+            if exec_instance and task.phase == "acked" and task.antigravity_session_id:
+                state = exec_instance.poll(task.task_id, task.antigravity_session_id, attempt_no=task.attempt_no)
+                if state is not None:
+                    if state.is_done:
+                        msg_id = f"{task.executor_backend}-{task.task_id}-{task.attempt_no}-{task.antigravity_session_id}-done"
+                        receipt = state.receipt or {}
+                        msg = {
+                            "id": msg_id,
+                            "task_id": task.task_id,
+                            "status": receipt.get("status", messages.BLOCKED),
+                            "body": json.dumps(receipt, ensure_ascii=False)
+                        }
+                        all_messages.append(msg)
+                    else:
+                        msg_id = f"{task.executor_backend}-{task.task_id}-running-{int(current.timestamp()) // 10}"
+                        msg = {
+                            "id": msg_id,
+                            "task_id": task.task_id,
+                            "status": messages.RUNNING,
+                            "body": f"local {task.executor_backend} is still running"
+                        }
+                        all_messages.append(msg)
+                    continue
                 
         # If executor didn't handle it locally, reserve receipts from the bus
         if not is_local_cli_backend(task.executor_backend):

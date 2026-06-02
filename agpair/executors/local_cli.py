@@ -13,7 +13,15 @@ import time
 from typing import Callable
 
 from agpair.executors.base import DispatchResult, ExecutorAdapter, TaskState
-from agpair.models import ExecutorSafetyMetadata
+from agpair.models import (
+    ExecutorSafetyMetadata,
+    authorization_profile_summary,
+    validate_authorization_profile,
+)
+from agpair.terminal_receipts import (
+    parse_structured_terminal_receipt,
+    validate_terminal_receipt_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -367,10 +375,23 @@ def _read_state(temp_dir: pathlib.Path) -> dict:
     return state
 
 
-def _body_with_task_contract(task_id: str, body: str) -> str:
+def _body_with_task_contract(
+    task_id: str,
+    body: str,
+    *,
+    authorization_profile: str = "local_mutating",
+    authorization_summary: str | None = None,
+) -> str:
+    normalized_profile = validate_authorization_profile(authorization_profile)
+    summary = authorization_summary or authorization_profile_summary(normalized_profile)
     contract = (
         f"Task ID: {task_id}\n"
         f"If you create a git commit for this task, the commit message must include `{task_id}` verbatim.\n\n"
+        f"Authorization profile: {normalized_profile}\n"
+        f"{summary}\n\n"
+        "Structured terminal receipt JSON requirements:\n"
+        "- When work is ready for controller verification, claim `ready_for_review` only with changed_files, validation or validation_not_run, scope_violations, raw_log_path, and receipt_path.\n"
+        "- When blocked by missing permission, return blocker_type `approval_required` with requested_authorization_profile, requested_actions, authorization_delta, request_reason, risk_assessment, safe_to_retry, and raw_log_path.\n\n"
     )
     return contract + body
 
@@ -397,7 +418,7 @@ class LocalCLIExecutor(ExecutorAdapter):
             requires_human_interaction=False,
         )
 
-    def dispatch(self, *, task_id: str, body: str, repo_path: str, isolated_worktree: bool = False, worktree_boundary: str | None = None) -> DispatchResult:
+    def dispatch(self, *, task_id: str, body: str, repo_path: str, isolated_worktree: bool = False, worktree_boundary: str | None = None, authorization_profile: str = "local_mutating", authorization_summary: str | None = None) -> DispatchResult:
         execution_repo_path = repo_path
         if isolated_worktree:
             worktree_root = ensure_worktree_exists(
@@ -416,7 +437,12 @@ class LocalCLIExecutor(ExecutorAdapter):
 
         start_head = _git_head(execution_repo_path)
         cli_cmd = self._build_cmd(
-            _body_with_task_contract(task_id, body),
+            _body_with_task_contract(
+                task_id,
+                body,
+                authorization_profile=authorization_profile,
+                authorization_summary=authorization_summary,
+            ),
             execution_repo_path,
             temp_dir,
         )
@@ -593,6 +619,89 @@ exit $RC
             "payload": payload,
         }
 
+    def _raw_log_payload(self, temp_dir: pathlib.Path) -> dict:
+        return {
+            "raw_log_path": str(temp_dir / "stdout.log"),
+            "stderr_log_path": str(temp_dir / "stderr.log"),
+        }
+
+    def _structured_receipt_from_logs(self, temp_dir: pathlib.Path, task_id: str):
+        for log_name in ("stdout.log", "stderr.log"):
+            log_path = temp_dir / log_name
+            if not log_path.exists():
+                continue
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            for line in reversed(lines):
+                candidate = line.strip()
+                if not candidate:
+                    continue
+                receipt = parse_structured_terminal_receipt(
+                    candidate,
+                    expected_task_id=task_id,
+                )
+                if receipt is not None:
+                    return receipt
+        return None
+
+    def _receipt_from_structured_log(
+        self,
+        *,
+        task_id: str,
+        attempt_no: int,
+        temp_dir: pathlib.Path,
+        state: dict,
+    ) -> tuple[bool, dict] | None:
+        structured = self._structured_receipt_from_logs(temp_dir, task_id)
+        if structured is None:
+            return None
+        payload = structured.payload.copy()
+        payload.setdefault("raw_log_path", str(temp_dir / "stdout.log"))
+        payload.setdefault("stderr_log_path", str(temp_dir / "stderr.log"))
+        validation = validate_terminal_receipt_payload(structured.status, payload)
+        scope_violations = payload.get("scope_violations")
+        if (
+            structured.status in {"COMMITTED", "EVIDENCE_PACK"}
+            and isinstance(scope_violations, list)
+            and scope_violations
+        ):
+            payload["blocker_type"] = "validation_failure"
+            payload["message"] = "Terminal receipt reported scope violations."
+            state["final_summary"] = None
+            state["error_summary"] = payload["message"]
+            return True, self._make_receipt(
+                task_id,
+                attempt_no,
+                "BLOCKED",
+                payload["message"],
+                payload,
+            )
+        if not validation.ok:
+            payload["blocker_type"] = "validation_failure"
+            payload["message"] = "Terminal receipt failed validation."
+            payload["required_missing"] = list(validation.required_missing)
+            state["final_summary"] = None
+            state["error_summary"] = payload["message"]
+            return True, self._make_receipt(
+                task_id,
+                attempt_no,
+                "BLOCKED",
+                payload["message"],
+                payload,
+            )
+        if structured.status == "BLOCKED":
+            state["final_summary"] = None
+            state["error_summary"] = structured.summary
+        else:
+            state["final_summary"] = structured.summary
+            state["error_summary"] = None
+        return True, self._make_receipt(
+            task_id,
+            attempt_no,
+            structured.status,
+            structured.summary,
+            payload,
+        )
+
     def _extract_error_summary(self, temp_dir: pathlib.Path, max_chars: int = 500) -> str:
         """从 stderr 和 stdout 中提取有用的错误/完成摘要。"""
         summary_parts = []
@@ -642,6 +751,14 @@ exit $RC
 
         # ---- 情况 1：进程正常退出 ----
         if exit_code is not None:
+            structured_result = self._receipt_from_structured_log(
+                task_id=task_id,
+                attempt_no=attempt_no,
+                temp_dir=temp_dir,
+                state=state,
+            )
+            if structured_result is not None:
+                return structured_result
             if exit_code == 0:
                 events_count = self._count_events(temp_dir)
                 summary = self._extract_final_summary(temp_dir) or "Task finished successfully"

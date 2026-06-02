@@ -1,339 +1,88 @@
 import json
 import pathlib
-import subprocess
-from unittest import mock
 from datetime import UTC, datetime
+from unittest import mock
+
+from typer.testing import CliRunner
 
 from agpair.cli.task import app
+from agpair.config import AppPaths
 from agpair.daemon.loop import run_once
 from agpair.storage.db import ensure_database
 from agpair.storage.tasks import TaskRepository
-from typer.testing import CliRunner
 
 VALID_BRIEF = "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test"
 
-def init_git_repo(repo_path: pathlib.Path) -> None:
-    subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "test"], cwd=repo_path, check=True, capture_output=True)
-    (repo_path / "init.txt").write_text("init", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=repo_path, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=repo_path, check=True, capture_output=True)
 
-
-def write_fake_gemini_bin(tmp_path: pathlib.Path) -> pathlib.Path:
-    bin_path = tmp_path / "fake-gemini"
-    # A script that ignores arguments, simulates typing some json,
-    # outputs a final message, and exits with 0.
-    # Note: test_gemini_executor.py asserts that we pass "-o <last_msg_file>"
-    # so we need a minimal sh wrapper that writes something to the requested file.
-    script = """#!/bin/bash
-    OUTPUT_FILE=""
-    PROMPT=""
-    while [[ $# -gt 0 ]]; do
-      case $1 in
-        -o)
-          OUTPUT_FILE="$2"
-          shift 2
-          ;;
-        *)
-          PROMPT="${PROMPT}\n$1"
-          shift
-          ;;
-      esac
-    done
-
-    echo '{"event": "start"}'
-    echo '{"event": "end"}'
-
-    TASK_ID=$(printf '%b\n' "$PROMPT" | grep -o 'TASK-[A-Za-z0-9-]*' | head -n1)
-    if [ -n "$TASK_ID" ]; then
-        echo "done" > fake_gemini_output.txt
-        git add fake_gemini_output.txt
-        git commit -m "feat: fake gemini success $TASK_ID" >/dev/null 2>&1
-    fi
-
-    if [ -n "$OUTPUT_FILE" ]; then
-        echo "Fake Gemini Success!" > "$OUTPUT_FILE"
-    fi
-    exit 0
-    """
-    bin_path.write_text(script)
-    bin_path.chmod(0o755)
-    return bin_path
-
-def test_gemini_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
-    # Setup paths and environment
+def test_legacy_gemini_cli_row_can_be_inspected(tmp_path: pathlib.Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    
-    from agpair.config import AppPaths
     paths = AppPaths.default()
     ensure_database(paths.db_path)
-    init_git_repo(tmp_path)
-    
-    # We don't have a real gemini CLI, we'll patch GeminiExecutor.gemini_bin
-    fake_gemini = write_fake_gemini_bin(tmp_path)
-    
-    # We'll use CliRunner to dispatch the task
-    runner = CliRunner()
-    
-    # To use our fake gemini binary, we mock the gemini_bin in GeminiExecutor
-    import agpair.executors.gemini
-    original_init = agpair.executors.gemini.GeminiExecutor.__init__
-    
-    def mocked_init(self, gemini_bin="gemini"):
-        original_init(self, str(fake_gemini))
-        
-    monkeypatch.setattr(agpair.executors.gemini.GeminiExecutor, "__init__", mocked_init)
-    
-    # 1. Start a Gemini-backed task
-    result = runner.invoke(app, [
-        "start",
-        "--repo-path", str(tmp_path),
-        "--task-id", "TASK-GEMINI-TEST",
-        "--executor", "gemini",
-        "--body", VALID_BRIEF,
-        "--no-wait",
-    ])
-    assert result.exit_code == 0
-    assert "TASK-GEMINI-TEST" in result.output
-    
-    # 2. Check that it is immediately 'acked' with the temp_dir as session_id
     tasks = TaskRepository(paths.db_path)
-    task = tasks.get_task("TASK-GEMINI-TEST")
+    tasks.create_task(
+        task_id="TASK-GEMINI-LEGACY",
+        repo_path=str(tmp_path),
+        executor_backend="gemini_cli",
+    )
+    tasks.mark_acked(task_id="TASK-GEMINI-LEGACY", session_id="/tmp/legacy-gemini-session")
+
+    result = CliRunner().invoke(app, ["status", "TASK-GEMINI-LEGACY", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["active_executor_backend"] == "gemini_cli"
+    assert payload["active_executor_continuation_capability"] == "unsupported"
+    assert "gemini" not in payload["supported_backends"]
+    assert "gemini_cli" not in payload["supported_backends"]
+    assert payload["session_id"] == "/tmp/legacy-gemini-session"
+
+
+def test_new_gemini_cli_start_is_rejected(tmp_path: pathlib.Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    runner = CliRunner()
+
+    for executor_id in ("gemini", "gemini_cli"):
+        result = runner.invoke(
+            app,
+            [
+                "start",
+                "--repo-path",
+                str(tmp_path),
+                "--task-id",
+                f"TASK-{executor_id.upper().replace('_', '-')}",
+                "--executor",
+                executor_id,
+                "--body",
+                VALID_BRIEF,
+                "--no-wait",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "gemini is no longer supported" in result.output
+
+
+def test_legacy_gemini_cli_is_not_polled_by_daemon(tmp_path: pathlib.Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    paths = AppPaths.default()
+    ensure_database(paths.db_path)
+    tasks = TaskRepository(paths.db_path)
+    session_dir = tmp_path / "legacy-gemini-session"
+    session_dir.mkdir()
+    (session_dir / "rc.txt").write_text("0", encoding="utf-8")
+    tasks.create_task(
+        task_id="TASK-GEMINI-NO-POLL",
+        repo_path=str(tmp_path),
+        executor_backend="gemini_cli",
+    )
+    tasks.mark_acked(task_id="TASK-GEMINI-NO-POLL", session_id=str(session_dir))
+    bus = mock.MagicMock()
+    bus.reserve_receipts.return_value = []
+
+    run_once(paths, now=datetime.now(UTC), bus=bus)
+
+    task = tasks.get_task("TASK-GEMINI-NO-POLL")
     assert task is not None
     assert task.phase == "acked"
-    assert task.executor_backend == "gemini_cli"
-    
-    session_id = task.antigravity_session_id
-    assert session_id is not None
-    assert "agpair_gemini_cli_TASK-GEMINI-TEST_" in session_id
-    
-    # Wait for the fake subprocess to finish writing its output
-    temp_dir = pathlib.Path(session_id)
-    rc_file = temp_dir / "rc.txt"
-    import time
-    for _ in range(50):
-        if rc_file.exists():
-            break
-        time.sleep(0.1)
-    
-    assert rc_file.exists(), "fake gemini wrapper should have created rc.txt"
-    with open(rc_file) as f:
-        assert f.read().strip() == "0"
-    
-    assert temp_dir.exists(), "temp_dir must exist before daemon cleanup"
-        
-    # 3. Run daemon run_once (mocking the bus client as it shouldn't be used for gemini polling)
-    # The daemon should poll the local temp_dir, find it done, and synthesize receipt
-    mock_bus = mock.MagicMock()
-    run_once(paths, now=datetime.now(UTC), bus=mock_bus)
-    
-    # 4. Check the task phase is now 'evidence_ready' and receipt matches
-    task = tasks.get_task("TASK-GEMINI-TEST")
-    assert task.phase == "committed"
-    
-    assert not temp_dir.exists(), "temp_dir must be cleaned up after terminal transition"
-    
-    # Verify the terminal receipt synthesis
-    from agpair.storage.journal import JournalRepository
-    journal = JournalRepository(paths.db_path)
-    terminal_event = None
-    for row in journal.tail("TASK-GEMINI-TEST", limit=10):
-        if row.event == "committed":
-            terminal_event = row
-            break
-            
-    assert terminal_event is not None
-    receipt = json.loads(terminal_event.body)
-    assert receipt["status"] == "COMMITTED"
-    assert receipt["summary"] == "Task finished successfully"
-    assert receipt["payload"]["exit_code"] == 0
-    assert receipt["payload"]["events_count"] == 2
-
-def write_failing_gemini_bin(tmp_path: pathlib.Path) -> pathlib.Path:
-    bin_path = tmp_path / "fake-gemini-fail"
-    script = """#!/bin/bash
-    OUTPUT_FILE=""
-    while [[ $# -gt 0 ]]; do
-      case $1 in
-        -o)
-          OUTPUT_FILE="$2"
-          shift 2
-          ;;
-        *)
-          shift
-          ;;
-      esac
-    done
-    echo '{"event": "start"}'
-    if [ -n "$OUTPUT_FILE" ]; then
-        echo "Fake Gemini Error: syntax error" > "$OUTPUT_FILE"
-    fi
-    exit 1
-    """
-    bin_path.write_text(script)
-    bin_path.chmod(0o755)
-    return bin_path
-
-def test_gemini_lifecycle_failure(tmp_path: pathlib.Path, monkeypatch) -> None:
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    from agpair.config import AppPaths
-    paths = AppPaths.default()
-    ensure_database(paths.db_path)
-    
-    fake_gemini = write_failing_gemini_bin(tmp_path)
-    import agpair.executors.gemini
-    original_init = agpair.executors.gemini.GeminiExecutor.__init__
-    def mocked_init(self, gemini_bin="gemini"):
-        original_init(self, str(fake_gemini))
-    monkeypatch.setattr(agpair.executors.gemini.GeminiExecutor, "__init__", mocked_init)
-    
-    runner = CliRunner()
-    result = runner.invoke(app, [
-        "start", "--repo-path", str(tmp_path), "--task-id", "TASK-GEMINI-FAIL",
-        "--executor", "gemini", "--body", VALID_BRIEF, "--no-wait",
-    ])
-    assert result.exit_code == 0
-    
-    tasks = TaskRepository(paths.db_path)
-    task = tasks.get_task("TASK-GEMINI-FAIL")
-    assert task.phase == "acked"
-    
-    session_id = task.antigravity_session_id
-    temp_dir = pathlib.Path(session_id)
-    rc_file = temp_dir / "rc.txt"
-    import time
-    for _ in range(50):
-        if rc_file.exists():
-            break
-        time.sleep(0.1)
-    
-    assert temp_dir.exists(), "temp_dir must exist before daemon cleanup"
-    
-    mock_bus = mock.MagicMock()
-    run_once(paths, now=datetime.now(UTC), bus=mock_bus)
-    
-    task = tasks.get_task("TASK-GEMINI-FAIL")
-    assert task.phase == "blocked"
-    
-    assert not temp_dir.exists(), "temp_dir must be cleaned up after failing task transitions to blocked"
-    
-    from agpair.storage.journal import JournalRepository
-    journal = JournalRepository(paths.db_path)
-    terminal_event = None
-    for row in journal.tail("TASK-GEMINI-FAIL", limit=10):
-        if row.event == "blocked":
-            terminal_event = row
-            break
-            
-    assert terminal_event is not None
-    receipt = json.loads(terminal_event.body)
-    assert receipt["status"] == "BLOCKED"
-    assert receipt["summary"] == 'stdout: {"event": "start"}'
-    assert receipt["payload"]["exit_code"] == 1
-    assert receipt["payload"]["blocker_type"] == "execution_error"
-
-
-def test_gemini_evidence_ready_not_repolled(tmp_path: pathlib.Path, monkeypatch) -> None:
-    """After a Gemini task reaches evidence_ready, the daemon must NOT re-poll it."""
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    from agpair.config import AppPaths
-    paths = AppPaths.default()
-    ensure_database(paths.db_path)
-    init_git_repo(tmp_path)
-
-    fake_gemini = write_fake_gemini_bin(tmp_path)
-    import agpair.executors.gemini
-    original_init = agpair.executors.gemini.GeminiExecutor.__init__
-
-    def mocked_init(self, gemini_bin="gemini"):
-        original_init(self, str(fake_gemini))
-
-    monkeypatch.setattr(agpair.executors.gemini.GeminiExecutor, "__init__", mocked_init)
-
-    runner = CliRunner()
-    result = runner.invoke(app, [
-        "start", "--repo-path", str(tmp_path), "--task-id", "TASK-GEMINI-NR",
-        "--executor", "gemini", "--body", VALID_BRIEF, "--no-wait",
-    ])
-    assert result.exit_code == 0
-
-    tasks = TaskRepository(paths.db_path)
-    task = tasks.get_task("TASK-GEMINI-NR")
-    session_id = task.antigravity_session_id
-    rc_file = pathlib.Path(session_id) / "rc.txt"
-
-    import time
-    for _ in range(50):
-        if rc_file.exists():
-            break
-        time.sleep(0.1)
-
-    mock_bus = mock.MagicMock()
-    run_once(paths, now=datetime.now(UTC), bus=mock_bus)
-    task = tasks.get_task("TASK-GEMINI-NR")
-    assert task.phase == "committed"
-
-    from agpair.storage.journal import JournalRepository
-    journal = JournalRepository(paths.db_path)
-
-    # Second tick should NOT produce new evidence_ready entries
-    run_once(paths, now=datetime.now(UTC), bus=mock_bus)
-    task = tasks.get_task("TASK-GEMINI-NR")
-    assert task.phase == "committed"
-
-    rows_after = journal.tail("TASK-GEMINI-NR", limit=100)
-    evidence_events = [r for r in rows_after if r.event == "committed"]
-    assert len(evidence_events) == 1, "evidence_ready must not be emitted twice"
-
-
-def test_gemini_receipt_carries_real_attempt_no(tmp_path: pathlib.Path, monkeypatch) -> None:
-    """Synthesized receipt must carry the real task attempt_no."""
-    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-    from agpair.config import AppPaths
-    paths = AppPaths.default()
-    ensure_database(paths.db_path)
-    init_git_repo(tmp_path)
-
-    fake_gemini = write_fake_gemini_bin(tmp_path)
-    import agpair.executors.gemini
-    original_init = agpair.executors.gemini.GeminiExecutor.__init__
-
-    def mocked_init(self, gemini_bin="gemini"):
-        original_init(self, str(fake_gemini))
-
-    monkeypatch.setattr(agpair.executors.gemini.GeminiExecutor, "__init__", mocked_init)
-
-    runner = CliRunner()
-    result = runner.invoke(app, [
-        "start", "--repo-path", str(tmp_path), "--task-id", "TASK-GEMINI-ATT",
-        "--executor", "gemini", "--body", VALID_BRIEF, "--no-wait",
-    ])
-    assert result.exit_code == 0
-
-    tasks = TaskRepository(paths.db_path)
-    task = tasks.get_task("TASK-GEMINI-ATT")
-    assert task.attempt_no == 1
-
-    rc_file = pathlib.Path(task.antigravity_session_id) / "rc.txt"
-    import time
-    for _ in range(50):
-        if rc_file.exists():
-            break
-        time.sleep(0.1)
-
-    mock_bus = mock.MagicMock()
-    run_once(paths, now=datetime.now(UTC), bus=mock_bus)
-    task = tasks.get_task("TASK-GEMINI-ATT")
-    assert task.phase == "committed"
-
-    from agpair.storage.journal import JournalRepository
-    journal = JournalRepository(paths.db_path)
-    for row in journal.tail("TASK-GEMINI-ATT", limit=10):
-        if row.event == "committed":
-            receipt = json.loads(row.body)
-            assert receipt["attempt_no"] == 1
-            break
-    else:
-        raise AssertionError("evidence_ready journal entry not found")
+    assert task.antigravity_session_id == str(session_dir)
+    bus.reserve_receipts.assert_called_once_with(task_id="TASK-GEMINI-NO-POLL")

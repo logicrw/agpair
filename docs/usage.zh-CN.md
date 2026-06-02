@@ -139,52 +139,48 @@ agpair task start \
   --body "Goal: ..."
 ```
 
-如果要显式使用 Codex backend：
+如果要显式使用默认外部 CLI executor：
 
 ```bash
 agpair task start \
-  --executor codex \
+  --executor antigravity-cli \
   --repo-path /absolute/path/to/repo \
+  --authorization-profile local_mutating \
   --body "Goal: ..."
 ```
 
-如果要显式使用 Gemini backend：
+新任务可用 executor id：
 
-```bash
-agpair task start \
-  --executor gemini \
-  --repo-path /absolute/path/to/repo \
-  --body "Goal: ..."
-```
+- `antigravity-cli`：默认外部实现 executor
+- `grok-cli`：低成本外部候选 / 复核 executor
+- `claude-code`：外部 Claude Code executor
+- `codex`：Codex CLI executor
 
-当前后端策略摘要：
-
-- `antigravity`：交互式 IDE executor
-- `codex`：CLI executor
-- `gemini`：CLI executor
+`gemini_cli` 只保留历史任务可读性。新的 `task start` 和 `task retry` 都不会再派给 Gemini。
 
 当你省略 `--executor` 时，解析顺序是：
 
 1. target 级 `default_executor`
 2. `AGPAIR_DEFAULT_EXECUTOR`
-3. 产品回退 `antigravity`
+3. 产品回退 `antigravity-cli`
 
 主控侧推荐默认值：
 
-- Claude Code
-  - 单工作区：`antigravity`
-  - 并行 / 隔离 worktree：`codex`，再 `gemini`
-- Codex
-  - 单工作区：`antigravity`
-  - 并行 / 隔离 worktree：`gemini`
-  - 只有明确要求时才用 `codex` 作为 executor
+- Codex 和 Claude Code 默认都优先走 AGPair 外部 executor。
+- Codex / Claude 原生 subagent 只作为 fallback / review 资源。
+- `ready_for_review` 只是验收门槛，不是自动完成；主控仍要检查 receipt、diff 和测试证据。
 
 本地 CLI 的 approval 模式可以通过环境变量调整：
 
+- `AGPAIR_ANTIGRAVITY_CLI=/absolute/path/to/antigravity`
+- `AGPAIR_ANTIGRAVITY_APPROVAL_MODE=default|auto_edit|yolo`
+  默认：`yolo`
+- `AGPAIR_GROK_CLI=/absolute/path/to/grok`
+- `AGPAIR_CLAUDE_CODE_CLI=/absolute/path/to/claude`
+- `AGPAIR_CLAUDE_CODE_PERMISSION_MODE=<claude --permission-mode 支持的值>`
+  默认：`bypassPermissions`
 - `AGPAIR_CODEX_APPROVAL_MODE=default|full_auto|bypass_all`
   默认：`bypass_all`
-- `AGPAIR_GEMINI_APPROVAL_MODE=default|auto_edit|yolo`
-  默认：`yolo`
 
 默认情况下，`task start` **会阻塞**直到任务进入终态。
 要立即返回：
@@ -265,6 +261,9 @@ agpair claude config
 agpair claude statusline
 agpair claude hook session-start
 agpair claude hook precompact
+agpair claude hook user-prompt-submit
+agpair claude hook stop
+agpair claude hook subagent-start
 ```
 
 `agpair claude config` 会直接输出一段可粘贴到 Claude Code `settings.json` 的配置，默认接好：
@@ -272,6 +271,10 @@ agpair claude hook precompact
 - `statusLine.command` → `agpair claude statusline`
 - `SessionStart` hook → `agpair claude hook session-start`
 - `PreCompact` hook → `agpair claude hook precompact`
+- `UserPromptSubmit` hook → `agpair claude hook user-prompt-submit`
+- `Stop` hook → `agpair claude hook stop`
+- `SubagentStart` hook → `agpair claude hook subagent-start`
+- `SubagentStop` / `TaskCreated` / `TaskCompleted` observability hooks
 
 配置管理参数：
 
@@ -280,21 +283,45 @@ agpair claude hook precompact
 - `--scope project|user`：选择当前 repo 下的 `.claude/settings.json` 或 `~/.claude/settings.json`；默认 `project`
 - `--dry-run`：只打印 unified diff，不写盘
 - `--uninstall`：只移除 AGPair 自己管理的条目
-- `--force`：在 `statusLine`、`hooks.SessionStart`、`hooks.PreCompact` 冲突时显式覆盖
+- `--force`：显式覆盖非 AGPair 管理的 `statusLine`
 
 安全约束：
 
 - 遇到非 AGPair 管理的 `statusLine`，默认拒绝覆盖，除非显式 `--force`
-- 遇到 `SessionStart` / `PreCompact` 中的未知 hook，默认拒绝做“智能 merge”；要么报错，要么在 `--force` 下整段替换
+- hook 按 AGPair command identity 追加 / 去重，保留其他 Claude Code hook
 - `--uninstall` 只移除 AGPair 自己的条目，不碰无关配置
 
 设计取舍：
 
 - `statusline` 会读取 Claude Code 通过 stdin 传来的 JSON，解析当前 repo / worktree，并输出简短 AGPair 状态。
-- `session-start` 会给当前 repo 注入一段很短的 AGPair 提示上下文，提醒主控优先用 AGPair 做长流程任务编排。
+- `session-start` 会给当前 repo 注入一段很短的 AGPair 提示上下文，提醒主控优先用外部 executor。
 - `precompact` 只会在 AGPair 任务处于 `acked` 或 `evidence_ready` 时阻止 compact；其他可见状态可能仍显示在 status line，但不会因此拦截 compact。
+- `user-prompt-submit` 注入 external-first 路由上下文。
+- `stop` 只在 `ready_for_review`、`approval_required` 等需要主控决策的状态阻止过早结束。
+- `subagent-start` 只做 advisory；Claude Code 原生 subagent 仍是 fallback / review 资源。
 - 默认**不**提供 `InstructionsLoaded` 提示 hook，因为 Claude Code 官方把这个事件定义为 observability-only，不能可靠地做上下文提醒。
 - 默认**不**提供 `WorktreeCreate` hook，因为这个 hook 会完全替换 Claude Code 内建的 git worktree 行为，默认启用太重。
+
+## 6.2 Codex 辅助命令
+
+AGPair 可以输出或安装 Codex hook 配置，让 Codex 对非平凡任务优先使用外部 CLI executor，并避免用模型轮询外部任务：
+
+```bash
+agpair codex config
+agpair codex config --install --scope project --repo-path "$REPO"
+```
+
+AGPair 管理的 hooks：
+
+- `UserPromptSubmit`：注入简短 external-first 上下文。
+- `Stop`：只在 `ready_for_review`、`approval_required` 等需要 Codex 决策的状态阻止过早结束。
+- `SubagentStart`：只给 advisory context；Codex native subagents 仍是 fallback / review 资源。
+
+异步任务使用低噪等待：
+
+```bash
+agpair task watch TASK-123 --json
+```
 
 ---
 
@@ -330,6 +357,14 @@ agpair task retry TASK-001 --body "Retry with a fresh session."
 - 当前 session 明显坏了
 - 卡住了
 
+如果是授权阻塞，用 structured blocked context 开新 attempt：
+
+```bash
+agpair task retry TASK-001 \
+  --from-block \
+  --authorization-profile local_mutating
+```
+
 ---
 
 ## 9. `task abandon`
@@ -340,7 +375,7 @@ agpair task retry TASK-001 --body "Retry with a fresh session."
 agpair task abandon TASK-001 --reason "manual cleanup"
 ```
 
-这个命令只改本地状态，不会给 Antigravity 发送新消息。
+这个命令只改本地状态，不会联系 executor。
 
 ---
 

@@ -251,6 +251,13 @@ def _setup_cli_env(tmp_path: Path, monkeypatch):
     return CliRunner(), paths
 
 
+def _write_fake_antigravity_cli(tmp_path: Path) -> Path:
+    bin_path = tmp_path / "fake-antigravity"
+    bin_path.write_text("#!/usr/bin/env sh\nprintf '{}\\n'\n", encoding="utf-8")
+    bin_path.chmod(0o755)
+    return bin_path
+
+
 class TestCLIDependsOnValidation:
     """R1/R2: CLI must reject invalid --depends-on before creating a task."""
 
@@ -289,19 +296,16 @@ class TestCLIDependsOnValidation:
 
     def test_valid_depends_on_creates_deferred_task(self, tmp_path, monkeypatch):
         """Valid deps that aren't yet committed → task created as deferred (phase=new, no dispatch)."""
-        from tests.fixtures.fake_agent_bus import write_fake_agent_bus, read_calls
-
-        binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
         monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
-        monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
-        monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
-        monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+        monkeypatch.setenv("AGPAIR_ANTIGRAVITY_CLI", str(_write_fake_antigravity_cli(tmp_path)))
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
 
         runner = CliRunner()
 
         # Create prerequisite task A
         result_a = runner.invoke(app, [
-            "task", "start", "--repo-path", "/tmp/repo",
+            "task", "start", "--repo-path", str(repo_path),
             "--body", "Goal: test A\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "TASK-A", "--no-wait",
         ])
@@ -309,7 +313,7 @@ class TestCLIDependsOnValidation:
 
         # Create dependent task B
         result_b = runner.invoke(app, [
-            "task", "start", "--repo-path", "/tmp/repo",
+            "task", "start", "--repo-path", str(repo_path),
             "--body", "Goal: test B\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "TASK-B", "--depends-on", '["TASK-A"]', "--no-wait",
         ])
@@ -326,12 +330,4 @@ class TestCLIDependsOnValidation:
         journal_entries = JournalRepository(paths.db_path).tail("TASK-B", limit=10)
         assert any("deferred" in e.event for e in journal_entries)
 
-        # Agent-bus should NOT have been called for TASK-B (only TASK-A)
-        calls = read_calls(calls_path)
-        task_ids_dispatched = [
-            c["argv"][c["argv"].index("--task-id") + 1]
-            for c in calls if "--task-id" in c["argv"]
-        ]
-        assert "TASK-A" in task_ids_dispatched
-        assert "TASK-B" not in task_ids_dispatched
-
+        assert task_b.antigravity_session_id is None

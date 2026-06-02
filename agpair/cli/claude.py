@@ -11,12 +11,40 @@ import typer
 
 from agpair.config import AppPaths
 from agpair.storage.db import ensure_database
+from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
 from agpair.targets import resolve_repo_path
+from agpair.terminal_receipts import parse_structured_terminal_receipt
 
 app = typer.Typer(no_args_is_help=True)
 hook_app = typer.Typer(no_args_is_help=True)
 app.add_typer(hook_app, name="hook")
+
+EXTERNAL_FIRST_CONTEXT = (
+    "AGPair external-first routing is available in this repository. For non-trivial "
+    "implementation, refactor, test-fix, research, or review work, prefer AGPair "
+    "external CLI executors before Claude Code native subagents or background tasks. "
+    "Claude Code remains controller and verifier. Use native subagents only when AGPair "
+    "is unavailable, unsuitable, or not good enough."
+)
+
+SUBAGENT_ADVISORY_CONTEXT = (
+    "AGPair external-first routing is active in the parent repo. If this Claude Code "
+    "native subagent was started for implementation work only because AGPair external "
+    "executors were unavailable or insufficient, stay within the assigned fallback scope "
+    "and report why external execution was bypassed."
+)
+
+MANAGED_HOOK_COMMANDS = {
+    "SessionStart": "agpair claude hook session-start",
+    "PreCompact": "agpair claude hook precompact",
+    "UserPromptSubmit": "agpair claude hook user-prompt-submit",
+    "Stop": "agpair claude hook stop",
+    "SubagentStart": "agpair claude hook subagent-start",
+    "SubagentStop": "agpair claude hook subagent-stop",
+    "TaskCreated": "agpair claude hook task-created",
+    "TaskCompleted": "agpair claude hook task-completed",
+}
 
 
 def _paths() -> AppPaths:
@@ -119,23 +147,28 @@ def _managed_statusline() -> dict[str, Any]:
     }
 
 
-def _managed_hook_entry(command: str) -> dict[str, Any]:
-    return {
-        "hooks": [
-            {
-                "type": "command",
-                "command": command,
-            }
-        ]
+def _managed_hook_entry(command: str, *, timeout: int | None = None) -> dict[str, Any]:
+    hook: dict[str, Any] = {
+        "type": "command",
+        "command": command,
     }
+    if timeout is not None:
+        hook["timeout"] = timeout
+    return {"hooks": [hook]}
 
 
 def _managed_config_payload() -> dict[str, Any]:
     return {
         "statusLine": _managed_statusline(),
         "hooks": {
-            "SessionStart": [_managed_hook_entry("agpair claude hook session-start")],
-            "PreCompact": [_managed_hook_entry("agpair claude hook precompact")],
+            "SessionStart": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["SessionStart"])],
+            "PreCompact": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["PreCompact"])],
+            "UserPromptSubmit": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["UserPromptSubmit"])],
+            "Stop": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["Stop"], timeout=30)],
+            "SubagentStart": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["SubagentStart"])],
+            "SubagentStop": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["SubagentStop"])],
+            "TaskCreated": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["TaskCreated"])],
+            "TaskCompleted": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["TaskCompleted"])],
         },
     }
 
@@ -149,11 +182,7 @@ def _is_managed_statusline(value: Any) -> bool:
 
 
 def _managed_hook_command_for_event(event_name: str) -> str | None:
-    if event_name == "SessionStart":
-        return "agpair claude hook session-start"
-    if event_name == "PreCompact":
-        return "agpair claude hook precompact"
-    return None
+    return MANAGED_HOOK_COMMANDS.get(event_name)
 
 
 def _is_managed_hook_entry(event_name: str, entry: Any) -> bool:
@@ -234,11 +263,7 @@ def _merge_managed_config(current: dict[str, Any], *, force: bool) -> dict[str, 
         foreign_entries = [
             entry for entry in existing_entries if not _is_managed_hook_entry(event_name, entry)
         ]
-        if foreign_entries and not force:
-            raise RuntimeError(
-                f"Existing hooks.{event_name} contains non-AGPair entries. Refusing to merge; manual merge or --force required."
-            )
-        hooks[event_name] = desired_entries
+        hooks[event_name] = [*foreign_entries, *desired_entries]
 
     return updated
 
@@ -251,7 +276,7 @@ def _uninstall_managed_config(current: dict[str, Any]) -> dict[str, Any]:
 
     hooks = updated.get("hooks")
     if isinstance(hooks, dict):
-        for event_name in ("SessionStart", "PreCompact"):
+        for event_name in MANAGED_HOOK_COMMANDS:
             existing_entries = hooks.get(event_name)
             if not isinstance(existing_entries, list):
                 continue
@@ -283,12 +308,35 @@ def _emit_diff(path: Path, before: str, after: str) -> None:
         typer.echo(diff, nl=False)
 
 
+def _hook_specific_output(event_name: str, context: str) -> dict[str, Any]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": event_name,
+            "additionalContext": context,
+        }
+    }
+
+
+def _latest_terminal_receipt(paths: AppPaths, task_id: str):
+    journal = JournalRepository(paths.db_path)
+    for row in journal.tail(task_id, limit=20):
+        if row.event not in {"committed", "blocked", "evidence_ready"}:
+            continue
+        receipt = parse_structured_terminal_receipt(row.body, expected_task_id=task_id)
+        if receipt is not None:
+            return receipt
+    return None
+
+
 @app.command("statusline")
 def statusline() -> None:
     """Read Claude Code statusline JSON on stdin and print a compact AGPair summary."""
     payload = _read_stdin_json()
     repo_path = _resolve_repo_path(payload)
-    task = _most_relevant_claude_task(_paths(), repo_path)
+    try:
+        task = _most_relevant_claude_task(_paths(), repo_path)
+    except Exception:
+        task = None
     parts = ["agpair"]
     if task is None:
         parts.append("idle")
@@ -306,7 +354,7 @@ def config(
     merge: bool = typer.Option(False, "--merge", help="Alias of --install for explicit merge/update flows."),
     uninstall: bool = typer.Option(False, "--uninstall", help="Remove the AGPair-managed Claude Code config fragment."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print a unified diff instead of writing changes."),
-    force: bool = typer.Option(False, "--force", help="Replace conflicting AGPair-managed keys under statusLine/SessionStart/PreCompact."),
+    force: bool = typer.Option(False, "--force", help="Replace conflicting AGPair-managed statusLine while preserving non-AGPair hooks."),
     scope: str = typer.Option("project", "--scope", help="Where to manage Claude Code settings: project or user."),
     repo_path: str | None = typer.Option(None, "--repo-path", help="Project repo path for --scope project."),
     target: str | None = typer.Option(None, "--target", help="Target alias for --scope project."),
@@ -349,15 +397,18 @@ def config(
 def hook_session_start() -> None:
     """Emit SessionStart hook context that nudges Claude Code toward AGPair for durable task orchestration."""
     payload = _read_stdin_json()
-    paths = _paths()
-    repo_path = _resolve_repo_path(payload)
-    if repo_path is None:
+    try:
+        paths = _paths()
+        repo_path = _resolve_repo_path(payload)
+        if repo_path is None:
+            return
+        task = _most_relevant_claude_task(paths, repo_path)
+    except Exception:
         return
-    task = _most_relevant_claude_task(paths, repo_path)
     context = (
-        "AGPair is available for durable task orchestration in this repo. "
-        "Prefer the agpair MCP tools or skill for long-running delegated coding tasks. "
-        "After dispatch, start Monitor with `agpair task watch <TASK_ID> --json`."
+        "AGPair external-first routing is available in this repo. "
+        "Prefer AGPair external CLI executors for long-running delegated coding tasks. "
+        "After dispatch, observe with `agpair task watch <TASK_ID> --json`."
     )
     if task is not None:
         context += f" Current AGPair task: {task.task_id} ({task.phase})."
@@ -375,8 +426,11 @@ def hook_session_start() -> None:
 def hook_precompact() -> None:
     """Block compaction only for repo tasks in acked/evidence_ready; other visible states may still show in statusline without blocking."""
     payload = _read_stdin_json()
-    repo_path = _resolve_repo_path(payload)
-    task = _most_relevant_claude_task(_paths(), repo_path)
+    try:
+        repo_path = _resolve_repo_path(payload)
+        task = _most_relevant_claude_task(_paths(), repo_path)
+    except Exception:
+        return
     if task is None or task.phase not in {"acked", "evidence_ready"}:
         return
     _emit_json(
@@ -388,3 +442,101 @@ def hook_precompact() -> None:
             ),
         }
     )
+
+
+@hook_app.command("user-prompt-submit")
+def hook_user_prompt_submit() -> None:
+    """Inject external-first routing context into Claude Code prompts."""
+    payload = _read_stdin_json()
+    repo_path = _resolve_repo_path(payload)
+    if repo_path is None:
+        return
+    try:
+        _paths()
+    except Exception:
+        return
+    _emit_json(_hook_specific_output("UserPromptSubmit", EXTERNAL_FIRST_CONTEXT))
+
+
+@hook_app.command("stop")
+def hook_stop() -> None:
+    """Block Claude Code completion only when AGPair has an actionable terminal state."""
+    payload = _read_stdin_json()
+    repo_path = _resolve_repo_path(payload)
+    if repo_path is None:
+        return
+    try:
+        paths = _paths()
+        task = TaskRepository(paths.db_path).get_most_relevant_active_task(str(repo_path))
+    except Exception:
+        return
+    if task is None:
+        return
+
+    receipt = _latest_terminal_receipt(paths, task.task_id)
+    if task.phase in {"committed", "evidence_ready"}:
+        reason = (
+            f"AGPair task {task.task_id} reached ready_for_review. Inspect git status, "
+            "diff/commits, receipt, raw log paths, and validation evidence before finalizing."
+        )
+        _emit_json({"decision": "block", "reason": reason})
+        return
+
+    if task.phase == "blocked":
+        blocker_type = None
+        if receipt is not None:
+            raw_blocker_type = receipt.payload.get("blocker_type")
+            if isinstance(raw_blocker_type, str):
+                blocker_type = raw_blocker_type
+        if blocker_type == "approval_required":
+            reason = (
+                f"AGPair task {task.task_id} is blocked with blocker_type=approval_required. "
+                "Do not keep polling. Decide whether to retry with "
+                f"`agpair task retry {task.task_id} --from-block --authorization-profile ...` "
+                "or report the blocker."
+            )
+            _emit_json({"decision": "block", "reason": reason})
+
+
+@hook_app.command("subagent-start")
+def hook_subagent_start() -> None:
+    """Advise Claude Code native subagents to stay in fallback scope."""
+    payload = _read_stdin_json()
+    repo_path = _resolve_repo_path(payload)
+    if repo_path is None:
+        return
+    try:
+        _paths()
+    except Exception:
+        return
+    _emit_json(_hook_specific_output("SubagentStart", SUBAGENT_ADVISORY_CONTEXT))
+
+
+@hook_app.command("subagent-stop")
+def hook_subagent_stop() -> None:
+    """Observability-only hook reserved for future AGPair telemetry."""
+    _read_stdin_json()
+    try:
+        _paths()
+    except Exception:
+        return
+
+
+@hook_app.command("task-created")
+def hook_task_created() -> None:
+    """Observability-only hook reserved for future AGPair telemetry."""
+    _read_stdin_json()
+    try:
+        _paths()
+    except Exception:
+        return
+
+
+@hook_app.command("task-completed")
+def hook_task_completed() -> None:
+    """Observability-only hook reserved for future AGPair telemetry."""
+    _read_stdin_json()
+    try:
+        _paths()
+    except Exception:
+        return

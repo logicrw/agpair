@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import typer
 
 from agpair.config import AppPaths
+from agpair.executors.routing import supported_executor_ids, validate_supported_executor
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -44,12 +46,10 @@ class TargetManager:
     def _normalize_default_executor(default_executor: str | None) -> str | None:
         if default_executor is None:
             return None
-        normalized = default_executor.strip().lower()
-        if normalized not in {"antigravity", "codex", "gemini"}:
-            raise TargetAliasError(
-                "default-executor must be one of: antigravity, codex, gemini"
-            )
-        return normalized
+        try:
+            return validate_supported_executor(default_executor)
+        except ValueError as exc:
+            raise TargetAliasError(str(exc)) from exc
 
     def add(
         self,
@@ -96,6 +96,21 @@ class TargetManager:
         return self._read()
 
 
+def detect_git_root(cwd: str | None = None) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
+    detected = result.stdout.strip()
+    return detected or None
+
+
 def resolve_repo_path(repo_path: str | None, target: str | None, paths: AppPaths | None = None) -> str | None:
     if repo_path and target:
         raise typer.BadParameter("Cannot specify both --repo-path and --target")
@@ -107,7 +122,9 @@ def resolve_repo_path(repo_path: str | None, target: str | None, paths: AppPaths
             return mgr.resolve(target)
         except TargetAliasError as e:
             raise typer.BadParameter(str(e))
-    return repo_path
+    if repo_path:
+        return repo_path
+    return detect_git_root()
 
 
 @app.command("add")
@@ -117,7 +134,7 @@ def add_target(
     default_executor: str | None = typer.Option(
         None,
         "--default-executor",
-        help="Optional default executor for this target (antigravity, codex, gemini).",
+        help=f"Optional default executor for this target ({', '.join(supported_executor_ids())}).",
     ),
 ) -> None:
     paths = AppPaths.default()

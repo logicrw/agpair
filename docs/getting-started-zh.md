@@ -1,270 +1,140 @@
-# agpair 新手教程
+# AGPair 新手教程
 
-这份教程带你从零开始到成功发出第一个任务。
+这份教程帮助你让 Codex 或 Claude Code 通过 AGPair 派发外部 CLI agent。
 
-> **核心要点**：正常使用时，你对 AI 编程工具（Codex、Claude Code 等）说自然语言，它在后台调用 `agpair`。只有在你想手动检查状态、调试或接管时，才需要直接用 CLI。
-
-## 前置条件
-
-| 要求 | 说明 |
-|------|------|
-| **macOS** | 主要测试平台。Linux 未测试，但可能可用 |
-| **Python 3.12+** | 运行 `agpair` CLI |
-| **Node.js 18+** | 构建 companion 扩展 |
-| **`agent-bus`** | 共享消息总线 CLI — 必须在 `PATH` 中可用 |
-| **[Antigravity](https://antigravity.google/) IDE** | companion 扩展运行在其中 |
-
-### 什么是 `agent-bus`？
-
-`agent-bus` 是 agpair 在 Antigravity 执行路径中使用的本地消息总线。如果你使用 Antigravity 作为 executor，它必须在 `PATH` 中可用。它是 Antigravity 工具链的一部分。如果你使用的是 Antigravity 管理的环境，它应该已经可用。否则，请安装 Antigravity 发行版提供的 `agent-bus` 二进制文件并确保它在 `PATH` 中。目前没有独立的公开包发布。
-
-如果你使用的是 `--executor codex` 或 `--executor gemini`，agpair 的生命周期控制仍然一样，只是底层 executor 变成了本地 CLI 进程，而不是 Antigravity session。本教程后续仍以 Antigravity 示例为主，因为它仍然是默认回退路径，而且运行时表面最完整。
-
-当前可选的 executor 包括：
-
-- `antigravity`
-- `codex`
-- `gemini`
-
-默认 executor 解析顺序：
-
-1. 显式 `--executor`
-2. target 级 `default_executor`
-3. `AGPAIR_DEFAULT_EXECUTOR`
-4. 产品回退 `antigravity`
-
-典型推荐策略：
-
-- Claude Code
-  - 单工作区：`antigravity`
-  - 并行 / 隔离 worktree：`codex`，再 `gemini`
-- Codex
-  - 单工作区：`antigravity`
-  - 并行 / 隔离 worktree：`gemini`
-  - 只有明确需要时才用 `codex` 作为 executor
-
-### 什么是 Antigravity IDE？
-
-[Antigravity](https://antigravity.google/) IDE 是一个兼容 VS Code 的 IDE，为 agpair 任务提供执行环境。本仓库中的 companion 扩展（`companion-extension/`）运行在其中，提供 `agpair` CLI 和 Antigravity 执行能力之间的 HTTP bridge。下面用到的 `antigravity --install-extension` 命令是 Antigravity IDE 的 CLI，用于侧载 `.vsix` 扩展，类似 VS Code 中的 `code --install-extension`。
-
-## 第 1 步：安装 agpair
+## 1. 安装
 
 ```bash
-git clone https://github.com/logicrw/agpair.git agpair
+git clone https://github.com/logicrw/agpair.git
 cd agpair
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -e '.[dev]'
 ```
 
-让 `agpair` 全局可用（任何 AI 编程工具都能直接调用）：
+可选：让 CLI 全局可用。
 
 ```bash
+mkdir -p ~/.local/bin
 ln -sf "$PWD/.venv/bin/agpair" ~/.local/bin/agpair
-which agpair   # 应该输出 ~/.local/bin/agpair
+which agpair
 ```
 
-### 第 1.5 步：安装 companion 扩展
-
-companion 扩展提供 `agpair` CLI 和 [Antigravity](https://antigravity.google/) IDE 之间的 HTTP bridge。它已经包含在这个仓库中：
+## 2. 健康检查
 
 ```bash
-cd companion-extension
-npm install
-npm run build
-npm run package
-antigravity --install-extension antigravity-companion-extension-*.vsix
-cd ..
+agpair doctor
+agpair doctor --repo-path /path/to/repo
 ```
 
-安装后重新加载 Antigravity 窗口。扩展在启动时自动激活。
+重点看：
 
-> **安全提示**：Bridge 仅监听 `127.0.0.1`。默认情况下，bridge 使用自动生成的 bearer token 进行保护，token 存储在 VS Code 的 SecretStorage 中——无需手动配置。修改性端点（`/run_task`、`/write_receipt` 等）需要有效的 `Authorization: Bearer <token>` 头；只读端点（`/health`、`/task_status`）无需认证即可访问，以保证 `agpair doctor` 开箱即用。仅在本地调试时，可以设置 `antigravityCompanion.bridgeInsecure = true` 来禁用认证——不建议日常使用。请求体大小限制为 1 MiB。
+- `supported_executor_backends`: `antigravity-cli`, `grok-cli`, `claude-code`, `codex`。
+- `default_executor_backend`: `antigravity-cli`。
+- `executor_cli_health`: 每个 CLI binary 是否可用。
+- `authorization_profiles`: 派发时可选的授权预算。
+- `client_hook_install_status`: 传入 repo path 时会显示 Codex/Claude hook 安装状态。
 
-## 第 2 步：确认 agent-bus 可用
+非默认 executor 缺 binary 只是 warning，不会阻止 AGPair 使用其他可用 executor。
+
+## 3. 配置主控
+
+Codex：
 
 ```bash
-agent-bus --help
+mkdir -p ~/.codex/skills/agpair
+cp "$PWD/skills/Codex/SKILL.md" ~/.codex/skills/agpair/SKILL.md
+agpair codex config --install --scope project --repo-path /path/to/repo
 ```
 
-如果不通过，先安装或配置 `agent-bus`。参见上方的[前置条件](#什么是-agent-bus)了解如何获取。agpair 依赖它来发任务。
-
-## 第 3 步：检查目标项目健康状态
-
-发任务前，先确认环境就绪：
+Claude Code：
 
 ```bash
-agpair doctor --repo-path /你的项目路径
+mkdir -p ~/.claude/skills/agpair
+cp "$PWD/skills/Claude/SKILL.md" ~/.claude/skills/agpair/SKILL.md
+claude mcp add --transport stdio agpair -- agpair-mcp
+agpair claude config --install --scope project --repo-path /path/to/repo
 ```
 
-最重要的三个字段：
+AGPair 不可用时 hook 会 fail open。它们只是路由提示和结束护栏，不能替代主控验收。
 
-| 字段 | 期望值 |
-|------|--------|
-| `agent_bus_available` | `true` |
-| `desktop_reader_conflict` | `false` |
-| `repo_bridge_session_ready` | `true` |
+## 4. 派发任务
 
-**`doctor` 输出示例（健康状态）：**
-
-```
-agpair doctor — target: /Users/you/projects/my-app
-
-  agent_bus_available ............ true
-  desktop_reader_conflict ........ false
-  repo_bridge_session_ready ...... true
-  bridge_url ..................... http://127.0.0.1:8765
-
-All checks passed.
-```
-
-**如果 `desktop_reader_conflict=true`**：还有别的 desktop watcher 在抢回执，先停掉它再继续。
-
-**如果 `repo_bridge_session_ready=false`**：目标 repo 的 Antigravity 窗口不健康。确认打开的是正确的项目，Reload/重启 Antigravity 窗口，再跑一次 `doctor`。
-
-## 第 4 步：启动 daemon
-
-```bash
-agpair daemon start
-agpair daemon status
-```
-
-daemon 是一个轻量后台进程，负责：
-
-- 接收回执（`ACK`、`EVIDENCE_PACK`、`BLOCKED`、`COMMITTED`）
-- 检测卡住任务（soft watchdog → hard timeout）
-
-它**不是**语义审核者——不解读代码，也不做决策。
-
-## 第 5 步：发送你的第一个任务
+`task start` 默认会等待终态：
 
 ```bash
 agpair task start \
-  --repo-path /你的项目路径 \
-  --body "Goal: 修复 xxx，并返回 EVIDENCE_PACK。"
+  --repo-path /path/to/repo \
+  --executor antigravity-cli \
+  --authorization-profile local_mutating \
+  --body "Goal: 修复失败的 smoke test。Required evidence: 运行聚焦测试。"
 ```
 
-命令会返回一个 `TASK_ID`，并默认**等待**任务进入终态。
-
-**输出示例：**
-
-```
-Task created: TASK-MY-APP-FIX-BUG-20260324-01
-Waiting for terminal phase ...
-Phase changed: new → acked
-Phase changed: acked → evidence_ready
-Task reached terminal phase: evidence_ready
-```
-
-如果想即发即走：
+异步或并行任务：
 
 ```bash
 agpair task start \
-  --repo-path /你的项目路径 \
+  --repo-path /path/to/repo \
+  --executor antigravity-cli \
+  --authorization-profile local_mutating \
   --body "Goal: ..." \
   --no-wait
+
+agpair task watch TASK-123 --json
 ```
 
-## 第 6 步：查看任务状态
+`watch --json` 只输出状态变化和 raw log / receipt 路径，不会流式输出完整日志。
+
+## 5. 验收结果
 
 ```bash
-agpair task status <TASK_ID>
-agpair task logs <TASK_ID>
+agpair task status TASK-123 --json
+agpair task logs TASK-123
+git -C /path/to/repo status --short
+git -C /path/to/repo diff
 ```
 
-**`task status` 输出示例：**
+`ready_for_review`、`evidence_ready`、`committed` 都只是验收门。外部 executor 声称完成后，Codex 或 Claude Code 仍要检查 diff、receipt、raw evidence path 和测试证据，再报告成功。
 
-```
-task_id:    TASK-MY-APP-FIX-BUG-20260324-01
-phase:      evidence_ready
-attempt_no: 1
-session_id: sess-abc123
-created_at: 2026-03-24T10:00:00Z
-```
+除非 brief 或授权 profile 明确要求提交，`commit_ref` 是可选字段。
 
-### 任务阶段
+## 6. 处理授权阻塞
 
-| 阶段 | 含义 |
-|------|------|
-| `new` | 任务已创建，尚未收到 ACK |
-| `acked` | Antigravity 已接单，建立了执行 session |
-| `evidence_ready` | Antigravity 返回了 `EVIDENCE_PACK`——去看 logs |
-| `blocked` | 执行失败，有阻塞原因 |
-| `committed` | 任务已完成提交 |
-| `stuck` | 长时间无进展，daemon 标记为卡住 |
-
-## 第 7 步：选择下一步动作
-
-看完 `task logs` 后，只选一个：
+如果任务返回 `blocked(approval_required)`，不要继续轮询。用结构化 block 上下文开新 attempt：
 
 ```bash
-# 换 fresh session 重试
-agpair task retry <TASK_ID> --body "换 fresh session 重试"
-
-# 停止本地跟踪（不通知 Antigravity）
-agpair task abandon <TASK_ID> --reason "不再需要了"
+agpair task retry TASK-123 \
+  --from-block \
+  --authorization-profile local_mutating
 ```
 
-## 第 8 步：配合 AI 编程工具使用（正常流程）
+retry 会带上原 brief、blocked 原因、terminal receipt、journal tail、当前 git status、diff/commits 和新的授权 profile。
 
-日常使用中，推荐的流程是：
+## 7. Executor 选择
 
-1. 你对 AI 工具（Codex、Claude Code 等）说自然语言任务
-2. 工具调用 `agpair doctor`、`task start`、`task status` 等
-3. 被选中的 executor 执行工作
-4. 你审核结果，给出下一步指令
+默认顺序：
 
-CLI 是手动辅助工具，适用于：
+1. `antigravity-cli`：默认外部实现 executor。
+2. `grok-cli`：低成本 challenger / backup。
+3. `claude-code`：质量升级或 Claude 相关外部执行。
+4. `codex`：外部 Codex worker fallback。
 
-- 直接检查卡住的任务
-- 列出本地跟踪的所有任务
-- 手动 retry 或 abandon
-- 确认 bridge 是否健康
-- AI 工具不可用时自己接管
+新任务不要使用 Gemini。历史 `gemini_cli` 记录只用于检查或清理。
 
-## 常见问题
+## 8. 本地文件
 
-### `desktop_reader_conflict=true`
+不要提交本地运行状态或个人配置：
 
-还有别的 desktop watcher 在抢回执。先停掉它，再启动 `agpair daemon`。
+- `~/.agpair`
+- `~/.codex/*`
+- `~/.claude/settings.json`
+- `.claude/settings.local.json`
+- AGPair raw logs
+- session transcripts
+- 生成的 hook debug output
 
-### `repo_bridge_session_ready=false`
+项目级 `.claude/settings.json` 或 Codex hook config 只有在清理过、且明确要共享时才应提交。
 
-目标 repo 的 Antigravity 窗口不健康。确认打开的是正确的 repo，Reload/重启窗口，再跑 `agpair doctor`。
+## Legacy 说明
 
-### `BLOCKED`
-
-这轮执行没有成功。跑 `agpair task logs <TASK_ID>` 看原因，然后通过 `retry` 换新的 session 重试。
-
-## 可选：让 daemon 开机自启
-
-```bash
-# 安装 launchd agent
-python3 -m agpair.tools.install_agpair_daemon_launchd install \
-  --agpair-home ~/.agpair
-
-# 查看状态
-python3 -m agpair.tools.install_agpair_daemon_launchd status
-
-# 卸载
-python3 -m agpair.tools.install_agpair_daemon_launchd uninstall
-```
-
-这完全是可选的——先用 `agpair daemon start` 手动启动，熟悉流程后再决定要不要常驻。
-
-## 最实用的建议
-
-- **一个时间段只让 `agpair` 接管一套项目**
-- **先检查 `doctor`，再发任务**
-- **大多数时间只看 `status` 和 `logs`**
-- **复杂判断留在 AI 工具的聊天窗口里做**
-
-不要把它想成"全自动平台"，而是：**一个让 AI 编程工具更稳定地驱动 Antigravity 的轻量控制台。**
-
-## 任务元数据与并发
-
-`agpair` 支持并发任务执行，但你必须遵守**并发建议：永远在跨 worktree 间做并发，不要在同一个 worktree 内并发**。
-
-为了更好地编排并行工作，AI 主控可以在任务中记录执行元数据：包括 `depends_on`、`isolated_worktree`、`worktree_boundary`、`setup_commands`、`teardown_commands`、`env_vars` 以及 `spotlight_testing`。
-
-*注意：这些字段当前仅为供主控器阅读的元数据（metadata-only）。它们持久化存储，帮助 AI 安全地计划并发任务路线，但 agpair daemon 目前不会在底层运行时自动强制执行这些字段（比如自动运行 setup 脚本）。*
+Antigravity 桌面端 companion extension 和 bridge 诊断仍保留给旧安装使用。新任务应使用 `antigravity-cli`。

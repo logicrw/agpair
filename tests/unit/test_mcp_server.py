@@ -398,7 +398,7 @@ class TestStartTask:
         result = mcp_server.agpair_start_task(
             repo_path=str(tmp_path),
             body="Goal: orchestrate",
-            executor="codex",
+            executor="claude-code",
             depends_on=["TASK-A", "TASK-B"],
             isolated_worktree=True,
             setup_commands=["git worktree add ../wt feature-branch"],
@@ -413,7 +413,7 @@ class TestStartTask:
         args = captured[0]
         assert args[:5] == ["task", "start", "--repo-path", str(tmp_path), "--body"]
         assert "--executor" in args
-        assert args[args.index("--executor") + 1] == "codex"
+        assert args[args.index("--executor") + 1] == "claude-code"
         assert json.loads(args[args.index("--depends-on") + 1]) == ["TASK-A", "TASK-B"]
         assert "--isolated-worktree" in args
         assert json.loads(args[args.index("--setup-commands") + 1]) == ["git worktree add ../wt feature-branch"]
@@ -423,11 +423,11 @@ class TestStartTask:
         assert "--spotlight-testing" in args
 
     def test_rejects_invalid_executor_name(self, tmp_path) -> None:
-        with pytest.raises(RuntimeError, match="executor must be one of"):
+        with pytest.raises(RuntimeError, match="gemini is no longer supported"):
             mcp_server.agpair_start_task(
                 repo_path=str(tmp_path),
                 body="Goal: invalid executor",
-                executor="claude",
+                executor="gemini",
             )
 
     def test_rejects_repo_path_and_target_together(self, tmp_path) -> None:

@@ -114,7 +114,7 @@
 - provider 接收到 `TASK` 后，是否有稳定的 ack 回写事件
 - 当前 bridge / companion 是否只消费了任务但没有把运行态同步回 `agpair`
 - `receipt_watcher` 是否只处理 terminal receipt，而不处理中间心跳
-- `taskSessionStore` / `agentBusDelegationService` / `httpServer` 是否遗漏了针对 `repo_path=/Users/.../agpair` 这类仓库的绑定更新
+- `taskSessionStore` / `agentBusDelegationService` / `httpServer` 是否遗漏了针对 `repo_path=<repo>` 这类仓库的绑定更新
 
 最低要求：
 

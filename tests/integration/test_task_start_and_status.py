@@ -40,6 +40,31 @@ def make_journal_repo(tmp_path: Path) -> JournalRepository:
     return JournalRepository(paths.db_path)
 
 
+def make_repo_dir(tmp_path: Path, name: str = "repo") -> Path:
+    repo_path = tmp_path / name
+    repo_path.mkdir(parents=True, exist_ok=True)
+    return repo_path
+
+
+def write_fake_antigravity_cli(tmp_path: Path) -> Path:
+    bin_path = tmp_path / "fake-antigravity"
+    bin_path.write_text(
+        "#!/bin/sh\n"
+        "echo '{\"event\":\"start\"}'\n"
+        "echo '{\"event\":\"end\"}'\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    bin_path.chmod(0o755)
+    return bin_path
+
+
+def configure_fake_antigravity_cli(tmp_path: Path, monkeypatch) -> Path:
+    fake_cli = write_fake_antigravity_cli(tmp_path)
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_CLI", str(fake_cli))
+    return fake_cli
+
+
 @contextmanager
 def run_bridge_server(*, expected_token: str):
     requests: list[dict] = []
@@ -211,17 +236,19 @@ def test_task_repository_raises_when_task_is_missing(tmp_path: Path) -> None:
         raise AssertionError("expected TaskNotFoundError")
 
 
-def test_task_start_creates_local_record_and_sends_task(tmp_path: Path, monkeypatch) -> None:
+def test_task_start_creates_local_record_and_starts_default_external_cli(tmp_path: Path, monkeypatch) -> None:
     binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
 
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test", "--task-id", "TASK-CLI-1", "--no-wait"],
+        ["task", "start", "--repo-path", str(repo_path), "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test", "--task-id", "TASK-CLI-1", "--no-wait"],
     )
 
     assert result.exit_code == 0
@@ -229,16 +256,11 @@ def test_task_start_creates_local_record_and_sends_task(tmp_path: Path, monkeypa
 
     task = make_task_repo(tmp_path).get_task("TASK-CLI-1")
     assert task is not None
-    assert task.phase == "new"
-    recorded = read_calls(calls_path)
-    assert recorded[-1]["argv"][:4] == ["agent-bus", "send", "--sender", "desktop"]
-    # Prove that the abstraction still sends the same identical parameters
-    assert "--task-id" in recorded[-1]["argv"]
-    assert "TASK-CLI-1" in recorded[-1]["argv"]
-    assert "--status" in recorded[-1]["argv"]
-    assert "TASK" in recorded[-1]["argv"]
-    assert "repo_path: /tmp/repo" in recorded[-1]["body"]
-    assert "Goal: test" in recorded[-1]["body"]
+    assert task.phase == "acked"
+    assert task.executor_backend == "antigravity-cli"
+    assert task.antigravity_session_id is not None
+    assert "agpair_antigravity-cli_TASK-CLI-1_" in task.antigravity_session_id
+    assert read_calls(calls_path) == []
 
 
 def test_task_start_reuses_existing_task_for_same_repo_and_idempotency_key(tmp_path: Path, monkeypatch) -> None:
@@ -247,6 +269,8 @@ def test_task_start_reuses_existing_task_for_same_repo_and_idempotency_key(tmp_p
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path, "repo-a")
 
     runner = CliRunner()
     first = runner.invoke(
@@ -255,7 +279,7 @@ def test_task_start_reuses_existing_task_for_same_repo_and_idempotency_key(tmp_p
             "task",
             "start",
             "--repo-path",
-            "/tmp/repo-a",
+            str(repo_path),
             "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id",
             "TASK-IDEMP-1",
@@ -270,7 +294,7 @@ def test_task_start_reuses_existing_task_for_same_repo_and_idempotency_key(tmp_p
             "task",
             "start",
             "--repo-path",
-            "/tmp/repo-a",
+            str(repo_path),
             "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id",
             "TASK-IDEMP-2",
@@ -285,9 +309,7 @@ def test_task_start_reuses_existing_task_for_same_repo_and_idempotency_key(tmp_p
     assert first.stdout.strip() == "TASK-IDEMP-1"
     assert second.stdout.strip() == "TASK-IDEMP-1"
     assert make_task_repo(tmp_path).get_task("TASK-IDEMP-2") is None
-    recorded = read_calls(calls_path)
-    assert len(recorded) == 1
-    assert recorded[0]["argv"][:4] == ["agent-bus", "send", "--sender", "desktop"]
+    assert read_calls(calls_path) == []
 
 
 def test_task_start_idempotency_key_is_scoped_to_repo_path(tmp_path: Path, monkeypatch) -> None:
@@ -296,6 +318,9 @@ def test_task_start_idempotency_key_is_scoped_to_repo_path(tmp_path: Path, monke
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_a = make_repo_dir(tmp_path, "repo-a")
+    repo_b = make_repo_dir(tmp_path, "repo-b")
 
     runner = CliRunner()
     first = runner.invoke(
@@ -304,7 +329,7 @@ def test_task_start_idempotency_key_is_scoped_to_repo_path(tmp_path: Path, monke
             "task",
             "start",
             "--repo-path",
-            "/tmp/repo-a",
+            str(repo_a),
             "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id",
             "TASK-IDEMP-REPO-A",
@@ -319,7 +344,7 @@ def test_task_start_idempotency_key_is_scoped_to_repo_path(tmp_path: Path, monke
             "task",
             "start",
             "--repo-path",
-            "/tmp/repo-b",
+            str(repo_b),
             "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id",
             "TASK-IDEMP-REPO-B",
@@ -335,8 +360,7 @@ def test_task_start_idempotency_key_is_scoped_to_repo_path(tmp_path: Path, monke
     assert second.stdout.strip() == "TASK-IDEMP-REPO-B"
     assert make_task_repo(tmp_path).get_task("TASK-IDEMP-REPO-A") is not None
     assert make_task_repo(tmp_path).get_task("TASK-IDEMP-REPO-B") is not None
-    recorded = read_calls(calls_path)
-    assert len(recorded) == 2
+    assert read_calls(calls_path) == []
 
 
 def test_task_status_shows_phase_and_session(tmp_path: Path, monkeypatch) -> None:
@@ -350,7 +374,7 @@ def test_task_status_shows_phase_and_session(tmp_path: Path, monkeypatch) -> Non
     assert "phase: acked" in result.stdout
     assert "active_executor_backend: antigravity" in result.stdout
     assert "active_executor_continuation_capability: same_session" in result.stdout
-    assert "codex_cli" in result.stdout
+    assert "codex" in result.stdout
     assert "a2a_state_hint: working" in result.stdout
     assert "session_id: session-123" in result.stdout
 
@@ -369,9 +393,9 @@ def test_task_status_json_returns_structured_payload(tmp_path: Path, monkeypatch
     assert payload["task_id"] == "TASK-JSON-1"
     assert payload["active_executor_backend"] == "antigravity"
     assert payload["active_executor_continuation_capability"] == "same_session"
-    assert "codex_cli" in payload["supported_backends"]
-    assert payload["supported_backends"]["codex_cli"]["continuation_capability"] == "fresh_resume_first"
-    assert payload["supported_backends"]["antigravity"]["continuation_capability"] == "same_session"
+    assert "codex" in payload["supported_backends"]
+    assert payload["supported_backends"]["codex"]["continuation_capability"] == "fresh_resume_first"
+    assert payload["supported_backends"]["antigravity-cli"]["continuation_capability"] == "fresh_resume_first"
     assert payload["active_executor_safety_metadata"]["is_mutating"] is True
     assert payload["phase"] == "acked"
     assert payload["a2a_state_hint"] == "working"
@@ -877,6 +901,7 @@ def test_task_start_target_substitution(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
     repo_path = tmp_path / "repo"
     repo_path.mkdir(parents=True, exist_ok=True)
 
@@ -893,9 +918,9 @@ def test_task_start_target_substitution(tmp_path: Path, monkeypatch) -> None:
     task = make_task_repo(tmp_path).get_task("TASK-TARGET-1")
     assert task is not None
     assert task.repo_path == str(repo_path.resolve())
-
-    recorded = read_calls(calls_path)
-    assert f"repo_path: {repo_path.resolve()}" in recorded[-1]["body"]
+    assert task.phase == "acked"
+    assert task.executor_backend == "antigravity-cli"
+    assert read_calls(calls_path) == []
 
 
 def test_task_start_rejects_target_and_repo_path_together(tmp_path: Path, monkeypatch) -> None:
@@ -913,25 +938,65 @@ def test_task_start_rejects_target_and_repo_path_together(tmp_path: Path, monkey
     assert result.exit_code != 0
     assert "cannot specify both" in (result.stdout + result.stderr).lower()
 
-def test_task_start_default_executor_is_antigravity(tmp_path: Path, monkeypatch) -> None:
+def test_task_start_default_executor_is_antigravity_cli(tmp_path: Path, monkeypatch) -> None:
     binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test", "--task-id", "TASK-EXEC-DEFAULT", "--no-wait"])
+    result = runner.invoke(app, ["task", "start", "--repo-path", str(repo_path), "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test", "--task-id", "TASK-EXEC-DEFAULT", "--no-wait"])
     
     assert result.exit_code == 0
     task = make_task_repo(tmp_path).get_task("TASK-EXEC-DEFAULT")
     assert task is not None
-    assert task.executor_backend is None
+    assert task.executor_backend == "antigravity-cli"
 
     status = runner.invoke(app, ["task", "status", "TASK-EXEC-DEFAULT", "--json"])
     assert status.exit_code == 0
     payload = json.loads(status.stdout)
-    assert payload["active_executor_backend"] == "antigravity"
+    assert payload["active_executor_backend"] == "antigravity-cli"
+
+
+def test_task_start_persists_authorization_profile(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--authorization-profile",
+            "local_readonly",
+            "--body",
+            "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--task-id",
+            "TASK-AUTH-START",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 0
+    task = make_task_repo(tmp_path).get_task("TASK-AUTH-START")
+    assert task is not None
+    assert task.authorization_profile == "local_readonly"
+
+    status = CliRunner().invoke(app, ["task", "status", "TASK-AUTH-START", "--json"])
+    assert status.exit_code == 0
+    payload = json.loads(status.stdout)
+    assert payload["authorization_profile"] == "local_readonly"
+    assert "Allowed actions" in payload["authorization_summary"]
 
 
 def test_task_start_uses_env_default_executor(tmp_path: Path, monkeypatch) -> None:
@@ -966,7 +1031,7 @@ def test_task_start_uses_env_default_executor(tmp_path: Path, monkeypatch) -> No
     assert result.exit_code == 0
     task = make_task_repo(tmp_path).get_task("TASK-EXEC-ENV-DEFAULT")
     assert task is not None
-    assert task.executor_backend == "codex_cli"
+    assert task.executor_backend == "codex"
 
 
 def test_task_start_uses_target_default_executor(tmp_path: Path, monkeypatch) -> None:
@@ -974,12 +1039,12 @@ def test_task_start_uses_target_default_executor(tmp_path: Path, monkeypatch) ->
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
 
-    import agpair.executors.gemini
+    import agpair.executors.codex
     from agpair.executors.base import DispatchResult
     from unittest.mock import MagicMock
 
     mock_dispatch = MagicMock(return_value=DispatchResult(session_id="mock_session"))
-    monkeypatch.setattr(agpair.executors.gemini.GeminiExecutor, "dispatch", mock_dispatch)
+    monkeypatch.setattr(agpair.executors.codex.CodexExecutor, "dispatch", mock_dispatch)
 
     repo_path = tmp_path / "repo"
     repo_path.mkdir(parents=True, exist_ok=True)
@@ -989,11 +1054,11 @@ def test_task_start_uses_target_default_executor(tmp_path: Path, monkeypatch) ->
             "target",
             "add",
             "--name",
-            "gem-target",
+            "codex-target",
             "--repo-path",
             str(repo_path),
             "--default-executor",
-            "gemini",
+            "codex",
         ],
     )
     assert add_result.exit_code == 0
@@ -1005,7 +1070,7 @@ def test_task_start_uses_target_default_executor(tmp_path: Path, monkeypatch) ->
             "task",
             "start",
             "--target",
-            "gem-target",
+            "codex-target",
             "--body",
             "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id",
@@ -1017,7 +1082,7 @@ def test_task_start_uses_target_default_executor(tmp_path: Path, monkeypatch) ->
     assert result.exit_code == 0
     task = make_task_repo(tmp_path).get_task("TASK-EXEC-TARGET-DEFAULT")
     assert task is not None
-    assert task.executor_backend == "gemini_cli"
+    assert task.executor_backend == "codex"
 
 
 def test_task_start_explicit_executor_codex(tmp_path: Path, monkeypatch) -> None:
@@ -1037,37 +1102,48 @@ def test_task_start_explicit_executor_codex(tmp_path: Path, monkeypatch) -> None
     assert result.exit_code == 0
     task = make_task_repo(tmp_path).get_task("TASK-EXEC-CODEX")
     assert task is not None
-    assert task.executor_backend == "codex_cli"
+    assert task.executor_backend == "codex"
     
     status = runner.invoke(app, ["task", "status", "TASK-EXEC-CODEX", "--json"])
     assert status.exit_code == 0
     payload = json.loads(status.stdout)
-    assert payload["active_executor_backend"] == "codex_cli"
+    assert payload["active_executor_backend"] == "codex"
 
 
-def test_task_start_explicit_executor_gemini(tmp_path: Path, monkeypatch) -> None:
+def test_task_start_explicit_executor_gemini_is_rejected(tmp_path: Path, monkeypatch) -> None:
     binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
 
-    import agpair.executors.gemini
-    from agpair.executors.base import DispatchResult
-    from unittest.mock import MagicMock
-    mock_dispatch = MagicMock(return_value=DispatchResult(session_id="mock_session"))
-    monkeypatch.setattr(agpair.executors.gemini.GeminiExecutor, "dispatch", mock_dispatch)
-
     runner = CliRunner()
     result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test", "--task-id", "TASK-EXEC-GEMINI", "--executor", "gemini", "--no-wait"])
-    
+
+    assert result.exit_code != 0
+    assert "gemini" in result.output
+
+
+def test_task_start_without_repo_or_target_detects_git_root(tmp_path: Path, monkeypatch) -> None:
+    repo_path = tmp_path / "repo"
+    nested_path = repo_path / "nested"
+    nested_path.mkdir(parents=True)
+    subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True)
+    monkeypatch.chdir(nested_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+
+    import agpair.executors.antigravity
+    from agpair.executors.base import DispatchResult
+    from unittest.mock import MagicMock
+
+    mock_dispatch = MagicMock(return_value=DispatchResult(session_id="mock_session"))
+    monkeypatch.setattr(agpair.executors.antigravity.AntigravityExecutor, "dispatch", mock_dispatch)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["task", "start", "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test", "--task-id", "TASK-GIT-ROOT", "--no-wait"])
+
     assert result.exit_code == 0
-    task = make_task_repo(tmp_path).get_task("TASK-EXEC-GEMINI")
+    task = make_task_repo(tmp_path).get_task("TASK-GIT-ROOT")
     assert task is not None
-    assert task.executor_backend == "gemini_cli"
-    
-    status = runner.invoke(app, ["task", "status", "TASK-EXEC-GEMINI", "--json"])
-    assert status.exit_code == 0
-    payload = json.loads(status.stdout)
-    assert payload["active_executor_backend"] == "gemini_cli"
+    assert Path(task.repo_path) == repo_path
 
 
 def test_task_retry_local_executor_redispatches_locally(tmp_path: Path, monkeypatch) -> None:
@@ -1161,6 +1237,9 @@ def test_task_start_persists_dependencies_and_isolation(tmp_path: Path, monkeypa
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
+    subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True)
 
     runner = CliRunner()
     # Create prerequisite task first so --depends-on validation passes
@@ -1168,7 +1247,7 @@ def test_task_start_persists_dependencies_and_isolation(tmp_path: Path, monkeypa
         app,
         [
             "task", "start",
-            "--repo-path", "/tmp/repo",
+            "--repo-path", str(repo_path),
             "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "TASK-0",
             "--no-wait",
@@ -1180,13 +1259,13 @@ def test_task_start_persists_dependencies_and_isolation(tmp_path: Path, monkeypa
         app,
         [
             "task", "start",
-            "--repo-path", "/tmp/repo",
+            "--repo-path", str(repo_path),
             "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "TASK-DEPS-1",
             "--depends-on", '["TASK-0"]',
             "--isolated-worktree",
             "--no-wait",
-        ]
+        ],
     )
 
     assert result.exit_code == 0
@@ -1201,6 +1280,7 @@ def test_task_start_persists_dependencies_and_isolation(tmp_path: Path, monkeypa
     payload = json.loads(status.stdout)
     assert payload["depends_on"] == ["TASK-0"]
     assert payload["isolated_worktree"] is True
+
 
 def test_task_logs_filters_noise_by_default(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
@@ -1254,9 +1334,11 @@ def test_task_start_accepts_valid_brief(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
     runner = CliRunner()
     valid_body = "Goal: A\nScope: B\nRequired changes: C\nExit criteria: D"
-    result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", valid_body, "--no-wait"])
+    result = runner.invoke(app, ["task", "start", "--repo-path", str(repo_path), "--body", valid_body, "--no-wait"])
     assert result.exit_code == 0
 
 
@@ -1267,13 +1349,15 @@ def test_task_start_persists_setup_and_teardown_hooks(tmp_path: Path, monkeypatc
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
 
     runner = CliRunner()
     result = runner.invoke(
         app,
-        [
-            "task", "start",
-            "--repo-path", "/tmp/repo",
+            [
+                "task", "start",
+                "--repo-path", str(repo_path),
             "--body", "Goal: test hooks\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "TASK-HOOKS-1",
             "--setup-commands", "[\"echo setup\"]",
@@ -1297,13 +1381,15 @@ def test_task_start_persists_env_vars_metadata(tmp_path: Path, monkeypatch) -> N
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
 
     runner = CliRunner()
     result = runner.invoke(
         app,
-        [
-            "task", "start",
-            "--repo-path", "/tmp/repo",
+            [
+                "task", "start",
+                "--repo-path", str(repo_path),
             "--body", "Goal: test env\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "TASK-ENV-1",
             "--env-vars", "{\"PORT\": \"8080\", \"AGPAIR_PORT_OFFSET\": \"100\"}",
@@ -1325,16 +1411,19 @@ def test_task_start_persists_and_surfaces_worktree_boundary(tmp_path: Path, monk
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
+    worktree_boundary = str(repo_path / "my-feature-worktree")
 
     runner = CliRunner()
     result = runner.invoke(
         app,
-        [
-            "task", "start",
-            "--repo-path", "/tmp/repo",
+            [
+                "task", "start",
+                "--repo-path", str(repo_path),
             "--body", "Goal: test boundary\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "TASK-BOUNDARY-1",
-            "--worktree-boundary", "/tmp/repo/my-feature-worktree",
+                "--worktree-boundary", worktree_boundary,
             "--no-wait",
         ],
     )
@@ -1344,7 +1433,7 @@ def test_task_start_persists_and_surfaces_worktree_boundary(tmp_path: Path, monk
     status_result = runner.invoke(app, ["task", "status", "TASK-BOUNDARY-1", "--json"])
     assert status_result.exit_code == 0
     payload = json.loads(status_result.stdout)
-    assert payload["worktree_boundary"] == "/tmp/repo/my-feature-worktree"
+    assert payload["worktree_boundary"] == worktree_boundary
 
 
 def test_task_start_spotlight_testing_defaults_to_false(tmp_path: Path, monkeypatch) -> None:
@@ -1353,13 +1442,15 @@ def test_task_start_spotlight_testing_defaults_to_false(tmp_path: Path, monkeypa
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
 
     runner = CliRunner()
     result = runner.invoke(
         app,
-        [
-            "task", "start",
-            "--repo-path", "/tmp/repo",
+            [
+                "task", "start",
+                "--repo-path", str(repo_path),
             "--body", "Goal: test defaults\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "TASK-SPOT-DEFAULT",
             "--no-wait",
@@ -1380,13 +1471,15 @@ def test_task_start_persists_and_surfaces_spotlight_testing(tmp_path: Path, monk
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
     monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
     monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
 
     runner = CliRunner()
     result = runner.invoke(
         app,
-        [
-            "task", "start",
-            "--repo-path", "/tmp/repo",
+            [
+                "task", "start",
+                "--repo-path", str(repo_path),
             "--body", "Goal: test spotlight\nScope: test\nRequired changes: test\nExit criteria: test",
             "--task-id", "TASK-SPOT-1",
             "--spotlight-testing",
@@ -1464,6 +1557,8 @@ def test_task_start_isolated_worktree_persists_boundary(tmp_path: Path, monkeypa
             repo_path=str(repo_path.resolve()),
             isolated_worktree=True,
             worktree_boundary=expected_boundary,
+            authorization_profile="local_mutating",
+            authorization_summary="Allowed actions: inspect and edit repository-local files, run focused tests, and prepare commits when requested. Denied actions: destructive cleanup, credential changes, production deploys, or broad external network access.",
         )
 
         status_result = runner.invoke(app, ["task", "status", "TASK-ISO-DB", "--json"])
@@ -1610,7 +1705,7 @@ def test_task_retry_preserves_isolated_worktree_metadata_for_local_cli(tmp_path:
     repo.create_task(
         task_id="TASK-RETRY-ISO",
         repo_path=str(repo_path),
-        executor_backend="codex_cli",
+        executor_backend="codex",
         isolated_worktree=True,
         worktree_boundary=execution_repo_path,
     )
@@ -1640,6 +1735,8 @@ def test_task_retry_preserves_isolated_worktree_metadata_for_local_cli(tmp_path:
             "repo_path": str(repo_path),
             "isolated_worktree": True,
             "worktree_boundary": execution_repo_path,
+            "authorization_profile": "local_mutating",
+            "authorization_summary": "Allowed actions: inspect and edit repository-local files, run focused tests, and prepare commits when requested. Denied actions: destructive cleanup, credential changes, production deploys, or broad external network access.",
         }
     ]
 

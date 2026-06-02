@@ -1,12 +1,12 @@
 {
   "name": "agpair",
   "version": "1.0.0",
-  "description": "Bridge any AI coding agent to Antigravity executors — task dispatch, receipt tracking, stuck detection, and continue/approve/reject/retry flows",
+  "description": "External-agent-first task dispatch for Codex and Claude Code using antigravity-cli, grok-cli, claude-code, and codex fallback; no Gemini for new work",
   "author": "logicrw",
   "license": "MIT",
   "entry": "Claude/SKILL.md",
   "permissions": ["shell"],
-  "tags": ["antigravity", "task-dispatch", "pair-programming", "agent-bridge", "cli"],
-  "models": ["claude-*", "gpt-*", "gemini-*"],
+  "tags": ["external-agents", "task-dispatch", "codex", "claude-code", "antigravity-cli", "grok-cli", "cli"],
+  "models": ["claude-*", "gpt-*"],
   "repository": "https://github.com/logicrw/agpair"
 }

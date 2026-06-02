@@ -44,6 +44,32 @@ def test_dispatch_injects_task_id_commit_requirement(tmp_path):
     assert "must include" in content
 
 
+def test_dispatch_injects_authorization_and_structured_receipt_contract(tmp_path):
+    executor = DummyLocalCLIExecutor()
+
+    with mock.patch("agpair.executors.local_cli._git_head", return_value="fake-head"), \
+         mock.patch("agpair.executors.local_cli.subprocess.Popen") as mock_popen:
+        process = mock.Mock()
+        process.pid = 12345
+        mock_popen.return_value = process
+
+        dispatch = executor.dispatch(
+            task_id="TASK-AUTH-CONTRACT",
+            body="Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+            repo_path=str(tmp_path),
+            authorization_profile="local_readonly",
+            authorization_summary="Allowed actions: inspect files. Denied actions: edit files.",
+        )
+
+    wrapper = Path(dispatch.session_id) / "wrapper.sh"
+    content = wrapper.read_text(encoding="utf-8")
+    assert "Authorization profile: local_readonly" in content
+    assert "Allowed actions: inspect files." in content
+    assert "Denied actions: edit files." in content
+    assert "Structured terminal receipt JSON requirements" in content
+    assert "ready_for_review" in content
+
+
 def test_poll_persists_final_summary_to_state_json(tmp_path):
     executor = DummyLocalCLIExecutor()
     (tmp_path / "rc.txt").write_text("0", encoding="utf-8")

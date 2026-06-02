@@ -25,7 +25,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   spotlight_testing INTEGER NOT NULL DEFAULT 0,
   completion_policy TEXT NOT NULL DEFAULT 'direct_commit',
   terminal_source TEXT,
-  is_approved INTEGER NOT NULL DEFAULT 0
+  is_approved INTEGER NOT NULL DEFAULT 0,
+  authorization_profile TEXT NOT NULL DEFAULT 'local_mutating',
+  authorization_summary TEXT
 );
 -- NOTE: uq_tasks_repo_idempotency index on (repo_path, client_idempotency_key)
 -- is created by _migrate_schema() in db.py to support both fresh and migrated databases.
