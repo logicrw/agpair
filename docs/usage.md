@@ -257,7 +257,7 @@ This is the fastest way to see what the local SQLite state still tracks. Output 
 `task list` now also supports:
 
 - `--repo-path` / `--target` to scope the listing to one repository
-- `--json` to emit machine-readable task payloads, suitable for MCP clients, status lines, or controller-side filtering
+- `--json` to emit machine-readable task payloads, suitable for status lines, hooks, or controller-side filtering
 
 ### Claude Code helpers
 

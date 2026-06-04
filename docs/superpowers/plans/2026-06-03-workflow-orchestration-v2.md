@@ -740,34 +740,26 @@ Required cases:
 - `test_cancel_preserves_child_artifacts`: receipt/stdout/stderr/report files remain readable after cancel.
 - `test_cancel_does_not_delete_child_task_rows`: linked AGPair task rows and attempts remain queryable after cancel.
 
-## 16. MCP Surface
+## 16. CLI Workflow Surface
 
-Modify `agpair/mcp_server.py`.
+Do not add a secondary protocol adapter. Workflow control is exposed through the CLI:
 
-Add tools:
-
-```python
-agpair_start_workflow(manifest: dict, repo_path: str | None = None, controller: str | None = None, wait: bool = False) -> dict
-agpair_get_workflow(workflow_id: str) -> dict
-agpair_watch_workflow(workflow_id: str, cursor: str | None = None) -> dict
-agpair_cancel_workflow(workflow_id: str, reason: str = "cancelled") -> dict
-agpair_retry_workflow_node(workflow_id: str, node_id: str, authorization_profile: str | None = None, executor: str | None = None) -> dict
+```bash
+agpair workflow start MANIFEST --repo-path REPO --json
+agpair workflow status WORKFLOW --json
+agpair workflow watch WORKFLOW --json
+agpair workflow cancel WORKFLOW --reason REASON
+agpair workflow retry-node WORKFLOW NODE --authorization-profile PROFILE
 ```
 
 Rules:
 
-- MCP accepts manifest dicts, not script strings.
-- MCP rejects script fields through the same manifest validator.
-- MCP wait behavior uses low-noise workflow watch.
-- MCP must expose workflow evidence pack paths, not full raw logs.
+- CLI accepts manifest files or JSON payloads, not script strings.
+- CLI rejects script fields through the shared manifest validator.
+- `workflow watch --json` emits low-noise state changes.
+- Status/watch expose evidence pack paths, not full raw logs.
 
-Tests:
-
-Required cases:
-
-- `test_mcp_start_workflow_rejects_script_fields`: MCP and CLI share the same forbidden-field validator.
-- `test_mcp_start_workflow_returns_workflow_id`: valid manifest returns `workflow_id`, `phase`, and status URL/command hints.
-- `test_mcp_watch_workflow_returns_cursor`: watch response includes stable cursor, terminal event summary, and artifact paths without raw log body.
+Tests live in workflow CLI and integration suites.
 
 ## 17. Templates
 
@@ -920,17 +912,17 @@ Do not commit user-level `~/.codex`, `~/.claude`, `~/.agpair`, raw workflow evid
 - [ ] Implement retry-node, cancel, stuck reroute, idempotency recovery.
 - [ ] Run `pytest tests/integration/test_workflow_recovery.py -q` and confirm pass.
 
-### Task 7: MCP Tools
+### Task 7: CLI Workflow Commands
 
 **Files:**
 
-- Modify: `agpair/mcp_server.py`
-- Test: `tests/unit/test_mcp_server.py`
+- Modify: `agpair/cli/workflow.py`
+- Test: `tests/integration/test_workflow_cli.py`
 
-- [ ] Write MCP tests listed in Section 16.
-- [ ] Run `pytest tests/unit/test_mcp_server.py -q` and confirm failure.
-- [ ] Implement workflow MCP tools using CLI/shared workflow helpers.
-- [ ] Run `pytest tests/unit/test_mcp_server.py -q` and confirm pass.
+- [ ] Write CLI tests listed in Section 16.
+- [ ] Run `pytest tests/integration/test_workflow_cli.py -q` and confirm failure.
+- [ ] Implement workflow CLI commands using shared workflow helpers.
+- [ ] Run `pytest tests/integration/test_workflow_cli.py -q` and confirm pass.
 
 ### Task 8: Templates And Docs
 
@@ -1032,7 +1024,7 @@ V2 is complete only when:
 - Workflow evidence pack is built from structured receipts and durable artifacts, not executor prose.
 - Approval-required and stuck child tasks produce actionable workflow states.
 - No auto-merge occurs.
-- MCP workflow tools validate manifests and reject scripts.
+- Workflow CLI commands validate manifests and reject scripts.
 - Templates are sanitized and validate.
 - Docs explain workflows as high-value orchestration, not default path for ordinary tasks.
 - Unit and integration tests pass.

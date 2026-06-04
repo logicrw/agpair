@@ -52,11 +52,8 @@ Claude Code:
 ```bash
 mkdir -p ~/.claude/skills/agpair
 cp "$PWD/skills/Claude/SKILL.md" ~/.claude/skills/agpair/SKILL.md
-claude mcp add --transport stdio agpair -- agpair-mcp
 agpair claude config --install --scope project --repo-path /path/to/repo
 ```
-
-MCP is optional. The CLI, skills, and hooks are enough for normal AGPair routing; `agpair-mcp` is a stdio adapter for MCP-capable clients, not an HTTP server.
 
 Hooks fail open if AGPair is unavailable. They are routing hints and completion guardrails, not a replacement for controller verification.
 

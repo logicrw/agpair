@@ -4,7 +4,7 @@
 
 **Goal:** Refactor AGPair's single-task core so Codex and Claude Code can delegate to external CLI executors first while AGPair correctly handles commit, report, and evidence-based completion without hardcoding every successful task as a commit.
 
-**Architecture:** V1.1 is a core-model cleanup, not a workflow engine. Add first-class attempts, durable artifacts, normalized `ready_for_review`, effective task policy, a unified completion evaluator, and one controller-aware executor policy resolver. All daemon, wait, CLI, MCP, hooks, docs, and tests must consume these core primitives; no feature may exist only as wording in docs or hook text.
+**Architecture:** V1.1 is a core-model cleanup, not a workflow engine. Add first-class attempts, durable artifacts, normalized `ready_for_review`, effective task policy, a unified completion evaluator, and one controller-aware executor policy resolver. All daemon, wait, CLI, hooks, docs, and tests must consume these core primitives; no feature may exist only as wording in docs or hook text.
 
 **Tech Stack:** Python 3.12, Typer, SQLite, stdlib dataclasses/JSON/pathlib/hashlib, local CLI executors, pytest.
 
@@ -265,8 +265,6 @@ Modify existing files:
 - `agpair/cli/claude.py`: hooks use shared policy and ready_for_review semantics.
 - `agpair/cli/doctor.py`: executor specs, policy, binary health, effective config.
 - `agpair/cli/app.py`: register new `policy` command.
-- `agpair/mcp_server.py`: expose completion policy/controller fields.
-
 Create new files:
 
 - `agpair/completion.py`: completion policy resolution and terminal decision evaluator.
@@ -1285,7 +1283,7 @@ Expose:
 ```text
 resolve_executor_policy inputs:
 - controller: codex | claude-code | generic
-- explicit_executor: optional executor id from CLI/MCP
+- explicit_executor: optional executor id from CLI
 - allow_self_executor: boolean
 - executor_health: availability map from executor specs
 - configured_overrides: optional config object
@@ -1447,20 +1445,18 @@ pytest tests/integration/test_task_start_and_status.py -q
 
 Expected: pass.
 
-### Task 9: Hooks, MCP, Skills, And Docs Use The Core Model
+### Task 9: Hooks, Skills, And Docs Use The Core Model
 
 **Files:**
 
 - Modify: `agpair/cli/codex.py`
 - Modify: `agpair/cli/claude.py`
 - Modify: `agpair/cli/doctor.py`
-- Modify: `agpair/mcp_server.py`
 - Modify: `skills/Codex/SKILL.md`
 - Modify: `skills/Claude/SKILL.md`
 - Modify: docs listed in Section 5
 - Test: `tests/integration/test_codex_cli.py`
 - Test: `tests/integration/test_claude_cli.py`
-- Test: `tests/unit/test_mcp_server.py`
 
 - [ ] **Step 1: Hook tests**
 
@@ -1486,26 +1482,12 @@ Config installer tests must assert:
 - `agpair codex config --install --scope project --repo-path REPO` preserves unrelated hooks and installs only AGPair-managed commands.
 - `agpair codex config --uninstall` removes only AGPair-managed commands.
 - `agpair claude config --install --scope project --dry-run --repo-path REPO` prints a diff for `<repo>/.claude/settings.json` and writes nothing.
-- `agpair claude config --install --scope project --repo-path REPO` preserves unrelated hooks, statusline, permissions, plugins, MCP config, and user settings.
+- `agpair claude config --install --scope project --repo-path REPO` preserves unrelated hooks, statusline, permissions, plugins, and user settings.
 - `agpair claude config --uninstall` removes only AGPair-managed commands and statusline entries.
 - `agpair doctor --repo-path REPO --json` reports Codex and Claude hook install status.
 - Installer commands do not edit `AGENTS.md` or `CLAUDE.md` unless an AGPair-managed marker block already exists and the command explicitly owns marker updates.
 
-- [ ] **Step 2: MCP tests**
-
-MCP task start must accept:
-
-```python
-controller: str | None = None
-completion_policy: str | None = None
-allow_self_executor: bool = False
-```
-
-MCP must reject invalid executor ids and Gemini.
-
-MCP task status/watch tools must use the same `build_task_payload` and watch event contract as CLI paths, including durable artifact paths, effective task policy, blocker type, and no full raw log streaming.
-
-- [ ] **Step 3: Update docs and skills**
+- [ ] **Step 2: Update docs and skills**
 
 Before updating docs and skills, refresh current official docs for:
 
@@ -1533,7 +1515,6 @@ SubagentStart is advisory only. Native subagents remain available as fallback/re
 ```bash
 pytest tests/integration/test_codex_cli.py tests/integration/test_claude_cli.py -q
 pytest tests/integration/test_config_install.py tests/integration/test_doctor.py -q
-pytest tests/unit/test_mcp_server.py -q
 ```
 
 Expected: pass.
@@ -1551,7 +1532,6 @@ pytest tests/unit/test_completion_policy.py tests/unit/test_artifacts.py tests/u
 pytest tests/integration/test_report_only_tasks.py tests/integration/test_attempt_artifacts.py tests/integration/test_policy_cli.py -q
 pytest tests/integration/test_task_start_and_status.py tests/integration/test_task_wait_inline_poll.py tests/integration/test_fake_executors.py -q
 pytest tests/integration/test_codex_cli.py tests/integration/test_claude_cli.py tests/integration/test_doctor.py -q
-pytest tests/unit/test_mcp_server.py -q
 ```
 
 - [ ] **Step 2: Run full suite**
@@ -1653,7 +1633,7 @@ These are not optional. V1.1 is incomplete if any item is missing from code or t
 - Claude Code controller does not implicitly select external `claude-code`.
 - Codex `SubagentStart` and Claude Code `SubagentStart` are advisory-only, not hard vetoes.
 - Claude Code `TaskCreated` and `TaskCompleted` are observability-only in V1.1.
-- Gemini is not accepted for new start/retry/policy/MCP paths.
+- Gemini is not accepted for new start/retry/policy paths.
 - Docs and skills describe current behavior only; they must not say all successful tasks commit.
 - `skills/claw.json` metadata matches current executor positioning and does not advertise Gemini or Antigravity IDE as the recommended path.
 
@@ -1689,7 +1669,7 @@ V1.1 is complete only when all of the following are true:
 - `task status --json` surfaces receipt/report/log paths and output excerpt.
 - `task logs --include-executor-output` reads durable artifacts.
 - `task wait` and `task watch --json` provide low-noise completion waiting without model-turn polling.
-- Controller-aware executor policy is centralized and used by task start, retry, hooks, doctor, MCP, and docs.
+- Controller-aware executor policy is centralized and used by task start, retry, hooks, doctor, and docs.
 - `agpair policy show --controller codex --json` suppresses external `codex`.
 - `agpair policy show --controller claude-code --json` suppresses external `claude-code`.
 - Binary preflight prevents `command not found` late failures for local CLI executors.

@@ -21,7 +21,7 @@ goal:
     authority: requested
     proof_type: test
     completion_proof: "All required plan tasks have receipts, Task 14 verification passes, and final audit records full_outcome_complete: true."
-    likely_misfire: "Only implementing the CLI happy path or docs while leaving MCP, daemon, wait, hooks, legacy Gemini readability, config installers, fake executor matrix, or privacy gate stale."
+    likely_misfire: "Only implementing the CLI happy path or docs while leaving, daemon, wait, hooks, legacy Gemini readability, config installers, fake executor matrix, or privacy gate stale."
     blind_spots_considered:
       - "Exact noninteractive flags for Antigravity CLI, Grok CLI, and Claude Code may require discovery."
       - "Local user config must not be committed and must be changed only through idempotent installer/dry-run paths."
@@ -100,7 +100,7 @@ tasks:
       result: done
       decision: approved
       full_outcome_complete: false
-      summary: "Plan is executable against current repo state. Current-state scan found the planned T010 files and tests exist or are appropriate to add. Notable stale surfaces are already covered by the plan: MCP executor validation, daemon/wait local CLI paths, legacy gemini_cli readability, generic executor session wording, docs, skills, and privacy gates."
+      summary: "Plan is executable against current repo state. Current-state scan found the planned T010 files and tests exist or are appropriate to add. Notable stale surfaces are already covered by the plan: daemon/wait local CLI paths, legacy gemini_cli readability, generic executor session wording, docs, skills, and privacy gates."
       evidence:
         - "docs/superpowers/plans/2026-06-02-external-agent-first-agpair-v1.md"
         - "git status --short"
@@ -114,11 +114,9 @@ tasks:
         - "agpair/executors/codex.py"
         - "agpair/cli/task.py"
         - "agpair/cli/wait.py"
-        - "agpair/mcp_server.py"
         - "agpair/daemon/loop.py"
         - "agpair/targets.py"
         - "tests/unit/test_executor_routing.py"
-        - "tests/unit/test_mcp_server.py"
         - "tests/integration/test_cli_help.py"
         - "tests/integration/test_task_start_and_status.py"
         - "tests/integration/test_task_wait.py"
@@ -126,7 +124,7 @@ tasks:
         - "tests/integration/test_daemon_codex_lifecycle.py"
         - "tests/unit/test_auto_advance.py"
       verify:
-        - "pytest tests/unit/test_executor_routing.py tests/unit/test_mcp_server.py tests/integration/test_cli_help.py tests/integration/test_task_start_and_status.py -q"
+        - "pytest tests/unit/test_executor_routing.py tests/integration/test_cli_help.py tests/integration/test_task_start_and_status.py -q"
         - "pytest tests/integration/test_task_wait.py tests/integration/test_task_wait_inline_poll.py tests/integration/test_daemon_codex_lifecycle.py tests/unit/test_auto_advance.py -q"
       stop_if:
         - "Need to change files outside allowed_files."
@@ -144,7 +142,7 @@ tasks:
       - "T001 receipt."
     constraints:
       - "External-first canonical ids are antigravity-cli, grok-cli, claude-code, codex."
-      - "Gemini must be rejected for new task start/retry/MCP dispatch."
+      - "Gemini must be rejected for new task start/retry dispatch."
       - "target remains optional and current git root auto-detection works."
       - "Do not modify OMX source."
     allowed_files:
@@ -154,11 +152,9 @@ tasks:
       - "agpair/executors/codex.py"
       - "agpair/cli/task.py"
       - "agpair/cli/wait.py"
-      - "agpair/mcp_server.py"
       - "agpair/daemon/loop.py"
       - "agpair/targets.py"
       - "tests/unit/test_executor_routing.py"
-      - "tests/unit/test_mcp_server.py"
       - "tests/integration/test_cli_help.py"
       - "tests/integration/test_task_start_and_status.py"
       - "tests/integration/test_task_wait.py"
@@ -166,7 +162,7 @@ tasks:
       - "tests/integration/test_daemon_codex_lifecycle.py"
       - "tests/unit/test_auto_advance.py"
     verify:
-      - "pytest tests/unit/test_executor_routing.py tests/unit/test_mcp_server.py tests/integration/test_cli_help.py tests/integration/test_task_start_and_status.py -q"
+      - "pytest tests/unit/test_executor_routing.py tests/integration/test_cli_help.py tests/integration/test_task_start_and_status.py -q"
       - "pytest tests/integration/test_task_wait.py tests/integration/test_task_wait_inline_poll.py tests/integration/test_daemon_codex_lifecycle.py tests/unit/test_auto_advance.py -q"
     stop_if:
       - "Need to change files outside allowed_files."
@@ -179,14 +175,12 @@ tasks:
         - "agpair/executors/__init__.py"
         - "agpair/executors/codex.py"
         - "agpair/cli/task.py"
-        - "agpair/mcp_server.py"
         - "agpair/targets.py"
         - "tests/unit/test_executor_routing.py"
-        - "tests/unit/test_mcp_server.py"
         - "tests/integration/test_task_start_and_status.py"
         - "tests/integration/test_daemon_codex_lifecycle.py"
       commands:
-        - cmd: "pytest tests/unit/test_executor_routing.py tests/unit/test_mcp_server.py tests/integration/test_cli_help.py tests/integration/test_task_start_and_status.py -q"
+        - cmd: "pytest tests/unit/test_executor_routing.py tests/integration/test_cli_help.py tests/integration/test_task_start_and_status.py -q"
           status: pass
           output: "140 passed in 10.14s"
         - cmd: "pytest tests/integration/test_task_wait.py tests/integration/test_task_wait_inline_poll.py tests/integration/test_daemon_codex_lifecycle.py tests/unit/test_auto_advance.py -q"
@@ -194,7 +188,7 @@ tasks:
           output: "82 passed in 5.32s"
         - cmd: "git diff --check"
           status: pass
-      summary: "Established canonical executor routing for new work, changed new Codex storage id to codex, made default task start store antigravity-cli, rejected Gemini for new MCP/CLI starts, and added git-root auto-detection when repo/target are omitted. Existing legacy None/antigravity rows remain readable."
+      summary: "Established canonical executor routing for new work, changed new Codex storage id to codex, made default task start store antigravity-cli, rejected Gemini for new CLI starts, and added git-root auto-detection when repo/target are omitted. Existing legacy None/antigravity rows remain readable."
 
   - id: T020
     type: worker
@@ -221,11 +215,10 @@ tasks:
       - "tests/unit/test_claude_code_executor.py"
       - "tests/unit/test_executor_routing.py"
       - "tests/integration/test_daemon_gemini_lifecycle.py"
-      - "tests/unit/test_mcp_server.py"
       - "tests/integration/test_task_start_and_status.py"
     verify:
       - "pytest tests/unit/test_antigravity_cli_executor.py tests/unit/test_grok_cli_executor.py tests/unit/test_claude_code_executor.py tests/unit/test_executor_routing.py -q"
-      - "pytest tests/integration/test_daemon_gemini_lifecycle.py tests/unit/test_mcp_server.py tests/integration/test_task_start_and_status.py -q"
+      - "pytest tests/integration/test_daemon_gemini_lifecycle.py tests/integration/test_task_start_and_status.py -q"
     stop_if:
       - "Exact CLI invocation requires real credentials or destructive external execution."
       - "Need to modify bridge/IDE behavior beyond legacy compatibility."
@@ -248,7 +241,7 @@ tasks:
         - cmd: "pytest tests/unit/test_antigravity_cli_executor.py tests/unit/test_grok_cli_executor.py tests/unit/test_claude_code_executor.py tests/unit/test_executor_routing.py -q"
           status: pass
           output: "13 passed in 0.02s"
-        - cmd: "pytest tests/integration/test_daemon_gemini_lifecycle.py tests/unit/test_mcp_server.py tests/integration/test_task_start_and_status.py -q"
+        - cmd: "pytest tests/integration/test_daemon_gemini_lifecycle.py tests/integration/test_task_start_and_status.py -q"
           status: pass
           output: "137 passed in 2.45s"
         - cmd: "git diff --check"

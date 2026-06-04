@@ -51,7 +51,7 @@
    - **P0：结构化任务输出与结果契约**
    - **P1：发起端幂等与提交结果上下文**
    - **P2：失败诊断结构化与 SQLite 并发准备**
-   - **P3：MCP / A2A 等外部集成面**
+   - **P3：A2A / AG-UI 等外部集成面**
 
 4. 不要把这些东西当成当前最优先：
    - 直接上 A2A server
@@ -224,19 +224,17 @@
 
 本节刻意压缩。只保留会影响 `agpair` 决策的外部事实。
 
-### 3.1 MCP、A2A、AG-UI 的正确定位
+### 3.1 A2A、AG-UI 的正确定位
 
-- **MCP**：agent ↔ tools / data
 - **A2A**：agent ↔ agent
 - **AG-UI**：agent ↔ user-facing UI
 
 对 `agpair` 的现实意义：
 
 - `agpair` 当前最像的是一个**专用 handoff transport + local task state layer**
-- 它不需要为了“概念完整”立刻同时承担 MCP、A2A、AG-UI 三层职责
+- 它不需要为了“概念完整”立刻同时承担 A2A、AG-UI 等外部协议职责
 - 更现实的路线是：
   - 先把本地 CLI / daemon / extension 接口稳定好
-  - 再决定是否对外暴露 MCP tools
   - 最后再评估 A2A 兼容端点是否真的值得
 
 ### 3.2 A2A 当前最相关的事实
@@ -728,35 +726,35 @@ AG-UI 的价值主要在：
 
 这些工作有价值，但属于后置收益。
 
-## [已实现/Landed] WP-P3.1：MCP wrapper
-> 状态：✅ 已在仓库中实现 (2026-03-30)
+## [已移除/Removed] WP-P3.1：secondary protocol wrapper
+> 状态：已从当前架构中移除，AGPair 保持 CLI / daemon / skills / hooks first。
 
 ### Goal
 
-把 `agpair` 的核心操作封装成 MCP tools，降低与其他 agent runtime 的接入成本。
+不再把 `agpair` 的核心操作封装成额外协议工具。外部 agent runtime 通过 `agpair` CLI、skills 和 hooks 接入。
 
-### Why this is earlier than A2A
+### Why this was removed
 
-- 实现更轻
-- 对本项目当前形态更贴近
-- 立刻能服务“别的 AI 想用 `agpair`”这一场景
+- 与当前 external-agent-first 目标相比，额外协议层不是必要路径。
+- 保留它会让安装、文档、依赖和测试面变宽。
+- CLI 已经提供任务创建、等待、watch、retry、logs、doctor 和 workflow 控制面。
 
 ### Scope
 
-建议最小工具集：
+保留的最小控制面：
 
-- `agpair_start_task`
-- `agpair_get_task`
-- `agpair_wait_task`
-- `agpair_get_logs`
-- `agpair_continue_task`
-- `agpair_approve_task`
-- `agpair_retry_task`
+- `agpair task start`
+- `agpair task status`
+- `agpair task wait`
+- `agpair task watch --json`
+- `agpair task logs`
+- `agpair task retry`
+- `agpair workflow ...`
 
 ### Exit criteria
 
-- 任何 MCP client 能稳定发起并读取任务
-- 不依赖解析人类文本 CLI 输出
+- Codex / Claude Code skills 和 hooks 能稳定发起并读取任务。
+- Controller 使用 `--json` 输出，不依赖解析人类文本。
 
 ## [部分实现/Landed] WP-P3.2：A2A 语义对齐或适配层
 > 状态：✅ 已部分实现，CLI 输出了基于 A2A 的状态提示 (a2a_state_hint) (2026-03-30)
@@ -905,9 +903,6 @@ AG-UI 的价值主要在：
   - <https://developers.googleblog.com/en/a2a-a-new-era-of-agent-interoperability/>
 - ACP official site:
   - <https://agentcommunicationprotocol.dev/>
-- MCP official docs:
-  - <https://modelcontextprotocol.io/docs/getting-started/intro>
-  - <https://modelcontextprotocol.io/docs/learn/architecture>
 - AG-UI official docs:
   - <https://docs.ag-ui.com/introduction>
   - <https://docs.ag-ui.com/concepts/events>
@@ -924,8 +919,6 @@ AG-UI 的价值主要在：
 
 以下来源不是不能看，而是不应再作为高置信主依据：
 
-- `https://a2aprotocol.ai/docs/guide/a2a-mcp-ag-ui`
-  - 可读，但属于二手整理，不是官方标准文本
 - `https://shashikantjagtap.net/openclaw-acp-what-coding-agent-users-need-to-know-about-protocol-gaps/`
   - 可读，但属于第三方评论
 - `https://shipyard.build/blog/claude-code-multi-agent/`
@@ -992,8 +985,7 @@ AG-UI 的价值主要在：
 2. **P1：发起端 idempotency + committed result context**
 3. **P1：结构化 blocked / stuck 失败契约**
 4. **P2：WAL 与并发准备**
-5. **P3：MCP wrapper**
-6. **P3：A2A 语义对齐 / 适配层**
+5. **P3：A2A 语义对齐 / 适配层**
 
 ### 10.3 给后续 AI 的最后一句话
 

@@ -11,18 +11,6 @@ mkdir -p ~/.claude/skills/agpair
 cp /absolute/path/to/agpair/skills/Claude/SKILL.md ~/.claude/skills/agpair/SKILL.md
 ```
 
-### MCP
-
-```bash
-claude mcp add --transport stdio agpair -- agpair-mcp
-```
-
-项目级共享配置：
-
-```bash
-claude mcp add --transport stdio --scope project agpair -- agpair-mcp
-```
-
 ### Hooks 和 Status Line
 
 ```bash
@@ -83,7 +71,6 @@ agpair task retry TASK-123 \
 
 ## 官方参考
 
-- [Claude Code MCP](https://code.claude.com/docs/en/mcp)
 - [Claude Code hooks](https://code.claude.com/docs/en/hooks)
 - [Claude Code status line](https://code.claude.com/docs/en/statusline)
 - [Claude Code skills](https://code.claude.com/docs/en/skills)

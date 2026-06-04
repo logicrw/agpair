@@ -628,7 +628,7 @@ V1 Claude integration:
 Claude config policy:
 
 - `agpair claude config` must install/update/uninstall only AGPair-managed entries.
-- It must preserve unrelated statusline, hooks, permissions, plugins, MCP config, and user settings unless `--force` explicitly replaces an AGPair-managed slot.
+- It must preserve unrelated statusline, hooks, permissions, plugins, and user settings unless `--force` explicitly replaces an AGPair-managed slot.
 - It should support `--scope project|user`, `--dry-run`, `--install`, and `--uninstall`.
 - Project config may be committed only if it is generic and sanitized. User config under `~/.claude/` is never committed.
 - The canonical skill source is `skills/Claude/SKILL.md`; installed copies under `~/.claude/skills/agpair/SKILL.md` are deployment artifacts.
@@ -777,11 +777,6 @@ Files to modify:
 - `agpair/cli/app.py`
   - Register `agpair codex` Typer subcommand.
   - Keep `agpair claude` registered and extend it rather than creating a second Claude entry point.
-
-- `agpair/mcp_server.py`
-  - Update MCP task-start executor validation to the new ids.
-  - Allow omitted `repo_path` / `target` when the CLI can detect the git root.
-  - Reject Gemini for new task creation while keeping old task inspection readable through CLI/status surfaces.
 
 - `agpair/daemon/loop.py`
   - Update default executor lookup to the new routing table.
@@ -965,11 +960,6 @@ Tests to update or add:
   - New executor ids.
   - Status payload supported/legacy backends.
   - `ready_for_review` successful terminal state with legacy `committed` readability.
-
-- Update: `tests/unit/test_mcp_server.py`
-  - New executor ids in MCP start-task validation.
-  - Omitted repo locator behavior when CLI can detect git root.
-  - Gemini rejection for new MCP task starts.
 
 - Update: `tests/integration/test_task_wait.py`
   - `ready_for_review` terminal behavior.
@@ -1383,7 +1373,6 @@ Expected: pass.
 - Modify: `agpair/cli/task.py`
 - Modify: `agpair/cli/wait.py`
 - Modify: `agpair/daemon/loop.py`
-- Modify: `agpair/mcp_server.py`
 - Modify: `agpair/targets.py`
 - Modify: `agpair/executors/codex.py`
 - Modify: `tests/integration/test_cli_help.py`
@@ -1409,14 +1398,14 @@ antigravity-cli, grok-cli, claude-code, codex
 
 Replace current `if selected_executor == ...` chain with registry lookup.
 
-- [ ] **Step 5: Update secondary entry points**
+- [ ] **Step 5: Update daemon, wait, and storage paths**
 
-Update MCP task creation, daemon dispatch/poll, wait logic, and Codex executor storage so they use the same registry and canonical ids:
+Update daemon dispatch/poll, wait logic, and Codex executor storage so they use the same registry and canonical ids:
 
 ```text
 new ids accepted: antigravity-cli, grok-cli, claude-code, codex
 legacy ids readable: antigravity, codex_cli, gemini_cli
-new Gemini starts rejected everywhere, including MCP
+new Gemini starts rejected everywhere
 local CLI wait uses executor_session_id and ready_for_review
 daemon messages no longer default to Antigravity wording for non-Antigravity executors
 ```
@@ -1430,7 +1419,7 @@ If no explicit/default executor exists, store `antigravity-cli`, not `None`.
 Run:
 
 ```bash
-pytest tests/integration/test_cli_help.py tests/integration/test_task_start_and_status.py tests/unit/test_mcp_server.py tests/integration/test_task_wait.py tests/integration/test_task_wait_inline_poll.py tests/integration/test_daemon_codex_lifecycle.py tests/unit/test_auto_advance.py -q
+pytest tests/integration/test_cli_help.py tests/integration/test_task_start_and_status.py tests/integration/test_task_wait.py tests/integration/test_task_wait_inline_poll.py tests/integration/test_daemon_codex_lifecycle.py tests/unit/test_auto_advance.py -q
 ```
 
 Expected: pass.
@@ -1509,7 +1498,6 @@ Expected: pass.
 - Modify: `agpair/executors/__init__.py`
 - Modify: `tests/integration/test_task_start_and_status.py`
 - Modify or replace: `tests/integration/test_daemon_gemini_lifecycle.py`
-- Modify: `tests/unit/test_mcp_server.py`
 - Add or update: `tests/unit/test_executor_routing.py`
 
 - [ ] **Step 1: Status for old records**
@@ -1541,7 +1529,7 @@ Update old Gemini daemon lifecycle tests so they no longer dispatch new `--execu
 ```text
 legacy gemini_cli row can be inspected
 legacy gemini_cli session cleanup does not crash
-new Gemini start/retry/MCP dispatch is rejected
+new Gemini start/retry dispatch is rejected
 ```
 
 - [ ] **Step 5: Run tests**
@@ -1549,7 +1537,7 @@ new Gemini start/retry/MCP dispatch is rejected
 Run:
 
 ```bash
-pytest tests/unit/test_executor_routing.py tests/integration/test_task_start_and_status.py tests/integration/test_daemon_gemini_lifecycle.py tests/unit/test_mcp_server.py -q
+pytest tests/unit/test_executor_routing.py tests/integration/test_task_start_and_status.py tests/integration/test_daemon_gemini_lifecycle.py -q
 ```
 
 Expected: pass.
