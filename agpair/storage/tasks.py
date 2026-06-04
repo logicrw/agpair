@@ -507,6 +507,7 @@ class TaskRepository:
                 """
                 SELECT * FROM tasks
                 WHERE repo_path = ?
+                  AND is_approved = 0
                 ORDER BY
                   CASE
                     WHEN phase IN ('new', 'acked', 'ready_for_review', 'evidence_ready') THEN 0

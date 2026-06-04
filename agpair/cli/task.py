@@ -1157,6 +1157,62 @@ def abandon_task(
     typer.echo(task_id)
 
 
+@app.command("accept")
+def accept_task(
+    task_id: str,
+    json_output: bool = _JSON_OPTION,
+) -> None:
+    """Mark a reviewed terminal evidence pack as accepted by the controller.
+
+    This is controller-side acceptance after inspecting receipts, diffs, logs,
+    and required evidence. It is not runtime authorization for an executor.
+    """
+    paths = _paths()
+    tasks = TaskRepository(paths.db_path)
+    journal = JournalRepository(paths.db_path)
+    task = tasks.get_task(task_id)
+    if task is None:
+        if json_output:
+            _emit_json(_not_found_payload(task_id))
+        else:
+            typer.echo(f"task not found: {task_id}", err=True)
+        raise typer.Exit(code=1)
+    if task.phase not in DISPATCH_SUCCESS_PHASES:
+        payload = {
+            "ok": False,
+            "error": "task_not_ready_for_acceptance",
+            "task_id": task_id,
+            "phase": task.phase,
+            "expected_phases": sorted(DISPATCH_SUCCESS_PHASES),
+        }
+        if json_output:
+            _emit_json(payload)
+        else:
+            expected = ", ".join(payload["expected_phases"])
+            typer.echo(
+                f"Refused: task {task_id} is {task.phase}; expected one of: {expected}",
+                err=True,
+            )
+        raise typer.Exit(code=1)
+    if task.is_approved:
+        updated = task
+    else:
+        tasks.mark_approved(task_id=task_id)
+        journal.append(task_id, "cli", "accepted", "controller accepted terminal evidence pack")
+        updated = tasks.get_task(task_id)
+    if json_output:
+        _emit_json(
+            {
+                "ok": True,
+                "task_id": task_id,
+                "phase": updated.phase if updated else task.phase,
+                "is_approved": bool(updated.is_approved) if updated else True,
+            }
+        )
+        return
+    typer.echo(task_id)
+
+
 # ---------------------------------------------------------------------------
 # task wait
 # ---------------------------------------------------------------------------

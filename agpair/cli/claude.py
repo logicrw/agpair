@@ -474,6 +474,8 @@ def hook_stop() -> None:
         return
 
     receipt = _latest_terminal_receipt(paths, task.task_id)
+    if task.is_approved:
+        return
     if task.phase in {"ready_for_review", "committed", "evidence_ready"}:
         reason = (
             f"AGPair task {task.task_id} reached ready_for_review. Inspect git status, "

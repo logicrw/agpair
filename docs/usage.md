@@ -149,7 +149,7 @@ Recommended controller-side defaults:
 - Codex controllers suppress AGPair-managed external `codex` by default; use `claude-code` before Codex native subagents.
 - Claude Code controllers suppress AGPair-managed external `claude-code` by default; use `codex` before Claude Code native subagents.
 - Native Codex or Claude subagents are fallback/review resources.
-- Review `ready_for_review` receipts, diffs, and tests before reporting success.
+- Review `ready_for_review` receipts, diffs, and tests before reporting success, then run `agpair task accept TASK_ID` to mark that receipt handled.
 
 Local CLI approval modes can be adjusted with environment variables:
 
@@ -304,7 +304,7 @@ Notes:
 - `session-start` injects a short reminder that AGPair external-first routing is available in the current repo.
 - `precompact` blocks compaction only while an AGPair task is `acked` or `evidence_ready`; other visible states may still appear in the status line without blocking compaction.
 - `user-prompt-submit` injects external-first routing context.
-- `stop` blocks only actionable terminal states such as `ready_for_review` and `approval_required`.
+- `stop` blocks only actionable terminal states such as unaccepted `ready_for_review` and `approval_required`.
 - `subagent-start` is advisory; Claude Code native subagents remain fallback/review resources.
 - AGPair intentionally does **not** provide a default `InstructionsLoaded` reminder hook because Claude Code documents that event as observability-only.
 - AGPair intentionally does **not** provide a default `WorktreeCreate` hook because that hook replaces Claude Code’s built-in git-worktree behavior entirely.
@@ -321,7 +321,7 @@ agpair codex config --install --scope project --repo-path "$REPO"
 Managed hooks:
 
 - `UserPromptSubmit`: adds short external-first context.
-- `Stop`: blocks only actionable AGPair terminal states such as `ready_for_review` and `approval_required`.
+- `Stop`: blocks only actionable AGPair terminal states such as unaccepted `ready_for_review` and `approval_required`.
 - `SubagentStart`: advisory context only; Codex native subagents remain fallback/review resources.
 
 For async tasks, attach with:

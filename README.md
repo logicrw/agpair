@@ -109,6 +109,12 @@ V1 does not pause a running executor for live approval. Out-of-scope work should
 
 `ready_for_review`, `evidence_ready`, and `committed` are not automatic success. The controller must inspect the AGPair status, git diff/commit evidence, receipts, raw log paths when needed, and run the relevant verification before reporting completion.
 
+After the controller accepts the evidence, mark the task accepted so Stop hooks do not keep blocking on the same receipt:
+
+```bash
+agpair task accept TASK-123
+```
+
 `commit_ref` is optional unless the brief or authorization profile explicitly requires a commit.
 
 ## Local State

@@ -173,6 +173,111 @@ def test_codex_stop_blocks_for_ready_for_review_receipt(tmp_path: Path, monkeypa
     assert "ready_for_review" in payload["reason"]
 
 
+def test_codex_stop_does_not_block_approved_ready_for_review(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    init_git_repo(repo_path)
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    tasks = TaskRepository(paths.db_path)
+    tasks.create_task(task_id="TASK-CODEX-APPROVED", repo_path=str(repo_path), executor_backend="antigravity-cli")
+    tasks.mark_acked(task_id="TASK-CODEX-APPROVED", session_id="session-123")
+    tasks.mark_ready_for_review(
+        task_id="TASK-CODEX-APPROVED",
+        terminal_source="daemon",
+        terminal_receipt_json=json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "TASK-CODEX-APPROVED",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "COMMITTED",
+                "summary": "Ready for review",
+                "payload": {
+                    "claimed_state": "ready_for_review",
+                    "changed_files": [],
+                    "scope_violations": [],
+                    "raw_log_path": "/tmp/stdout.log",
+                    "receipt_path": "/tmp/receipt.json",
+                    "validation_not_run": "read-only task",
+                },
+            }
+        ),
+    )
+    tasks.mark_approved(task_id="TASK-CODEX-APPROVED")
+
+    result = CliRunner().invoke(app, ["codex", "hook", "stop"], input=hook_input(repo_path))
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == ""
+
+
+def test_codex_stop_reports_unapproved_task_after_approved_task(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    init_git_repo(repo_path)
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    tasks = TaskRepository(paths.db_path)
+
+    tasks.create_task(task_id="TASK-CODEX-APPROVED", repo_path=str(repo_path), executor_backend="antigravity-cli")
+    tasks.mark_acked(task_id="TASK-CODEX-APPROVED", session_id="session-approved")
+    tasks.mark_ready_for_review(
+        task_id="TASK-CODEX-APPROVED",
+        terminal_source="daemon",
+        terminal_receipt_json=json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "TASK-CODEX-APPROVED",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "EVIDENCE_PACK",
+                "summary": "Ready for review",
+                "payload": {
+                    "changed_files": [],
+                    "scope_violations": [],
+                    "raw_log_path": "/tmp/stdout-approved.log",
+                    "receipt_path": "/tmp/receipt-approved.json",
+                    "validation_not_run": "read-only task",
+                },
+            }
+        ),
+    )
+    tasks.mark_approved(task_id="TASK-CODEX-APPROVED")
+
+    tasks.create_task(task_id="TASK-CODEX-OPEN", repo_path=str(repo_path), executor_backend="antigravity-cli")
+    tasks.mark_acked(task_id="TASK-CODEX-OPEN", session_id="session-open")
+    tasks.mark_ready_for_review(
+        task_id="TASK-CODEX-OPEN",
+        terminal_source="daemon",
+        terminal_receipt_json=json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "TASK-CODEX-OPEN",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "EVIDENCE_PACK",
+                "summary": "Ready for review",
+                "payload": {
+                    "changed_files": [],
+                    "scope_violations": [],
+                    "raw_log_path": "/tmp/stdout-open.log",
+                    "receipt_path": "/tmp/receipt-open.json",
+                    "validation_not_run": "read-only task",
+                },
+            }
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["codex", "hook", "stop"], input=hook_input(repo_path))
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "block"
+    assert "TASK-CODEX-OPEN" in payload["reason"]
+    assert "TASK-CODEX-APPROVED" not in payload["reason"]
+
+
 def test_codex_stop_blocks_for_approval_required(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"

@@ -109,6 +109,12 @@ V1 不做“运行中暂停等待授权”。越界时 executor 应返回 `block
 
 `ready_for_review`、`evidence_ready`、`committed` 都不是自动成功。主控必须检查 AGPair 状态、git diff/commit 证据、receipt、必要时的 raw log 路径，并运行相应验证后才能报告完成。
 
+主控验收 evidence 后，用下面的命令标记任务已接受，避免 Stop hook 对同一个 receipt 反复阻塞：
+
+```bash
+agpair task accept TASK-123
+```
+
 除非 brief 或授权 profile 明确要求 commit，`commit_ref` 是可选字段。
 
 ## 本地状态

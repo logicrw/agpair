@@ -406,6 +406,43 @@ def test_claude_stop_hook_blocks_ready_for_review_terminal_receipt(tmp_path: Pat
     assert "TASK-CLAUDE-RFR" in payload["reason"]
 
 
+def test_claude_stop_hook_does_not_block_approved_ready_for_review(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    init_git_repo(repo_path)
+
+    tasks = make_task_repo(tmp_path)
+    tasks.create_task(task_id="TASK-CLAUDE-APPROVED", repo_path=str(repo_path))
+    tasks.mark_acked(task_id="TASK-CLAUDE-APPROVED", session_id="session-rfr")
+    tasks.mark_ready_for_review(
+        task_id="TASK-CLAUDE-APPROVED",
+        terminal_source="executor",
+        terminal_receipt_json=terminal_receipt(
+            "TASK-CLAUDE-APPROVED",
+            status="COMMITTED",
+            payload={
+                "claimed_state": "ready_for_review",
+                "changed_files": [],
+                "scope_violations": [],
+                "raw_log_path": "/tmp/raw.log",
+                "receipt_path": "/tmp/receipt.json",
+                "validation_not_run": "read-only task",
+            },
+        ),
+    )
+    tasks.mark_approved(task_id="TASK-CLAUDE-APPROVED")
+
+    result = CliRunner().invoke(
+        app,
+        ["claude", "hook", "stop"],
+        input=hook_input(repo_path, event="Stop"),
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == ""
+
+
 def test_claude_stop_hook_blocks_approval_required_blocker(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"

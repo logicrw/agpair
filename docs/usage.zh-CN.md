@@ -169,7 +169,7 @@ agpair task start \
 - Codex 和 Claude Code 默认都优先走 AGPair 外部 executor。
 - Codex 主控默认抑制 AGPair 管理的外部 `codex`；先用 `claude-code`，再把 Codex 原生 subagent 作为 fallback / review。
 - Claude Code 主控默认抑制 AGPair 管理的外部 `claude-code`；先用 `codex`，再把 Claude Code 原生 subagent 作为 fallback / review。
-- `ready_for_review` 只是验收门槛，不是自动完成；主控仍要检查 receipt、diff 和测试证据。
+- `ready_for_review` 只是验收门槛，不是自动完成；主控仍要检查 receipt、diff 和测试证据，然后运行 `agpair task accept TASK_ID` 标记这个 receipt 已处理。
 
 本地 CLI 的 approval 模式可以通过环境变量调整：
 
@@ -304,7 +304,7 @@ agpair claude hook subagent-start
 - `session-start` 会给当前 repo 注入一段很短的 AGPair 提示上下文，提醒主控优先用外部 executor。
 - `precompact` 只会在 AGPair 任务处于 `acked` 或 `evidence_ready` 时阻止 compact；其他可见状态可能仍显示在 status line，但不会因此拦截 compact。
 - `user-prompt-submit` 注入 external-first 路由上下文。
-- `stop` 只在 `ready_for_review`、`approval_required` 等需要主控决策的状态阻止过早结束。
+- `stop` 只在未接受的 `ready_for_review`、`approval_required` 等需要主控决策的状态阻止过早结束。
 - `subagent-start` 只做 advisory；Claude Code 原生 subagent 仍是 fallback / review 资源。
 - 默认**不**提供 `InstructionsLoaded` 提示 hook，因为 Claude Code 官方把这个事件定义为 observability-only，不能可靠地做上下文提醒。
 - 默认**不**提供 `WorktreeCreate` hook，因为这个 hook 会完全替换 Claude Code 内建的 git worktree 行为，默认启用太重。
@@ -321,7 +321,7 @@ agpair codex config --install --scope project --repo-path "$REPO"
 AGPair 管理的 hooks：
 
 - `UserPromptSubmit`：注入简短 external-first 上下文。
-- `Stop`：只在 `ready_for_review`、`approval_required` 等需要 Codex 决策的状态阻止过早结束。
+- `Stop`：只在未接受的 `ready_for_review`、`approval_required` 等需要 Codex 决策的状态阻止过早结束。
 - `SubagentStart`：只给 advisory context；Codex native subagents 仍是 fallback / review 资源。
 
 异步任务使用低噪等待：

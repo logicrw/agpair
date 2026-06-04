@@ -1349,6 +1349,67 @@ def test_task_logs_filters_noise_by_default(tmp_path: Path, monkeypatch) -> None
     assert "created" in events_all
 
 
+def test_task_accept_marks_terminal_task_approved(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    tasks = make_task_repo(tmp_path)
+    journal = make_journal_repo(tmp_path)
+    tasks.create_task(task_id="TASK-ACCEPT", repo_path="/tmp/repo", executor_backend="antigravity-cli")
+    tasks.mark_acked(task_id="TASK-ACCEPT", session_id="session-accept")
+    tasks.mark_ready_for_review(
+        task_id="TASK-ACCEPT",
+        terminal_source="daemon",
+        terminal_receipt_json=json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "TASK-ACCEPT",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "EVIDENCE_PACK",
+                "summary": "Ready for review",
+                "payload": {
+                    "changed_files": [],
+                    "scope_violations": [],
+                    "raw_log_path": "/tmp/stdout.log",
+                    "receipt_path": "/tmp/receipt.json",
+                    "validation_not_run": "read-only task",
+                },
+            }
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["task", "accept", "TASK-ACCEPT", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["phase"] == "ready_for_review"
+    assert payload["is_approved"] is True
+    assert tasks.get_task("TASK-ACCEPT").is_approved is True
+    assert journal.tail("TASK-ACCEPT", limit=1)[0].event == "accepted"
+
+    second = CliRunner().invoke(app, ["task", "accept", "TASK-ACCEPT", "--json"])
+
+    assert second.exit_code == 0
+    assert json.loads(second.stdout)["is_approved"] is True
+    accepted_events = [row for row in journal.tail("TASK-ACCEPT", limit=10) if row.event == "accepted"]
+    assert len(accepted_events) == 1
+
+
+def test_task_accept_rejects_non_terminal_task(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    tasks = make_task_repo(tmp_path)
+    tasks.create_task(task_id="TASK-ACKED", repo_path="/tmp/repo", executor_backend="antigravity-cli")
+    tasks.mark_acked(task_id="TASK-ACKED", session_id="session-acked")
+
+    result = CliRunner().invoke(app, ["task", "accept", "TASK-ACKED", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"] == "task_not_ready_for_acceptance"
+    assert tasks.get_task("TASK-ACKED").is_approved is False
+
+
 def test_task_start_rejects_missing_sections(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     runner = CliRunner()
