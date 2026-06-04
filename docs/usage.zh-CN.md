@@ -173,10 +173,11 @@ agpair task start \
 
 本地 CLI 的 approval 模式可以通过环境变量调整：
 
-- `AGPAIR_ANTIGRAVITY_CLI_BIN=/absolute/path/to/antigravity`
+- `AGPAIR_ANTIGRAVITY_CLI_BIN=/absolute/path/to/agy`
   旧别名：`AGPAIR_ANTIGRAVITY_CLI`
-- `AGPAIR_ANTIGRAVITY_APPROVAL_MODE=default|auto_edit|yolo`
+- `AGPAIR_ANTIGRAVITY_APPROVAL_MODE=default|yolo`
   默认：`yolo`
+- `AGPAIR_ANTIGRAVITY_PRINT_TIMEOUT=30m0s`
 - `AGPAIR_GROK_CLI_BIN=/absolute/path/to/grok`
   旧别名：`AGPAIR_GROK_CLI`
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`

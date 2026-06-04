@@ -663,6 +663,46 @@ def test_task_start_marks_blocked_when_dispatch_fails(tmp_path: Path, monkeypatc
     assert payload["failure_context"]["recommended_next_action"] == "retry"
 
 
+def test_task_start_blocks_invalid_antigravity_cli_approval_mode_without_traceback(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_CLI_BIN", "/bin/echo")
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_APPROVAL_MODE", "auto_edit")
+    repo_path = make_repo_dir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--executor",
+            "antigravity-cli",
+            "--authorization-profile",
+            "local_readonly",
+            "--completion-policy",
+            "report",
+            "--body",
+            "Goal: inspect\nScope: repo\nRequired changes: none\nExit criteria: report",
+            "--task-id",
+            "TASK-BAD-AGY-MODE",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 1
+    combined_output = result.stdout + result.stderr
+    assert "Traceback" not in combined_output
+    assert "dispatch failed:" in combined_output
+    assert "auto_edit" in combined_output
+
+    task = make_task_repo(tmp_path).get_task("TASK-BAD-AGY-MODE")
+    assert task is not None
+    assert task.phase == "blocked"
+    assert task.stuck_reason is not None
+    assert "auto_edit" in task.stuck_reason
+
+
 def test_task_logs_fails_when_task_is_missing(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     result = CliRunner().invoke(app, ["task", "logs", "TASK-404"])
@@ -1340,6 +1380,43 @@ def test_task_start_accepts_valid_brief(tmp_path: Path, monkeypatch) -> None:
     valid_body = "Goal: A\nScope: B\nRequired changes: C\nExit criteria: D"
     result = runner.invoke(app, ["task", "start", "--repo-path", str(repo_path), "--body", valid_body, "--no-wait"])
     assert result.exit_code == 0
+
+
+def test_task_status_uses_stored_attempt_controller_for_effective_policy(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--controller",
+            "codex",
+            "--completion-policy",
+            "report",
+            "--authorization-profile",
+            "local_readonly",
+            "--body",
+            "Goal: A\nScope: B\nRequired changes: none\nExit criteria: report",
+            "--no-wait",
+        ],
+    )
+    assert result.exit_code == 0
+    task_id = result.stdout.strip().splitlines()[-1]
+
+    status = runner.invoke(app, ["task", "status", task_id, "--json"])
+
+    assert status.exit_code == 0
+    payload = json.loads(status.stdout)
+    assert payload["effective_task_policy"]["controller"] == "codex"
 
 
 

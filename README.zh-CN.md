@@ -93,6 +93,8 @@ agpair claude config
 agpair claude config --install --scope project --repo-path /path/to/repo
 ```
 
+MCP 是可选入口。AGPair 核心 CLI、skills 和 hooks 不依赖 MCP；`agpair-mcp` 是给支持 MCP 的客户端使用的 stdio 适配器，不是 HTTP 服务。
+
 AGPair 管理的 hook 是提示和护栏，AGPair 不可用时 fail open。安装器会保留无关本地设置，卸载时只移除 AGPair 自己管理的条目。
 
 ## 授权 Profile

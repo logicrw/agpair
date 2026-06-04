@@ -63,9 +63,8 @@ def test_dispatch_creates_default_isolated_worktree_and_records_execution_path(t
     state = json.loads((pathlib.Path(dispatch.session_id) / "state.json").read_text(encoding="utf-8"))
     assert state["repo_path"] == str(expected_worktree.resolve())
 
-    wrapper = pathlib.Path(dispatch.session_id) / "wrapper.sh"
-    content = wrapper.read_text(encoding="utf-8")
-    assert f"--repo {shlex_quote(str(expected_worktree.resolve()))}" in content
+    cmd_json = json.loads((pathlib.Path(dispatch.session_id) / "cmd.json").read_text(encoding="utf-8"))
+    assert cmd_json[cmd_json.index("--repo") + 1] == str(expected_worktree.resolve())
 
     _, kwargs = mock_popen.call_args
     assert kwargs["cwd"] == str(expected_worktree.resolve())
@@ -156,9 +155,3 @@ def test_dispatch_rejects_base_repo_as_isolated_worktree(tmp_path) -> None:
                 isolated_worktree=True,
                 worktree_boundary=str(repo_path),
             )
-
-
-def shlex_quote(text: str) -> str:
-    import shlex
-
-    return shlex.quote(text)

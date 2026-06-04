@@ -93,6 +93,8 @@ agpair claude config
 agpair claude config --install --scope project --repo-path /path/to/repo
 ```
 
+MCP is optional. AGPair's core CLI, skills, and hooks do not require MCP; `agpair-mcp` is a stdio MCP adapter for MCP-capable clients, not an HTTP service.
+
 The managed hooks are advisory and fail open when AGPair state is unavailable. They preserve unrelated local settings and remove only AGPair-managed entries on uninstall.
 
 ## Authorization Profiles

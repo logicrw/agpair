@@ -12,10 +12,12 @@ from agpair.executors.claude_code import ClaudeCodeExecutor
 from agpair.executors.codex import CodexExecutor
 from agpair.executors.gemini import GeminiExecutor
 from agpair.executors.grok_cli import GrokCLIExecutor
+from agpair.executors.policy import EXECUTOR_SPECS
 
 
 def test_default_executor_is_antigravity_cli() -> None:
     assert default_executor_id() == "antigravity-cli"
+    assert EXECUTOR_SPECS["antigravity-cli"].default_binary == "agy"
 
 
 def test_supported_executor_ids_exclude_gemini() -> None:

@@ -349,12 +349,13 @@ def auto_close_evidence_ready_tasks(
         if task.task_id in excluded:
             continue
 
-        # Use last_activity_at as the attempt-level time anchor (not created_at).
-        # last_activity_at is reset by apply_retry_dispatch() and mark_acked(),
-        # so it reflects when the CURRENT attempt started, not when the task
-        # was originally created. This prevents stale commits from attempt N-1
-        # from falsely closing attempt N.
-        commit_sha = detect_committed_task_in_repo(task.repo_path, task.task_id, since_iso=task.last_activity_at)
+        # Use the current attempt's start time as the repo-evidence anchor.
+        # terminal writers such as mark_evidence_ready() update last_activity_at
+        # after executor work, so using last_activity_at can miss a commit that
+        # actually landed during the current attempt.
+        attempt = tasks.current_attempt(task.task_id)
+        since_iso = attempt.started_at if attempt is not None else task.last_activity_at
+        commit_sha = detect_committed_task_in_repo(task.repo_path, task.task_id, since_iso=since_iso)
         if commit_sha is None:
             continue
 

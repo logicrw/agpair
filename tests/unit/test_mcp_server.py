@@ -869,10 +869,18 @@ class TestWorkflowMCPTools:
         repo_path = tmp_path / "repo"
         repo_path.mkdir()
 
-        started = mcp_server.agpair_start_workflow(_workflow_manifest(), repo_path=str(repo_path))
+        started = mcp_server.agpair_start_workflow(
+            _workflow_manifest(),
+            repo_path=str(repo_path),
+            wait=True,
+            timeout_seconds=0.0,
+        )
 
         workflow_id = started["workflow_id"]
         assert started["phase"] == "running"
+        assert started["waited"] is True
+        assert started["last_watch_event"]["event"] == "workflow_state_changed"
+        assert started["last_watch_event"]["workflow_id"] == workflow_id
         assert started["status_command"] == f"agpair workflow status {workflow_id} --json"
         assert started["watch_command"] == f"agpair workflow watch {workflow_id} --json"
         assert {node["node_id"]: node["phase"] for node in started["nodes"]} == {

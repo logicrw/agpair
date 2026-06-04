@@ -429,7 +429,7 @@ def agpair_start_workflow(
     from agpair.workflows.schema import validate_manifest
     from agpair.workflows.scheduler import TERMINAL_WORKFLOW_PHASES, WorkflowScheduler
     from agpair.workflows.store import WorkflowRepository
-    from agpair.workflows.watch import workflow_status_payload
+    from agpair.workflows.watch import workflow_event_payload, workflow_status_payload
 
     paths = _workflow_paths()
     manifest_payload = dict(manifest)
@@ -441,14 +441,22 @@ def agpair_start_workflow(
     scheduler = WorkflowScheduler(paths)
     tick_payload = scheduler.tick(workflow_id, repo_path=effective_repo_path)
     status = workflow_status_payload(paths, workflow_id)
+    last_watch_event: dict[str, Any] | None = None
     if wait:
+        last_watch_event = workflow_event_payload(paths, workflow_id)
+        cursor = str(last_watch_event.get("cursor") or "")
         deadline = monotonic() + timeout_seconds
-        while status.get("phase") not in TERMINAL_WORKFLOW_PHASES and monotonic() < deadline:
+        while last_watch_event.get("phase") not in TERMINAL_WORKFLOW_PHASES and monotonic() < deadline:
             scheduler.tick(workflow_id, repo_path=effective_repo_path)
-            status = workflow_status_payload(paths, workflow_id)
-            if status.get("phase") in TERMINAL_WORKFLOW_PHASES:
+            last_watch_event = workflow_event_payload(paths, workflow_id, previous_cursor=cursor)
+            cursor = str(last_watch_event.get("cursor") or cursor)
+            if last_watch_event.get("phase") in TERMINAL_WORKFLOW_PHASES:
                 break
             sleep(interval_seconds)
+        status = workflow_status_payload(paths, workflow_id)
+    status["waited"] = bool(wait)
+    if last_watch_event is not None:
+        status["last_watch_event"] = last_watch_event
     status["tick"] = tick_payload
     status["status_command"] = f"agpair workflow status {workflow_id} --json"
     status["watch_command"] = f"agpair workflow watch {workflow_id} --json"

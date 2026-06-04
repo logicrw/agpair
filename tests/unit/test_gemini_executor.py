@@ -1,5 +1,6 @@
 import pytest
 import subprocess
+import json
 from pathlib import Path
 
 from agpair.executors.gemini import GeminiExecutor
@@ -34,13 +35,13 @@ def test_gemini_executor_dispatch_command_construction(tmp_path):
         assert len(args) == 1
         wrapper_script_path = Path(args[0])
         assert wrapper_script_path.exists()
-        wrapper_content = wrapper_script_path.read_text(encoding="utf-8")
+        cmd_json = json.loads((wrapper_script_path.parent / "cmd.json").read_text(encoding="utf-8"))
         
         # Check flags we pulled from gemini --help
-        assert "gemini -y --output-format json -p" in wrapper_content
+        assert cmd_json[:5] == ["gemini", "-y", "--output-format", "json", "-p"]
         
         # Check that prompt (-p) is included
-        assert "do some work" in wrapper_content
+        assert "do some work" in cmd_json[-1]
 
 
 def test_gemini_executor_dispatch_uses_isolated_worktree_for_cwd(tmp_path):
@@ -68,9 +69,9 @@ def test_gemini_executor_dispatch_uses_isolated_worktree_for_cwd(tmp_path):
 
     wrapper_script_path = Path(mock_popen.call_args[0][0][0])
     assert wrapper_script_path.exists()
-    wrapper_content = wrapper_script_path.read_text(encoding="utf-8")
-    assert "gemini" in wrapper_content
-    assert "do isolated work" in wrapper_content
+    cmd_json = json.loads((wrapper_script_path.parent / "cmd.json").read_text(encoding="utf-8"))
+    assert cmd_json[0] == "gemini"
+    assert "do isolated work" in cmd_json[-1]
     assert dispatch_res.execution_repo_path == str(worktree_path.resolve())
     assert mock_popen.call_args.kwargs["cwd"] == str(worktree_path.resolve())
 

@@ -305,20 +305,55 @@ def _seed_evidence_ready_task(
     return paths, repo
 
 
+def _seed_acked_task(
+    tmp_path: Path,
+    task_id: str = "TASK-ACK-1",
+    repo_path: str = "/tmp/repo",
+) -> tuple[AppPaths, TaskRepository]:
+    """Create DB with a task whose current attempt is acked."""
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    repo = TaskRepository(paths.db_path)
+    repo.create_task(task_id=task_id, repo_path=repo_path)
+    repo.mark_acked(task_id=task_id, session_id="session-test")
+    return paths, repo
+
+
 def test_auto_close_transitions_eligible_task_to_ready_for_review(tmp_path: Path) -> None:
     """An evidence_ready task should be auto-closed when its repo has a matching commit."""
     from agpair.daemon.loop import auto_close_evidence_ready_tasks
 
     repo_dir = tmp_path / "repo"
     _init_git_repo(repo_dir)
+    paths, tasks = _seed_acked_task(tmp_path, "TASK-AC-1", str(repo_dir))
     _commit_with_message(repo_dir, "feat: TASK-AC-1 completed")
-
-    paths, tasks = _seed_evidence_ready_task(tmp_path, "TASK-AC-1", str(repo_dir))
+    tasks.mark_evidence_ready(task_id="TASK-AC-1")
 
     closed = auto_close_evidence_ready_tasks(paths)
     assert closed == 1
 
     task = tasks.get_task("TASK-AC-1")
+    assert task is not None
+    assert task.phase == "ready_for_review"
+
+
+def test_auto_close_uses_attempt_start_not_evidence_ready_timestamp(tmp_path: Path) -> None:
+    """A commit made after ack should still close even if evidence_ready is recorded later."""
+    from agpair.daemon.loop import auto_close_evidence_ready_tasks
+    import time
+
+    repo_dir = tmp_path / "repo"
+    _init_git_repo(repo_dir)
+    paths, tasks = _seed_acked_task(tmp_path, "TASK-LATE-EVIDENCE", str(repo_dir))
+
+    _commit_with_message(repo_dir, "feat: TASK-LATE-EVIDENCE completed")
+    time.sleep(2.0)
+    tasks.mark_evidence_ready(task_id="TASK-LATE-EVIDENCE")
+
+    closed = auto_close_evidence_ready_tasks(paths)
+    assert closed == 1
+
+    task = tasks.get_task("TASK-LATE-EVIDENCE")
     assert task is not None
     assert task.phase == "ready_for_review"
 
@@ -347,9 +382,9 @@ def test_auto_close_skips_excluded_task_ids(tmp_path: Path) -> None:
 
     repo_dir = tmp_path / "repo"
     _init_git_repo(repo_dir)
+    paths, tasks = _seed_acked_task(tmp_path, "TASK-SKIP-1", str(repo_dir))
     _commit_with_message(repo_dir, "feat: TASK-SKIP-1 completed")
-
-    paths, tasks = _seed_evidence_ready_task(tmp_path, "TASK-SKIP-1", str(repo_dir))
+    tasks.mark_evidence_ready(task_id="TASK-SKIP-1")
 
     closed = auto_close_evidence_ready_tasks(paths, skip_task_ids={"TASK-SKIP-1"})
     assert closed == 0
@@ -366,9 +401,9 @@ def test_auto_close_creates_journal_entry_with_commit_sha(tmp_path: Path) -> Non
 
     repo_dir = tmp_path / "repo"
     _init_git_repo(repo_dir)
+    paths, _tasks = _seed_acked_task(tmp_path, "TASK-JOURNAL-1", str(repo_dir))
     expected_sha = _commit_with_message(repo_dir, "feat: TASK-JOURNAL-1 completed")
-
-    paths, _tasks = _seed_evidence_ready_task(tmp_path, "TASK-JOURNAL-1", str(repo_dir))
+    _tasks.mark_evidence_ready(task_id="TASK-JOURNAL-1")
     auto_close_evidence_ready_tasks(paths)
 
     journal = JournalRepository(paths.db_path)

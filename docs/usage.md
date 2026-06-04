@@ -153,10 +153,11 @@ Recommended controller-side defaults:
 
 Local CLI approval modes can be adjusted with environment variables:
 
-- `AGPAIR_ANTIGRAVITY_CLI_BIN=/absolute/path/to/antigravity`
+- `AGPAIR_ANTIGRAVITY_CLI_BIN=/absolute/path/to/agy`
   Legacy alias: `AGPAIR_ANTIGRAVITY_CLI`
-- `AGPAIR_ANTIGRAVITY_APPROVAL_MODE=default|auto_edit|yolo`
+- `AGPAIR_ANTIGRAVITY_APPROVAL_MODE=default|yolo`
   Default: `yolo`
+- `AGPAIR_ANTIGRAVITY_PRINT_TIMEOUT=30m0s`
 - `AGPAIR_GROK_CLI_BIN=/absolute/path/to/grok`
   Legacy alias: `AGPAIR_GROK_CLI`
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`

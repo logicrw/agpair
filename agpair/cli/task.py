@@ -364,6 +364,18 @@ def _derive_antigravity_bridge_state(paths: AppPaths, task) -> dict:
     }
 
 
+def _controller_from_current_attempt(paths: AppPaths, task_id: str) -> str | None:
+    attempt = TaskRepository(paths.db_path).current_attempt(task_id)
+    if attempt is None or not attempt.effective_policy_json:
+        return None
+    try:
+        payload = json.loads(attempt.effective_policy_json)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    controller = payload.get("controller") if isinstance(payload, dict) else None
+    return controller if isinstance(controller, str) and controller.strip() else None
+
+
 def build_task_payload(paths: AppPaths, task) -> dict:
     derived_bridge_state = _derive_antigravity_bridge_state(paths, task)
     phase_detail = derived_bridge_state.get("phase_detail")
@@ -389,6 +401,7 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         requested_completion_policy=task.completion_policy,
         authorization_profile=task.authorization_profile,
         body=original_body,
+        controller=_controller_from_current_attempt(paths, task.task_id),
     )
     effective_safety = derive_effective_task_safety(effective_policy)
     artifact_paths, artifact_top_level = _artifact_payload(paths, task)
@@ -832,7 +845,7 @@ def start_task(
             authorization_profile=normalized_authorization_profile,
             authorization_summary=normalized_authorization_summary,
         )
-    except (subprocess.SubprocessError, FileNotFoundError, BusSendError, WorktreeProvisionError) as exc:
+    except (subprocess.SubprocessError, FileNotFoundError, BusSendError, WorktreeProvisionError, ValueError) as exc:
         reason = f"dispatch failed: {exc}"
         journal.append(final_task_id, "cli", "dispatch_failed", reason)
         tasks.mark_blocked(task_id=final_task_id, reason=reason)
@@ -1636,7 +1649,7 @@ def retry_task(
                 authorization_profile=next_authorization_profile,
                 authorization_summary=next_authorization_summary,
             )
-        except (subprocess.SubprocessError, FileNotFoundError, BusSendError, WorktreeProvisionError) as exc:
+        except (subprocess.SubprocessError, FileNotFoundError, BusSendError, WorktreeProvisionError, ValueError) as exc:
             reason = f"dispatch failed: {exc}"
             journal.append(task.task_id, "cli", "retry_failed", reason)
             typer.echo(reason, err=True)

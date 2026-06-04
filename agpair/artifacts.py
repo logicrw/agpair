@@ -62,7 +62,13 @@ def read_excerpt(path: str | Path | None, *, max_chars: int = 2000) -> str | Non
         return None
     if len(stripped) <= max_chars:
         return stripped
-    return stripped[: max_chars - 32] + "\n[... truncated by agpair ...]"
+    marker = "\n[... truncated by agpair ...]\n"
+    if max_chars <= len(marker) + 2:
+        return stripped[:max_chars]
+    content_budget = max_chars - len(marker)
+    head_budget = max(1, content_budget // 2)
+    tail_budget = max(1, content_budget - head_budget)
+    return stripped[:head_budget] + marker + stripped[-tail_budget:]
 
 
 def sha256_file(path: str | Path | None) -> str | None:

@@ -78,7 +78,7 @@ def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     _clear_disk_cache(tmp_path)
     for env_var, filename in (
-        ("AGPAIR_ANTIGRAVITY_CLI", "antigravity"),
+        ("AGPAIR_ANTIGRAVITY_CLI_BIN", "agy"),
         ("AGPAIR_GROK_CLI", "grok"),
         ("AGPAIR_CLAUDE_CODE_CLI", "claude"),
     ):
@@ -96,7 +96,8 @@ def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch
     assert health["antigravity-cli"]["available"] is True
     assert health["antigravity-cli"]["env_var"] == "AGPAIR_ANTIGRAVITY_CLI_BIN"
     assert "AGPAIR_ANTIGRAVITY_CLI" in health["antigravity-cli"]["env_aliases"]
-    assert health["antigravity-cli"]["configured_env_var"] == "AGPAIR_ANTIGRAVITY_CLI"
+    assert health["antigravity-cli"]["configured_env_var"] == "AGPAIR_ANTIGRAVITY_CLI_BIN"
+    assert health["antigravity-cli"]["binary"].endswith("/agy")
     assert health["grok-cli"]["available"] is True
     assert health["claude-code"]["available"] is True
     assert "codex" in health

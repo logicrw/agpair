@@ -65,15 +65,15 @@ def test_codex_executor_dispatch():
         assert len(cmd) == 1
         wrapper_script_path = pathlib.Path(cmd[0])
         assert wrapper_script_path.exists()
-        wrapper_content = wrapper_script_path.read_text(encoding="utf-8")
-        
-        assert "fake-codex exec" in wrapper_content
-        assert "--ephemeral" in wrapper_content
-        assert "--json" in wrapper_content
-        assert "--skip-git-repo-check" in wrapper_content
-        assert "-C" in wrapper_content
-        assert "last_msg.txt" in wrapper_content
-        assert "Do something" in wrapper_content
+        cmd_json = json.loads((wrapper_script_path.parent / "cmd.json").read_text(encoding="utf-8"))
+
+        assert cmd_json[:2] == ["fake-codex", "exec"]
+        assert "--ephemeral" in cmd_json
+        assert "--json" in cmd_json
+        assert "--skip-git-repo-check" in cmd_json
+        assert "-C" in cmd_json
+        assert "last_msg.txt" in " ".join(cmd_json)
+        assert "Do something" in cmd_json[-1]
         
         assert kwargs["cwd"] == "/fake/repo"
         assert kwargs["text"] is True
@@ -102,8 +102,8 @@ def test_codex_executor_dispatch_uses_isolated_worktree_for_command_and_cwd(tmp_
             worktree_boundary=str(worktree_path),
         )
 
-    wrapper_content = (pathlib.Path(dispatch_res.session_id) / "wrapper.sh").read_text(encoding="utf-8")
-    assert f"-C {worktree_path.resolve()}" in wrapper_content
+    cmd_json = json.loads((pathlib.Path(dispatch_res.session_id) / "cmd.json").read_text(encoding="utf-8"))
+    assert cmd_json[cmd_json.index("-C") + 1] == str(worktree_path.resolve())
 
     _, kwargs = mock_popen.call_args
     assert kwargs["cwd"] == str(worktree_path.resolve())

@@ -8,6 +8,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Callable
@@ -390,6 +391,9 @@ def _body_with_task_contract(
         f"Authorization profile: {normalized_profile}\n"
         f"{summary}\n\n"
         "Structured terminal receipt JSON requirements:\n"
+        "- Print the requested report or conclusion directly to stdout; do not only save it to an external file, local brain, or link.\n"
+        "- The final output line must be one single-line JSON terminal receipt object with schema_version, task_id, attempt_no, review_round, status, summary, and payload.\n"
+        "- For report-only tasks, include the report text in payload.report when possible.\n"
         "- When work is ready for controller verification, claim `ready_for_review` only with changed_files, validation or validation_not_run, scope_violations, raw_log_path, and receipt_path.\n"
         "- When blocked by missing permission, return blocker_type `approval_required` with requested_authorization_profile, requested_actions, authorization_delta, request_reason, risk_assessment, safe_to_retry, and raw_log_path.\n\n"
     )
@@ -447,16 +451,46 @@ class LocalCLIExecutor(ExecutorAdapter):
             temp_dir,
         )
 
+        cmd_json = temp_dir / "cmd.json"
+        runner_script = temp_dir / "runner.py"
         wrapper_script = temp_dir / "wrapper.sh"
-        cmd_str = " ".join(shlex.quote(str(x)) for x in cli_cmd)
-        
-        wrapper_script.write_text(f"""#!/bin/sh
-echo $$ > "{temp_dir}/pid.txt"
-{cmd_str} < /dev/null
-RC=$?
-echo $RC > "{temp_dir}/rc.txt"
-exit $RC
-""", encoding="utf-8")
+        cmd_json.write_text(json.dumps([str(item) for item in cli_cmd]), encoding="utf-8")
+        runner_script.write_text(
+            """#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+base_dir = pathlib.Path(__file__).resolve().parent
+rc = 1
+(base_dir / "pid.txt").write_text(f"{os.getpid()}\\n", encoding="utf-8")
+
+try:
+    cmd = json.loads((base_dir / "cmd.json").read_text(encoding="utf-8"))
+    rc = subprocess.run(cmd, stdin=subprocess.DEVNULL).returncode
+except FileNotFoundError:
+    binary = cmd[0] if "cmd" in locals() and cmd else "<unknown>"
+    print(f"{binary}: command not found", file=sys.stderr)
+    rc = 127
+except Exception as exc:
+    print(f"agpair local CLI runner failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+    rc = 1
+finally:
+    (base_dir / "rc.txt").write_text(f"{rc}\\n", encoding="utf-8")
+
+sys.exit(rc)
+""",
+            encoding="utf-8",
+        )
+        runner_script.chmod(0o755)
+        wrapper_script.write_text(
+            f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(runner_script))}\n",
+            encoding="utf-8",
+        )
         wrapper_script.chmod(0o755)
 
         state = {

@@ -38,10 +38,13 @@ def test_dispatch_injects_task_id_commit_requirement(tmp_path):
         )
 
     wrapper = Path(dispatch.session_id) / "wrapper.sh"
-    content = wrapper.read_text(encoding="utf-8")
-    assert "TASK-HINT-1" in content
-    assert "commit message" in content
-    assert "must include" in content
+    wrapper_content = wrapper.read_text(encoding="utf-8")
+    cmd = json.loads((Path(dispatch.session_id) / "cmd.json").read_text(encoding="utf-8"))
+    prompt = cmd[1]
+    assert "commit message" not in wrapper_content
+    assert "TASK-HINT-1" in prompt
+    assert "commit message" in prompt
+    assert "must include" in prompt
 
 
 def test_dispatch_injects_authorization_and_structured_receipt_contract(tmp_path):
@@ -62,12 +65,18 @@ def test_dispatch_injects_authorization_and_structured_receipt_contract(tmp_path
         )
 
     wrapper = Path(dispatch.session_id) / "wrapper.sh"
-    content = wrapper.read_text(encoding="utf-8")
-    assert "Authorization profile: local_readonly" in content
-    assert "Allowed actions: inspect files." in content
-    assert "Denied actions: edit files." in content
-    assert "Structured terminal receipt JSON requirements" in content
-    assert "ready_for_review" in content
+    wrapper_content = wrapper.read_text(encoding="utf-8")
+    cmd = json.loads((Path(dispatch.session_id) / "cmd.json").read_text(encoding="utf-8"))
+    prompt = cmd[1]
+    assert "Authorization profile: local_readonly" not in wrapper_content
+    assert "Authorization profile: local_readonly" in prompt
+    assert "Allowed actions: inspect files." in prompt
+    assert "Denied actions: edit files." in prompt
+    assert "Structured terminal receipt JSON requirements" in prompt
+    assert "ready_for_review" in prompt
+    assert "Print the requested report or conclusion directly to stdout" in prompt
+    assert "final output line must be one single-line JSON terminal receipt object" in prompt
+    assert "payload.report" in prompt
 
 
 def test_poll_persists_final_summary_to_state_json(tmp_path):

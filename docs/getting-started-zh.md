@@ -56,6 +56,8 @@ claude mcp add --transport stdio agpair -- agpair-mcp
 agpair claude config --install --scope project --repo-path /path/to/repo
 ```
 
+MCP 是可选入口。普通 AGPair 路由只需要 CLI、skills 和 hooks；`agpair-mcp` 是给支持 MCP 的客户端使用的 stdio 适配器，不是 HTTP 服务。
+
 AGPair 不可用时 hook 会 fail open。它们只是路由提示和结束护栏，不能替代主控验收。
 
 ## 4. 派发任务
