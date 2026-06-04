@@ -10,7 +10,7 @@ from agpair.models import ContinuationCapability
 class GrokCLIExecutor(LocalCLIExecutor):
     def __init__(self, grok_bin: str | None = None) -> None:
         super().__init__(
-            bin_path=grok_bin or os.environ.get("AGPAIR_GROK_CLI", "grok"),
+            bin_path=grok_bin or os.environ.get("AGPAIR_GROK_CLI_BIN") or os.environ.get("AGPAIR_GROK_CLI", "grok"),
             backend_id="grok-cli",
             build_cmd=self._build_grok_cmd,
         )

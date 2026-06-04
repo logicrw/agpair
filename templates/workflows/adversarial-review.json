@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "name": "adversarial-review",
+  "controller": "codex",
+  "authorization_profile": "local_readonly",
+  "completion_policy": "report",
+  "limits": {
+    "max_parallel_tasks": 2,
+    "max_child_tasks": 20,
+    "max_retries_per_node": 1,
+    "max_runtime_seconds": 14400,
+    "max_watch_events": 500
+  },
+  "nodes": [
+    {
+      "id": "review-implementation",
+      "kind": "task",
+      "role": "reviewer",
+      "body": "Goal: perform adversarial read-only review of implementation changes. Scope: read-only. Required changes: none. Exit criteria: identify correctness, safety, and test risks with file references.",
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report",
+      "depends_on": []
+    },
+    {
+      "id": "verify-claims",
+      "kind": "verification",
+      "role": "verifier",
+      "body": "Goal: verify review claims against durable artifacts and source references. Scope: read-only. Required changes: none. Exit criteria: pass/fail findings with evidence paths.",
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report",
+      "depends_on": ["review-implementation"]
+    },
+    {
+      "id": "gate",
+      "kind": "gate",
+      "role": "gate",
+      "depends_on": ["verify-claims"]
+    }
+  ]
+}

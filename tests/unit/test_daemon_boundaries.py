@@ -305,7 +305,7 @@ def _seed_evidence_ready_task(
     return paths, repo
 
 
-def test_auto_close_transitions_eligible_task_to_committed(tmp_path: Path) -> None:
+def test_auto_close_transitions_eligible_task_to_ready_for_review(tmp_path: Path) -> None:
     """An evidence_ready task should be auto-closed when its repo has a matching commit."""
     from agpair.daemon.loop import auto_close_evidence_ready_tasks
 
@@ -320,7 +320,7 @@ def test_auto_close_transitions_eligible_task_to_committed(tmp_path: Path) -> No
 
     task = tasks.get_task("TASK-AC-1")
     assert task is not None
-    assert task.phase == "committed"
+    assert task.phase == "ready_for_review"
 
 
 def test_auto_close_leaves_ineligible_task_alone(tmp_path: Path) -> None:
@@ -373,7 +373,7 @@ def test_auto_close_creates_journal_entry_with_commit_sha(tmp_path: Path) -> Non
 
     journal = JournalRepository(paths.db_path)
     entries = journal.tail("TASK-JOURNAL-1", limit=10)
-    auto_close_entries = [e for e in entries if e.event == "auto_committed_from_repo_evidence"]
+    auto_close_entries = [e for e in entries if e.event == "auto_ready_for_review_from_repo_evidence"]
     assert len(auto_close_entries) == 1
     entry = auto_close_entries[0]
     assert expected_sha in entry.body

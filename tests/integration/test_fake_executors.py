@@ -49,7 +49,7 @@ case "$MODE" in
     printf '{"schema_version":"1","task_id":"%s","attempt_no":1,"review_round":0,"status":"BLOCKED","summary":"Need expanded authorization","payload":{"blocker_type":"approval_required","recoverable":true,"suggested_action":"retry_with_expanded_authorization","authorization_profile":"local_readonly","requested_authorization_profile":"local_mutating","requested_actions":["edit files"],"authorization_delta":{"allow_file_edits":true},"request_reason":"Readonly profile cannot edit files.","risk_assessment":"Repo-local edits only.","safe_to_retry":true,"raw_log_path":"stderr.log"}}\n' "$TASK_ID"
     ;;
   malformed_json)
-    echo "{not-json"
+    printf '{"schema_version":"1","task_id":"%s","status":"COMMITTED","payload":' "$TASK_ID"
     ;;
   scope_violation)
     printf '{"schema_version":"1","task_id":"%s","attempt_no":1,"review_round":0,"status":"COMMITTED","summary":"Scope violated","payload":{"claimed_state":"ready_for_review","changed_files":["../outside.txt"],"validation_not_run":"fake executor smoke","scope_violations":["../outside.txt"],"raw_log_path":"stdout.log","receipt_path":"receipt.json"}}\n' "$TASK_ID"
@@ -87,7 +87,7 @@ def wait_for_executor_exit(task) -> None:
 def latest_terminal_event(paths: AppPaths, task_id: str):
     journal = JournalRepository(paths.db_path)
     for row in journal.tail(task_id, limit=20):
-        if row.event in {"committed", "blocked"}:
+        if row.event in {"ready_for_review", "committed", "blocked"}:
             return row
     raise AssertionError("terminal event not found")
 
@@ -118,13 +118,13 @@ def start_and_settle(paths: AppPaths, repo_path: pathlib.Path, task_id: str):
     return settled
 
 
-def test_fake_executor_success_reaches_committed_ready_for_review(tmp_path: pathlib.Path, monkeypatch) -> None:
+def test_fake_executor_success_reaches_ready_for_review(tmp_path: pathlib.Path, monkeypatch) -> None:
     paths, repo_path = setup_fake_run(tmp_path, monkeypatch)
     monkeypatch.setenv("AGPAIR_FAKE_EXECUTOR_MODE", "success")
 
     task = start_and_settle(paths, repo_path, "TASK-FAKE-SUCCESS")
 
-    assert task.phase == "committed"
+    assert task.phase == "ready_for_review"
     receipt = json.loads(latest_terminal_event(paths, "TASK-FAKE-SUCCESS").body)
     assert receipt["payload"]["claimed_state"] == "ready_for_review"
     assert receipt["payload"]["raw_log_path"].endswith("stdout.log")

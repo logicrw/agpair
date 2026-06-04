@@ -17,7 +17,7 @@ def _permission_args() -> list[str]:
 class ClaudeCodeExecutor(LocalCLIExecutor):
     def __init__(self, claude_bin: str | None = None) -> None:
         super().__init__(
-            bin_path=claude_bin or os.environ.get("AGPAIR_CLAUDE_CODE_CLI", "claude"),
+            bin_path=claude_bin or os.environ.get("AGPAIR_CLAUDE_CODE_BIN") or os.environ.get("AGPAIR_CLAUDE_CODE_CLI", "claude"),
             backend_id="claude-code",
             build_cmd=self._build_claude_cmd,
         )

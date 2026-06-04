@@ -135,22 +135,34 @@ def test_codex_stop_blocks_for_ready_for_review_receipt(tmp_path: Path, monkeypa
     journal = JournalRepository(paths.db_path)
     tasks.create_task(task_id="TASK-CODEX-RFR", repo_path=str(repo_path), executor_backend="antigravity-cli")
     tasks.mark_acked(task_id="TASK-CODEX-RFR", session_id="session-123")
-    tasks.mark_committed(task_id="TASK-CODEX-RFR")
+    receipt_body = json.dumps(
+        {
+            "schema_version": "1",
+            "task_id": "TASK-CODEX-RFR",
+            "attempt_no": 1,
+            "review_round": 0,
+            "status": "COMMITTED",
+            "summary": "Ready for review",
+            "payload": {
+                "claimed_state": "ready_for_review",
+                "changed_files": ["src/app.py"],
+                "scope_violations": [],
+                "raw_log_path": "/tmp/stdout.log",
+                "receipt_path": "/tmp/receipt.json",
+                "validation": ["pytest"],
+            },
+        }
+    )
+    tasks.mark_ready_for_review(
+        task_id="TASK-CODEX-RFR",
+        terminal_source="daemon",
+        terminal_receipt_json=receipt_body,
+    )
     journal.append(
         "TASK-CODEX-RFR",
         "daemon",
-        "committed",
-        json.dumps(
-            {
-                "schema_version": "1",
-                "task_id": "TASK-CODEX-RFR",
-                "attempt_no": 1,
-                "review_round": 0,
-                "status": "COMMITTED",
-                "summary": "Ready for review",
-                "payload": {"claimed_state": "ready_for_review", "raw_log_path": "/tmp/stdout.log"},
-            }
-        ),
+        "ready_for_review",
+        receipt_body,
     )
 
     result = CliRunner().invoke(app, ["codex", "hook", "stop"], input=hook_input(repo_path))

@@ -19,7 +19,7 @@ def _approval_args() -> list[str]:
 class AntigravityCLIExecutor(LocalCLIExecutor):
     def __init__(self, antigravity_bin: str | None = None) -> None:
         super().__init__(
-            bin_path=antigravity_bin or os.environ.get("AGPAIR_ANTIGRAVITY_CLI", "antigravity"),
+            bin_path=antigravity_bin or os.environ.get("AGPAIR_ANTIGRAVITY_CLI_BIN") or os.environ.get("AGPAIR_ANTIGRAVITY_CLI", "antigravity"),
             backend_id="antigravity-cli",
             build_cmd=self._build_antigravity_cmd,
         )

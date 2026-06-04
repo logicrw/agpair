@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "name": "repo-wide-review",
+  "controller": "codex",
+  "authorization_profile": "local_readonly",
+  "completion_policy": "report",
+  "limits": {
+    "max_parallel_tasks": 4,
+    "max_child_tasks": 20,
+    "max_retries_per_node": 1,
+    "max_runtime_seconds": 14400,
+    "max_watch_events": 500
+  },
+  "nodes": [
+    {
+      "id": "scan-routing",
+      "kind": "task",
+      "role": "explorer",
+      "body": "Goal: inspect executor routing and controller policy surfaces. Scope: read-only. Required changes: none. Exit criteria: report findings with file references.",
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report",
+      "depends_on": []
+    },
+    {
+      "id": "scan-storage",
+      "kind": "task",
+      "role": "explorer",
+      "body": "Goal: inspect storage migrations, attempts, artifacts, and workflow state. Scope: read-only. Required changes: none. Exit criteria: report findings with file references.",
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report",
+      "depends_on": []
+    },
+    {
+      "id": "synthesize",
+      "kind": "synthesis",
+      "role": "synthesizer",
+      "body": "Goal: combine the routing and storage findings into a repo-wide review summary. Scope: read-only. Required changes: none. Exit criteria: structured report with risks and durable evidence paths.",
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report",
+      "depends_on": ["scan-routing", "scan-storage"]
+    },
+    {
+      "id": "gate",
+      "kind": "gate",
+      "role": "gate",
+      "depends_on": ["synthesize"]
+    }
+  ]
+}

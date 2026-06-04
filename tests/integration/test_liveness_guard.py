@@ -46,8 +46,10 @@ def _make_paths(tmp_path: Path) -> AppPaths:
 def _seed_acked_task(tmp_path: Path, task_id: str = "TASK-LG1") -> TaskRepository:
     db_path = tmp_path / ".agpair" / "agpair.db"
     ensure_database(db_path)
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir(parents=True, exist_ok=True)
     repo = TaskRepository(db_path)
-    repo.create_task(task_id=task_id, repo_path="/tmp/repo")
+    repo.create_task(task_id=task_id, repo_path=str(repo_path))
     repo.mark_acked(task_id=task_id, session_id="session-live")
     return repo
 

@@ -153,8 +153,8 @@ agpair task start \
 
 - `antigravity-cli`：默认外部实现 executor
 - `grok-cli`：低成本外部候选 / 复核 executor
-- `claude-code`：外部 Claude Code executor
-- `codex`：Codex CLI executor
+- `claude-code`：AGPair 管理的外部 Claude Code CLI executor
+- `codex`：AGPair 管理的外部 Codex CLI executor
 
 `gemini_cli` 只保留历史任务可读性。新的 `task start` 和 `task retry` 都不会再派给 Gemini。
 
@@ -167,18 +167,24 @@ agpair task start \
 主控侧推荐默认值：
 
 - Codex 和 Claude Code 默认都优先走 AGPair 外部 executor。
-- Codex / Claude 原生 subagent 只作为 fallback / review 资源。
+- Codex 主控默认抑制 AGPair 管理的外部 `codex`；先用 `claude-code`，再把 Codex 原生 subagent 作为 fallback / review。
+- Claude Code 主控默认抑制 AGPair 管理的外部 `claude-code`；先用 `codex`，再把 Claude Code 原生 subagent 作为 fallback / review。
 - `ready_for_review` 只是验收门槛，不是自动完成；主控仍要检查 receipt、diff 和测试证据。
 
 本地 CLI 的 approval 模式可以通过环境变量调整：
 
-- `AGPAIR_ANTIGRAVITY_CLI=/absolute/path/to/antigravity`
+- `AGPAIR_ANTIGRAVITY_CLI_BIN=/absolute/path/to/antigravity`
+  旧别名：`AGPAIR_ANTIGRAVITY_CLI`
 - `AGPAIR_ANTIGRAVITY_APPROVAL_MODE=default|auto_edit|yolo`
   默认：`yolo`
-- `AGPAIR_GROK_CLI=/absolute/path/to/grok`
-- `AGPAIR_CLAUDE_CODE_CLI=/absolute/path/to/claude`
+- `AGPAIR_GROK_CLI_BIN=/absolute/path/to/grok`
+  旧别名：`AGPAIR_GROK_CLI`
+- `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
+  旧别名：`AGPAIR_CLAUDE_CODE_CLI`
 - `AGPAIR_CLAUDE_CODE_PERMISSION_MODE=<claude --permission-mode 支持的值>`
   默认：`bypassPermissions`
+- `AGPAIR_CODEX_BIN=/absolute/path/to/codex`
+  旧别名：`AGPAIR_CODEX_CLI`
 - `AGPAIR_CODEX_APPROVAL_MODE=default|full_auto|bypass_all`
   默认：`bypass_all`
 
@@ -388,7 +394,7 @@ agpair task wait TASK-001
 agpair task wait TASK-001 --timeout-seconds 600 --interval-seconds 10
 ```
 
-退出码 `0` 表示成功（`evidence_ready` / `committed`），`1` 表示失败（`blocked` / `stuck` / `abandoned` / 超时 / **watchdog**）。
+退出码 `0` 表示成功（`ready_for_review` / `evidence_ready` / `committed`），`1` 表示失败（`blocked` / `stuck` / `abandoned` / 超时 / **watchdog**）。
 
 现在对于“repo 里其实已经有 commit，但最终 terminal receipt 没回来”的部分 `evidence_ready` 任务，系统可以基于强 repo 证据自动收口。遇到这类情况时，优先查看 `task status --json` / `inspect --json`，而不是默认手动 `abandon`。
 
@@ -411,7 +417,26 @@ agpair task wait TASK-001 --timeout-seconds 600 --interval-seconds 10
 
 ---
 
-## 12. 失败姿态
+## 12. 工作流
+
+普通工作使用 `agpair task start`。高价值、多段、并行、对抗审查或长时间任务使用 `agpair workflow start`。
+
+```bash
+agpair workflow validate --file templates/workflows/fanout-synthesize.json
+agpair workflow start --file templates/workflows/fanout-synthesize.json --controller codex --repo-path /absolute/path/to/repo --json
+agpair workflow status WF-ABC123DEF456 --json
+agpair workflow watch WF-ABC123DEF456 --json --cursor '<cursor>'
+agpair workflow retry-node WF-ABC123DEF456 scan-routing --authorization-profile local_mutating
+agpair workflow cancel WF-ABC123DEF456 --reason 'operator requested'
+```
+
+工作流清单是声明式的。AGPair 会拒绝任意脚本字段，并派发普通 V1.1 子任务；子任务仍使用 durable artifacts、completion policies、结构化 receipt 和 controller-aware executor routing。
+
+Workflow `ready_for_review` 表示 AGPair 已生成 evidence pack 等待主控验收，不是最终用户侧完成。`workflow watch --json` 只输出低噪状态变化和 artifact 路径，不输出完整 raw logs。
+
+---
+
+## 13. 失败姿态
 
 `agpair` 故意偏保守：
 
@@ -423,7 +448,7 @@ agpair task wait TASK-001 --timeout-seconds 600 --interval-seconds 10
 
 ---
 
-## 13. 最推荐的命令顺序
+## 14. 最推荐的命令顺序
 
 对真实任务，建议顺序是：
 

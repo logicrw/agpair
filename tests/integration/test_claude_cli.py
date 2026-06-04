@@ -369,24 +369,29 @@ def test_claude_stop_hook_blocks_ready_for_review_terminal_receipt(tmp_path: Pat
     tasks = make_task_repo(tmp_path)
     tasks.create_task(task_id="TASK-CLAUDE-RFR", repo_path=str(repo_path))
     tasks.mark_acked(task_id="TASK-CLAUDE-RFR", session_id="session-rfr")
+    receipt_body = terminal_receipt(
+        "TASK-CLAUDE-RFR",
+        status="COMMITTED",
+        payload={
+            "claimed_state": "ready_for_review",
+            "changed_files": ["src/app.py"],
+            "scope_violations": [],
+            "raw_log_path": "/tmp/raw.log",
+            "receipt_path": "/tmp/receipt.json",
+            "validation": ["pytest"],
+        },
+    )
+    tasks.mark_ready_for_review(
+        task_id="TASK-CLAUDE-RFR",
+        terminal_source="executor",
+        terminal_receipt_json=receipt_body,
+    )
     JournalRepository(paths.db_path).append(
         "TASK-CLAUDE-RFR",
         "executor",
-        "committed",
-        terminal_receipt(
-            "TASK-CLAUDE-RFR",
-            status="COMMITTED",
-            payload={
-                "claimed_state": "ready_for_review",
-                "changed_files": ["src/app.py"],
-                "scope_violations": [],
-                "raw_log_path": "/tmp/raw.log",
-                "receipt_path": "/tmp/receipt.json",
-                "validation": ["pytest"],
-            },
-        ),
+        "ready_for_review",
+        receipt_body,
     )
-    tasks.mark_committed(task_id="TASK-CLAUDE-RFR")
 
     result = CliRunner().invoke(
         app,

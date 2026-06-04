@@ -15,8 +15,10 @@ AGPair 是给 Codex 和 Claude Code 使用的 external-agent-first 控制面。
 - 默认外部 executor：`antigravity-cli`
 - 低成本 challenger / backup：`grok-cli`
 - 质量升级：`claude-code`
-- 外部 Codex worker fallback：`codex`
+- 外部 Codex CLI worker fallback：`codex`
 - Codex / Claude Code 原生 subagent：只作为 fallback 或 review 资源
+
+路由是 controller-aware 的：Codex 主控默认不选择 AGPair 管理的外部 `codex`，Claude Code 主控默认不选择 AGPair 管理的外部 `claude-code`，除非明确使用 `--allow-self-executor`。
 
 新任务不再使用 Gemini。历史 `gemini_cli` 记录仍可检查或清理。
 
@@ -158,6 +160,7 @@ AGPair 不是语义控制器。规划、范围决策、review 和最终验证仍
 | --- | --- |
 | [新手教程](docs/getting-started-zh.md) | 最小安装和第一个任务 |
 | [命令参考](docs/usage.zh-CN.md) | 中文 CLI 参考 |
+| [工作流 V2](docs/workflows.zh-CN.md) | 声明式多任务工作流编排 |
 | [Claude Code 集成](docs/claude-code-integration.zh-CN.md) | Claude Code 配置和路由规则 |
 | [Getting Started](docs/getting-started.en.md) | English quick guide |
 | [Command Reference](docs/usage.md) | English CLI reference |

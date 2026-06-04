@@ -128,6 +128,130 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tasks ADD COLUMN authorization_summary TEXT")
         conn.commit()
 
+    # Migration 16: V1.1 attempts/artifacts, normalized terminal receipt, workflow links.
+    task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "terminal_receipt_json" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN terminal_receipt_json TEXT")
+        conn.commit()
+    for column in ("workflow_id", "workflow_node_id", "parent_task_id", "child_role"):
+        if column not in task_cols:
+            conn.execute(f"ALTER TABLE tasks ADD COLUMN {column} TEXT")
+            conn.commit()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS task_attempts (
+          task_id TEXT NOT NULL,
+          attempt_no INTEGER NOT NULL,
+          executor_backend TEXT,
+          authorization_profile TEXT NOT NULL DEFAULT 'local_mutating',
+          requested_completion_policy TEXT NOT NULL DEFAULT 'auto',
+          effective_policy_json TEXT,
+          executor_session_id TEXT,
+          phase TEXT NOT NULL DEFAULT 'new',
+          terminal_receipt_json TEXT,
+          terminal_source TEXT,
+          started_at TEXT NOT NULL,
+          finished_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (task_id, attempt_no)
+        );
+        CREATE TABLE IF NOT EXISTS task_artifacts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id TEXT NOT NULL,
+          attempt_no INTEGER NOT NULL,
+          artifact_type TEXT NOT NULL,
+          path TEXT NOT NULL,
+          size_bytes INTEGER,
+          sha256 TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(task_id, attempt_no, artifact_type)
+        );
+        CREATE TABLE IF NOT EXISTS workflows (
+          workflow_id TEXT PRIMARY KEY,
+          repo_path TEXT NOT NULL DEFAULT '',
+          name TEXT NOT NULL DEFAULT '',
+          controller TEXT NOT NULL DEFAULT 'generic',
+          phase TEXT NOT NULL DEFAULT 'new',
+          manifest_json TEXT NOT NULL,
+          limits_json TEXT NOT NULL DEFAULT '{}',
+          result_json TEXT,
+          evidence_path TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          cancelled_at TEXT,
+          stuck_reason TEXT,
+          error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS workflow_nodes (
+          workflow_id TEXT NOT NULL,
+          node_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          role TEXT,
+          phase TEXT NOT NULL DEFAULT 'pending',
+          depends_on TEXT,
+          depends_on_json TEXT NOT NULL DEFAULT '[]',
+          task_id TEXT,
+          body TEXT,
+          completion_policy TEXT NOT NULL DEFAULT 'auto',
+          requested_completion_policy TEXT NOT NULL DEFAULT 'auto',
+          effective_policy_json TEXT NOT NULL DEFAULT '{}',
+          authorization_profile TEXT NOT NULL DEFAULT 'local_mutating',
+          executor_backend TEXT,
+          attempt_no INTEGER NOT NULL DEFAULT 0,
+          max_retries INTEGER NOT NULL DEFAULT 0,
+          allow_partial INTEGER NOT NULL DEFAULT 0,
+          isolated_worktree INTEGER NOT NULL DEFAULT 0,
+          evidence_json TEXT,
+          result_json TEXT,
+          error TEXT,
+          last_error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          PRIMARY KEY (workflow_id, node_id)
+        );
+    """)
+    conn.commit()
+
+    # Migration 17: add V2 workflow columns to databases that already had early workflow tables.
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    if "workflows" in tables:
+        workflow_cols = {row[1] for row in conn.execute("PRAGMA table_info(workflows)").fetchall()}
+        workflow_defaults = {
+            "repo_path": "TEXT NOT NULL DEFAULT ''",
+            "limits_json": "TEXT NOT NULL DEFAULT '{}'",
+            "result_json": "TEXT",
+            "stuck_reason": "TEXT",
+        }
+        for column, ddl in workflow_defaults.items():
+            if column not in workflow_cols:
+                conn.execute(f"ALTER TABLE workflows ADD COLUMN {column} {ddl}")
+        conn.commit()
+    if "workflow_nodes" in tables:
+        node_cols = {row[1] for row in conn.execute("PRAGMA table_info(workflow_nodes)").fetchall()}
+        node_defaults = {
+            "depends_on_json": "TEXT NOT NULL DEFAULT '[]'",
+            "requested_completion_policy": "TEXT NOT NULL DEFAULT 'auto'",
+            "effective_policy_json": "TEXT NOT NULL DEFAULT '{}'",
+            "attempt_no": "INTEGER NOT NULL DEFAULT 0",
+            "max_retries": "INTEGER NOT NULL DEFAULT 0",
+            "allow_partial": "INTEGER NOT NULL DEFAULT 0",
+            "isolated_worktree": "INTEGER NOT NULL DEFAULT 0",
+            "result_json": "TEXT",
+            "last_error": "TEXT",
+        }
+        for column, ddl in node_defaults.items():
+            if column not in node_cols:
+                conn.execute(f"ALTER TABLE workflow_nodes ADD COLUMN {column} {ddl}")
+        conn.execute("UPDATE workflow_nodes SET depends_on_json=COALESCE(depends_on_json, depends_on, '[]')")
+        conn.execute("UPDATE workflow_nodes SET requested_completion_policy=COALESCE(requested_completion_policy, completion_policy, 'auto')")
+        conn.commit()
+
 
 def _configure_connection(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA journal_mode=WAL")

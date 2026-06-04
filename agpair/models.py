@@ -83,12 +83,46 @@ class TaskRecord:
     env_vars: str | None = None
     worktree_boundary: str | None = None
     spotlight_testing: bool = False
-    completion_policy: str = "direct_commit"
+    completion_policy: str = "auto"
     terminal_source: str | None = None
+    terminal_receipt_json: str | None = None
     is_approved: bool = False
     authorization_profile: str = "local_mutating"
     authorization_summary: str | None = None
     executor_session_id: str | None = None
+    workflow_id: str | None = None
+    workflow_node_id: str | None = None
+    parent_task_id: str | None = None
+    child_role: str | None = None
+
+
+@dataclass(frozen=True)
+class TaskAttemptRecord:
+    task_id: str
+    attempt_no: int
+    executor_backend: str | None
+    authorization_profile: str
+    requested_completion_policy: str
+    effective_policy_json: str | None
+    executor_session_id: str | None
+    phase: str
+    terminal_receipt_json: str | None
+    terminal_source: str | None
+    started_at: str
+    finished_at: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class TaskArtifactRecord:
+    task_id: str
+    attempt_no: int
+    artifact_type: str
+    path: str
+    size_bytes: int | None
+    sha256: str | None
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -114,7 +148,11 @@ class WaiterRecord:
 
 
 TERMINAL_PHASES: frozenset[str] = frozenset(
-    ("evidence_ready", "committed", "blocked", "stuck", "abandoned")
+    ("ready_for_review", "evidence_ready", "committed", "blocked", "stuck", "abandoned")
+)
+
+SUCCESS_REVIEW_PHASES: frozenset[str] = frozenset(
+    ("ready_for_review", "evidence_ready", "committed")
 )
 
 
@@ -132,8 +170,9 @@ def a2a_state_hint_from_phase(phase: str, blocker_type: str | None = None) -> st
         "provider_consumed_no_ack": "working",
         "running_without_receipt": "working",
         "acked": "working",
+        "ready_for_review": "input-required",
         "evidence_ready": "input-required",
-        "committed": "completed",
+        "committed": "input-required",
         "blocked": "failed",
         "stuck": "failed",
         "abandoned": "canceled",

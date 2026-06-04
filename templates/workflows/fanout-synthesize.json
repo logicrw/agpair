@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "name": "fanout-synthesize",
+  "controller": "codex",
+  "authorization_profile": "local_readonly",
+  "completion_policy": "report",
+  "limits": {
+    "max_parallel_tasks": 4,
+    "max_child_tasks": 20,
+    "max_retries_per_node": 1,
+    "max_runtime_seconds": 14400,
+    "max_watch_events": 500
+  },
+  "nodes": [
+    {
+      "id": "scan-api",
+      "kind": "task",
+      "role": "explorer",
+      "body": "Goal: inspect public API surfaces. Scope: read-only. Required changes: none. Exit criteria: report key findings with file references.",
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report",
+      "depends_on": []
+    },
+    {
+      "id": "scan-tests",
+      "kind": "task",
+      "role": "explorer",
+      "body": "Goal: inspect test coverage and gaps. Scope: read-only. Required changes: none. Exit criteria: report findings with file references.",
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report",
+      "depends_on": []
+    },
+    {
+      "id": "synthesize",
+      "kind": "synthesis",
+      "role": "synthesizer",
+      "body": "Goal: synthesize findings from dependency nodes. Scope: read-only. Required changes: none. Exit criteria: concise report with risks, evidence paths, and recommended next steps.",
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report",
+      "depends_on": ["scan-api", "scan-tests"]
+    },
+    {
+      "id": "gate",
+      "kind": "gate",
+      "role": "gate",
+      "depends_on": ["synthesize"]
+    }
+  ]
+}

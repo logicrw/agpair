@@ -80,7 +80,7 @@ def test_poll_persists_final_summary_to_state_json(tmp_path):
 
     assert state is not None
     assert state.is_done is True
-    assert state.receipt["status"] == "COMMITTED"
+    assert state.receipt["status"] == "EVIDENCE_PACK"
     assert state.receipt["summary"] == "All done."
 
     persisted = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
@@ -109,7 +109,7 @@ def test_poll_persists_error_summary_to_state_json(tmp_path):
     assert state.receipt["payload"]["returncode"] == 7
 
 
-def test_poll_blocks_success_exit_without_commit_when_commit_evidence_available(tmp_path):
+def test_poll_returns_evidence_pack_for_success_exit_without_commit_when_commit_evidence_available(tmp_path):
     executor = DummyLocalCLIExecutor()
     (tmp_path / "state.json").write_text(
         json.dumps(
@@ -145,18 +145,17 @@ def test_poll_blocks_success_exit_without_commit_when_commit_evidence_available(
 
     assert state is not None
     assert state.is_done is True
-    assert state.receipt["status"] == "BLOCKED"
-    assert state.receipt["summary"] == "Process exited successfully without committing"
-    assert state.receipt["payload"]["blocker_type"] == "missing_commit"
+    assert state.receipt["status"] == "EVIDENCE_PACK"
+    assert state.receipt["summary"] == "No changes needed."
     assert state.receipt["payload"]["exit_code"] == 0
     assert state.receipt["payload"]["returncode"] == 0
 
     persisted = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
-    assert persisted["final_summary"] is None
-    assert persisted["error_summary"] == "Process exited successfully without committing"
+    assert persisted["final_summary"] == "No changes needed."
+    assert persisted["error_summary"] is None
 
 
-def test_poll_blocks_success_exit_without_commit_in_repo_without_baseline_head(tmp_path):
+def test_poll_returns_evidence_pack_for_success_exit_without_commit_in_repo_without_baseline_head(tmp_path):
     executor = DummyLocalCLIExecutor()
     (tmp_path / "state.json").write_text(
         json.dumps(
@@ -191,8 +190,8 @@ def test_poll_blocks_success_exit_without_commit_in_repo_without_baseline_head(t
 
     assert state is not None
     assert state.is_done is True
-    assert state.receipt["status"] == "BLOCKED"
-    assert state.receipt["payload"]["blocker_type"] == "missing_commit"
+    assert state.receipt["status"] == "EVIDENCE_PACK"
+    assert state.receipt["summary"] == "No changes needed."
 
 
 def test_poll_accepts_first_commit_in_repo_without_baseline_head_when_task_id_matches(tmp_path):

@@ -643,6 +643,26 @@ exit $RC
                     return receipt
         return None
 
+    def _malformed_structured_receipt_candidate(self, temp_dir: pathlib.Path) -> str | None:
+        for log_name in ("stdout.log", "stderr.log"):
+            log_path = temp_dir / log_name
+            if not log_path.exists():
+                continue
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            for line in reversed(lines):
+                candidate = line.strip()
+                if not candidate:
+                    continue
+                if candidate.startswith("{") and (
+                    "schema_version" in candidate
+                    or "claimed_state" in candidate
+                    or "blocker_type" in candidate
+                    or '"status"' in candidate
+                ):
+                    return candidate[:500]
+                break
+        return None
+
     def _receipt_from_structured_log(
         self,
         *,
@@ -653,10 +673,29 @@ exit $RC
     ) -> tuple[bool, dict] | None:
         structured = self._structured_receipt_from_logs(temp_dir, task_id)
         if structured is None:
+            malformed_candidate = self._malformed_structured_receipt_candidate(temp_dir)
+            if malformed_candidate is not None:
+                payload = {
+                    "blocker_type": "validation_failure",
+                    "message": "Terminal receipt looked like JSON but could not be parsed.",
+                    "malformed_receipt_excerpt": malformed_candidate,
+                    **self._raw_log_payload(temp_dir),
+                    "receipt_path": str(temp_dir / "receipt.json"),
+                }
+                state["final_summary"] = None
+                state["error_summary"] = payload["message"]
+                return True, self._make_receipt(
+                    task_id,
+                    attempt_no,
+                    "BLOCKED",
+                    payload["message"],
+                    payload,
+                )
             return None
         payload = structured.payload.copy()
         payload.setdefault("raw_log_path", str(temp_dir / "stdout.log"))
         payload.setdefault("stderr_log_path", str(temp_dir / "stderr.log"))
+        payload.setdefault("receipt_path", str(temp_dir / "receipt.json"))
         validation = validate_terminal_receipt_payload(structured.status, payload)
         scope_violations = payload.get("scope_violations")
         if (
@@ -765,26 +804,50 @@ exit $RC
                 if has_committed:
                     state["final_summary"] = summary
                     state["error_summary"] = None
-                    return True, self._make_receipt(task_id, attempt_no, "COMMITTED", summary, {"exit_code": 0, "events_count": events_count})
-                if state.get("repo_path"):
-                    blocked_summary = "Process exited successfully without committing"
-                    state["final_summary"] = None
-                    state["error_summary"] = blocked_summary
-                    return True, self._make_receipt(
-                        task_id,
-                        attempt_no,
-                        "BLOCKED",
-                        blocked_summary,
-                        {"exit_code": 0, "blocker_type": "missing_commit", "events_count": events_count},
-                    )
+                    payload = {
+                        "exit_code": 0,
+                        "events_count": events_count,
+                        "commit_ref": state.get("current_head"),
+                        "changed_files": [],
+                        "scope_violations": [],
+                        "validation_not_run": "executor did not provide validation details",
+                        **self._raw_log_payload(temp_dir),
+                        "receipt_path": str(temp_dir / "receipt.json"),
+                    }
+                    return True, self._make_receipt(task_id, attempt_no, "COMMITTED", summary, payload)
                 state["final_summary"] = summary
                 state["error_summary"] = None
-                return True, self._make_receipt(task_id, attempt_no, "COMMITTED", summary, {"exit_code": 0, "events_count": events_count, "verification": "unverified"})
+                return True, self._make_receipt(
+                    task_id,
+                    attempt_no,
+                    "EVIDENCE_PACK",
+                    summary,
+                    {
+                        "exit_code": 0,
+                        "events_count": events_count,
+                        "changed_files": [],
+                        "scope_violations": [],
+                        "validation_not_run": "executor exited successfully without a task-specific commit",
+                        **self._raw_log_payload(temp_dir),
+                        "receipt_path": str(temp_dir / "receipt.json"),
+                    },
+                )
             else:
                 summary = self._extract_error_summary(temp_dir)
                 state["final_summary"] = None
                 state["error_summary"] = summary or f"Exited with code {exit_code}"
-                return True, self._make_receipt(task_id, attempt_no, "BLOCKED", summary or f"Exited with code {exit_code}", {"exit_code": exit_code, "blocker_type": "execution_error"})
+                return True, self._make_receipt(
+                    task_id,
+                    attempt_no,
+                    "BLOCKED",
+                    summary or f"Exited with code {exit_code}",
+                    {
+                        "exit_code": exit_code,
+                        "blocker_type": "execution_error",
+                        **self._raw_log_payload(temp_dir),
+                        "receipt_path": str(temp_dir / "receipt.json"),
+                    },
+                )
 
         # ---- 情况 2：进程挂死但已有提交 ----
         if has_committed and commit_detected_at:
@@ -794,7 +857,19 @@ exit $RC
                 summary = self._extract_final_summary(temp_dir) or "Task committed (process hung post-commit, force killed)"
                 state["final_summary"] = summary
                 state["error_summary"] = None
-                return True, self._make_receipt(task_id, attempt_no, "COMMITTED", summary, {"exit_code": 0, "arbitration": "post_commit_hang"})
+                return True, self._make_receipt(
+                    task_id, attempt_no, "COMMITTED", summary,
+                    {
+                        "exit_code": 0,
+                        "arbitration": "post_commit_hang",
+                        "commit_ref": state.get("current_head"),
+                        "changed_files": [],
+                        "scope_violations": [],
+                        "validation_not_run": "post-commit hang arbitration",
+                        **self._raw_log_payload(temp_dir),
+                        "receipt_path": str(temp_dir / "receipt.json"),
+                    },
+                )
 
         # ---- 情况 3：进程已死但没有 exit_code（异常崩溃）----
         if not process_alive and exit_code is None:
@@ -802,12 +877,35 @@ exit $RC
                 summary = self._extract_final_summary(temp_dir) or "Process died after committing"
                 state["final_summary"] = summary
                 state["error_summary"] = None
-                return True, self._make_receipt(task_id, attempt_no, "COMMITTED", summary, {"exit_code": 0, "arbitration": "process_died_with_commit"})
+                return True, self._make_receipt(
+                    task_id, attempt_no, "COMMITTED", summary,
+                    {
+                        "exit_code": 0,
+                        "arbitration": "process_died_with_commit",
+                        "commit_ref": state.get("current_head"),
+                        "changed_files": [],
+                        "scope_violations": [],
+                        "validation_not_run": "process died after commit",
+                        **self._raw_log_payload(temp_dir),
+                        "receipt_path": str(temp_dir / "receipt.json"),
+                    },
+                )
             else:
                 summary = "Process died without committing"
                 state["final_summary"] = None
                 state["error_summary"] = summary
-                return True, self._make_receipt(task_id, attempt_no, "BLOCKED", summary, {"exit_code": -1, "blocker_type": "process_crash"})
+                return True, self._make_receipt(
+                    task_id,
+                    attempt_no,
+                    "BLOCKED",
+                    summary,
+                    {
+                        "exit_code": -1,
+                        "blocker_type": "process_crash",
+                        **self._raw_log_payload(temp_dir),
+                        "receipt_path": str(temp_dir / "receipt.json"),
+                    },
+                )
 
         # ---- 情况 4：进程还在跑，没有提交 ----
         return False, None

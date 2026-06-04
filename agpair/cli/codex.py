@@ -260,7 +260,7 @@ def hook_user_prompt_submit() -> None:
 def _latest_terminal_receipt(paths: AppPaths, task_id: str):
     journal = JournalRepository(paths.db_path)
     for row in journal.tail(task_id, limit=20):
-        if row.event not in {"committed", "blocked", "evidence_ready"}:
+        if row.event not in {"ready_for_review", "committed", "blocked", "evidence_ready"}:
             continue
         receipt = parse_structured_terminal_receipt(row.body, expected_task_id=task_id)
         if receipt is not None:
@@ -282,7 +282,7 @@ def hook_stop() -> None:
     if task is None:
         return
     receipt = _latest_terminal_receipt(paths, task.task_id)
-    if task.phase in {"committed", "evidence_ready"}:
+    if task.phase in {"ready_for_review", "committed", "evidence_ready"}:
         reason = (
             f"AGPair task {task.task_id} reached ready_for_review. Inspect git status, "
             "optional commit/diff, receipt, raw log paths, and required evidence before finalizing."

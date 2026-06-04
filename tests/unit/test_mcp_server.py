@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from agpair import mcp_server
+from agpair.config import AppPaths
+from agpair.executors.base import DispatchResult
+from agpair.storage.tasks import TaskRepository
 
 
 # ---------------------------------------------------------------------------
@@ -765,9 +769,19 @@ class TestListInspectDoctorTools:
             "task", "list", "--json", "--limit", "20", "--target", "my-repo",
         ], False)]
 
-    def test_inspect_repo_requires_locator(self) -> None:
-        with pytest.raises(RuntimeError, match="Either repo_path or target must be provided"):
-            mcp_server.agpair_inspect_repo()
+    def test_inspect_repo_allows_cli_git_root_detection(self, monkeypatch) -> None:
+        captured: list[tuple[list[str], bool]] = []
+
+        def fake_json(args, *, allow_nonzero=False):
+            captured.append((args, allow_nonzero))
+            return {"repo_path": "/auto/git/root", "task": None}
+
+        monkeypatch.setattr(mcp_server, "_run_cli_json", fake_json)
+
+        result = mcp_server.agpair_inspect_repo()
+
+        assert result == {"repo_path": "/auto/git/root", "task": None}
+        assert captured == [(["inspect", "--json"], False)]
 
     def test_inspect_repo_supports_task_id(self, monkeypatch, tmp_path) -> None:
         captured: list[tuple[list[str], bool]] = []
@@ -798,6 +812,128 @@ class TestListInspectDoctorTools:
         assert captured == [([
             "doctor", "--repo-path", str(tmp_path), "--fresh",
         ], False)]
+
+
+# ===================================================================
+# Workflow MCP tools
+# ===================================================================
+
+class _FakeWorkflowExecutor:
+    cancelled: list[tuple[str, str]] = []
+
+    def dispatch(self, **kwargs) -> DispatchResult:
+        return DispatchResult(session_id=f"session-{kwargs['task_id']}")
+
+    def cancel(self, *, task_id: str, session_id: str) -> None:
+        self.cancelled.append((task_id, session_id))
+
+
+def _workflow_manifest() -> dict:
+    return {
+        "version": 1,
+        "name": "mcp-workflow-test",
+        "controller": "codex",
+        "authorization_profile": "local_readonly",
+        "completion_policy": "report",
+        "nodes": [
+            {
+                "id": "scan",
+                "kind": "task",
+                "body": "Goal: scan. Required changes: none.",
+                "authorization_profile": "local_readonly",
+                "completion_policy": "report",
+                "depends_on": [],
+            },
+            {"id": "gate", "kind": "gate", "depends_on": ["scan"]},
+        ],
+    }
+
+
+def _patch_workflow_executor(monkeypatch) -> None:
+    _FakeWorkflowExecutor.cancelled = []
+    monkeypatch.setattr(
+        "agpair.workflows.scheduler.get_executor",
+        lambda *args, **kwargs: _FakeWorkflowExecutor(),
+    )
+    monkeypatch.setattr(
+        "agpair.workflows.control.get_executor",
+        lambda *args, **kwargs: _FakeWorkflowExecutor(),
+    )
+    monkeypatch.setattr("agpair.workflows.scheduler.is_local_cli_backend", lambda executor_id: True)
+
+
+class TestWorkflowMCPTools:
+    def test_start_get_watch_retry_and_cancel_workflow(self, monkeypatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+        _patch_workflow_executor(monkeypatch)
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+
+        started = mcp_server.agpair_start_workflow(_workflow_manifest(), repo_path=str(repo_path))
+
+        workflow_id = started["workflow_id"]
+        assert started["phase"] == "running"
+        assert started["status_command"] == f"agpair workflow status {workflow_id} --json"
+        assert started["watch_command"] == f"agpair workflow watch {workflow_id} --json"
+        assert {node["node_id"]: node["phase"] for node in started["nodes"]} == {
+            "gate": "pending",
+            "scan": "running",
+        }
+
+        fetched = mcp_server.agpair_get_workflow(workflow_id)
+        assert fetched["workflow_id"] == workflow_id
+        assert fetched["repo_path"] == str(repo_path.resolve())
+
+        event = mcp_server.agpair_watch_workflow(workflow_id)
+        assert event["event"] == "workflow_state_changed"
+        assert event["phase"] == "running"
+        unchanged = mcp_server.agpair_watch_workflow(workflow_id, cursor=event["cursor"])
+        assert unchanged["event"] == "unchanged"
+
+        paths = AppPaths.from_root(tmp_path / ".agpair")
+        tasks = TaskRepository(paths.db_path)
+        first_task_id = f"{workflow_id}-scan"
+        first_task = tasks.get_task(first_task_id)
+        assert first_task is not None
+        artifact = tmp_path / "stdout.log"
+        artifact.write_text("partial output\n", encoding="utf-8")
+        tasks.record_artifact(task_id=first_task_id, attempt_no=first_task.attempt_no, artifact_type="stdout", path=str(artifact))
+        tasks.mark_stuck(task_id=first_task_id, reason="no heartbeat")
+
+        retried = mcp_server.agpair_retry_workflow_node(
+            workflow_id,
+            "scan",
+            authorization_profile="local_test_heavy",
+            executor="grok-cli",
+            repo_path=str(repo_path),
+        )
+        scan = next(node for node in retried["nodes"] if node["node_id"] == "scan")
+        assert scan["attempt_no"] == 1
+        assert scan["phase"] == "running"
+        assert scan["task_id"] == f"{workflow_id}-scan-A1"
+        assert scan["authorization_profile"] == "local_test_heavy"
+        assert scan["executor_backend"] == "grok-cli"
+
+        cancelled = mcp_server.agpair_cancel_workflow(workflow_id, reason="mcp test")
+        assert cancelled["phase"] == "abandoned"
+        assert cancelled["error"] == "mcp test"
+        assert all(node["phase"] == "abandoned" for node in cancelled["nodes"])
+        assert tasks.get_task(first_task_id) is not None
+        assert artifact.exists()
+        assert tasks.get_task(f"{workflow_id}-scan-A1").phase == "abandoned"
+        assert _FakeWorkflowExecutor.cancelled == [
+            (f"{workflow_id}-scan-A1", f"session-{workflow_id}-scan-A1")
+        ]
+
+    def test_start_workflow_rejects_script_fields(self, monkeypatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        manifest = _workflow_manifest()
+        manifest["nodes"][0]["metadata"] = {"shell": "pytest"}
+
+        with pytest.raises(ValueError, match="metadata.shell"):
+            mcp_server.agpair_start_workflow(manifest, repo_path=str(repo_path))
 
 
 # ===================================================================

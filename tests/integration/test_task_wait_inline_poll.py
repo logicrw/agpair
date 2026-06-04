@@ -49,8 +49,8 @@ class FakeClock:
 # ---------------------------------------------------------------------------
 
 
-def test_wait_inline_poll_committed(tmp_path: Path, monkeypatch):
-    """Wait loop should poll executor and transition to committed on success."""
+def test_wait_inline_poll_ready_for_review_from_committed_receipt(tmp_path: Path, monkeypatch):
+    """Wait loop should poll executor and normalize valid committed receipts."""
     repo = _make_repo(tmp_path)
     repo.create_task(task_id="T-INLINE-1", repo_path="/r", executor_backend="gemini_cli")
     repo.mark_acked(task_id="T-INLINE-1", session_id="s-1")
@@ -65,7 +65,13 @@ def test_wait_inline_poll_committed(tmp_path: Path, monkeypatch):
             "review_round": 0,
             "status": "COMMITTED",
             "summary": "Inline poll success",
-            "payload": {"exit_code": 0}
+            "payload": {
+                "exit_code": 0,
+                "commit_sha": "abc1234",
+                "changed_files": ["file.txt"],
+                "scope_violations": [],
+                "validation": "pytest -q",
+            },
         }
     )
     
@@ -78,7 +84,7 @@ def test_wait_inline_poll_committed(tmp_path: Path, monkeypatch):
         paths.db_path, "T-INLINE-1", interval_seconds=1, timeout_seconds=30, _clock=clock,
     )
     
-    assert result.phase == "committed"
+    assert result.phase == "ready_for_review"
     assert result.timed_out is False
     mock_executor.poll.assert_called_once()
     mock_executor.cleanup.assert_called_once_with("s-1")
@@ -86,11 +92,11 @@ def test_wait_inline_poll_committed(tmp_path: Path, monkeypatch):
     # Check journal
     journal = JournalRepository(paths.db_path)
     entries = journal.tail("T-INLINE-1")
-    assert any(e.event == "inline_poll_closed" and e.source == "wait" for e in entries)
+    assert any(e.event == "ready_for_review" and e.source == "inline_poll" for e in entries)
     
     # Check task terminal_source and session_id cleared
     task = repo.get_task("T-INLINE-1")
-    assert task.phase == "committed"
+    assert task.phase == "ready_for_review"
     assert task.terminal_source == "inline_poll"
     assert task.antigravity_session_id is None
 
@@ -135,8 +141,8 @@ def test_wait_inline_poll_blocked(tmp_path: Path, monkeypatch):
     assert task.antigravity_session_id is None
 
 
-def test_wait_inline_poll_evidence_ready(tmp_path: Path, monkeypatch):
-    """Wait loop should poll executor and transition to evidence_ready when policy allows."""
+def test_wait_inline_poll_ready_for_review_from_evidence_pack(tmp_path: Path, monkeypatch):
+    """Wait loop should poll executor and normalize valid evidence packs."""
     repo = _make_repo(tmp_path)
     # Patch TaskRepository.create_task default to allow evidence_ready if needed,
     # but here we just manually update completion_policy if needed.
@@ -162,7 +168,12 @@ def test_wait_inline_poll_evidence_ready(tmp_path: Path, monkeypatch):
             "review_round": 0,
             "status": "EVIDENCE_PACK",
             "summary": "Ready for review",
-            "payload": {"evidence_path": "/tmp/evidence"}
+            "payload": {
+                "evidence_path": "/tmp/evidence",
+                "changed_files": [],
+                "scope_violations": [],
+                "validation": "pytest -q",
+            },
         }
     )
     
@@ -174,11 +185,11 @@ def test_wait_inline_poll_evidence_ready(tmp_path: Path, monkeypatch):
         paths.db_path, "T-INLINE-3", interval_seconds=1, timeout_seconds=30, _clock=clock,
     )
     
-    assert result.phase == "evidence_ready"
+    assert result.phase == "ready_for_review"
     assert result.timed_out is False
     
     task = repo.get_task("T-INLINE-3")
-    assert task.phase == "evidence_ready"
+    assert task.phase == "ready_for_review"
 
 
 def test_wait_inline_poll_skips_non_local(tmp_path: Path, monkeypatch):

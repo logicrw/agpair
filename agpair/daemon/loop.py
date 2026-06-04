@@ -9,7 +9,7 @@ import time
 
 from agpair.config import AppPaths
 from agpair.models import utcnow_iso
-from agpair.terminal_receipts import blocked_reason_from_receipt, parse_structured_terminal_receipt
+from agpair.terminal_receipts import blocked_reason_from_receipt, parse_structured_terminal_receipt, structured_receipt_to_dict
 from agpair.storage.db import connect, ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.receipts import ReceiptRepository
@@ -79,6 +79,7 @@ def run_once(
     scan_workspace_activity(paths, current=current)
     auto_advanced = auto_advance_dependent_tasks(paths, committed_task_ids=touched_task_ids)
     auto_closed = auto_close_evidence_ready_tasks(paths, skip_task_ids=touched_task_ids)
+    workflows_advanced = advance_workflows(paths)
     watchdog_count, watchdog_task_ids = mark_watchdog_tasks(
         paths,
         current=current,
@@ -99,6 +100,7 @@ def run_once(
         "processed_receipts": processed,
         "auto_advanced": auto_advanced,
         "auto_closed_from_repo": auto_closed,
+        "workflows_advanced": workflows_advanced,
         "watchdog_recommended": watchdog_count,
         "stuck_marked": stuck,
         "local_sessions_cleaned": cleaned_sessions,
@@ -106,6 +108,17 @@ def run_once(
     if bus_errors:
         health["bus_errors"] = bus_errors
     write_daemon_health(paths, health)
+
+
+def advance_workflows(paths: AppPaths) -> int:
+    """Advance V2 workflows through the durable scheduler."""
+    try:
+        from agpair.workflows.scheduler import WorkflowScheduler
+
+        return WorkflowScheduler(paths).advance_running_workflows()
+    except Exception as exc:
+        write_daemon_health(paths, {"running": True, "workflow_scheduler_error": str(exc), "updated_at": utcnow_iso()})
+        return 0
 
 
 def scan_workspace_activity(paths: AppPaths, *, current: datetime) -> None:
@@ -131,7 +144,8 @@ def _get_task_body_from_journal(journal: JournalRepository, task_id: str) -> str
 
 
 # Phases that mean a dependency will never be satisfied.
-_DEP_TERMINAL_FAILURE_PHASES = frozenset({"blocked", "abandoned"})
+_DEP_TERMINAL_FAILURE_PHASES = frozenset({"blocked", "abandoned", "stuck"})
+_DEP_SUCCESS_PHASES = frozenset({"ready_for_review", "evidence_ready", "committed"})
 
 
 def auto_advance_dependent_tasks(
@@ -179,7 +193,7 @@ def auto_advance_dependent_tasks(
                 permanently_failed.append((dep_id, dep_task.phase))
                 all_satisfied = False
                 break
-            if dep_task.phase != "committed":
+            if dep_task.phase not in _DEP_SUCCESS_PHASES:
                 all_satisfied = False
                 break
 
@@ -345,11 +359,25 @@ def auto_close_evidence_ready_tasks(
             continue
 
         try:
-            tasks.mark_committed(task_id=task.task_id, terminal_source="repo_evidence")
+            receipt_body = json.dumps({
+                "schema_version": "1",
+                "task_id": task.task_id,
+                "attempt_no": task.attempt_no,
+                "review_round": 0,
+                "status": messages.COMMITTED,
+                "summary": f"repo evidence found commit {commit_sha}",
+                "payload": {
+                    "commit_ref": commit_sha,
+                    "changed_files": [],
+                    "scope_violations": [],
+                    "validation_not_run": "auto-close from repo evidence",
+                },
+            }, ensure_ascii=False)
+            tasks.mark_ready_for_review(task_id=task.task_id, terminal_source="repo_evidence", terminal_receipt_json=receipt_body)
             journal.append(
                 task.task_id,
                 "daemon",
-                "auto_committed_from_repo_evidence",
+                "auto_ready_for_review_from_repo_evidence",
                 f"Auto-closed: git commit {commit_sha} in {task.repo_path} "
                 f"contains task_id {task.task_id}. "
                 f"Terminal receipt was never received but repo evidence confirms commit landed.",
@@ -470,27 +498,52 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 # do NOT change phase or last_activity_at.
                 tasks.record_heartbeat(task_id=task_id, heartbeat_at=to_iso(current))
                 journal.append(task_id, "daemon", "heartbeat", body or "RUNNING", classification="transient")
-            elif status == messages.EVIDENCE_PACK:
-                policy = current_task.completion_policy if current_task else "direct_commit"
-                if policy == "direct_commit":
-                    journal.append(task_id, "daemon", "policy_rejection", f"EVIDENCE_PACK not permitted for completion_policy={policy}. Terminal receipts must match policy.", "invalid")
+            elif status in {messages.EVIDENCE_PACK, messages.BLOCKED, messages.COMMITTED}:
+                if current_task is None:
+                    journal.append(task_id, "daemon", "receipt_ignored", f"task missing for terminal receipt {message_id}", "invalid")
                     continue
-                tasks.mark_evidence_ready(task_id=task_id, last_receipt_id=message_id)
-                journal.append(task_id, "daemon", "evidence_ready", journal_body)
-                if current_task and current_task.antigravity_session_id:
-                    _cleanup_local_cli_session(tasks, current_task)
-            elif status == messages.BLOCKED:
-                reason = clean_body or "blocked"
-                if structured_receipt is not None:
-                    reason = blocked_reason_from_receipt(structured_receipt, reason)
-                tasks.mark_blocked(task_id=task_id, reason=reason)
-                journal.append(task_id, "daemon", "blocked", journal_body)
-                if current_task and current_task.antigravity_session_id:
-                    _cleanup_local_cli_session(tasks, current_task)
-            elif status == messages.COMMITTED:
-                tasks.mark_committed(task_id=task_id, last_receipt_id=message_id, terminal_source="receipt")
-                journal.append(task_id, "daemon", "committed", journal_body)
-                if current_task and current_task.antigravity_session_id:
+                from agpair.task_terminal import finalize_executor_receipt
+
+                raw_receipt = structured_receipt_to_dict(structured_receipt) if structured_receipt is not None else None
+                if raw_receipt is None:
+                    try:
+                        parsed_json = json.loads(clean_body)
+                    except json.JSONDecodeError:
+                        parsed_json = None
+                    if isinstance(parsed_json, dict):
+                        raw_receipt = parsed_json
+                        payload = raw_receipt.get("payload")
+                        if not isinstance(payload, dict):
+                            payload = {}
+                            raw_receipt["payload"] = payload
+                        raw_receipt.setdefault("schema_version", "1")
+                        raw_receipt.setdefault("task_id", task_id)
+                        raw_receipt.setdefault("attempt_no", current_task.attempt_no)
+                        raw_receipt.setdefault("review_round", 0)
+                        raw_receipt.setdefault("status", status)
+                        raw_receipt.setdefault("summary", clean_body or status)
+                    else:
+                        raw_receipt = {
+                            "schema_version": "1",
+                            "task_id": task_id,
+                            "attempt_no": current_task.attempt_no,
+                            "review_round": 0,
+                            "status": status,
+                            "summary": clean_body or status,
+                            "payload": {"message": clean_body or status},
+                        }
+                original_body = _get_task_body_from_journal(journal, task_id)
+                finalize_executor_receipt(
+                    state_root=paths.root,
+                    tasks=tasks,
+                    journal=journal,
+                    task=current_task,
+                    raw_receipt=raw_receipt,
+                    source="daemon",
+                    message_id=message_id,
+                    original_body=original_body,
+                )
+                if current_task.antigravity_session_id:
                     _cleanup_local_cli_session(tasks, current_task)
 
             else:

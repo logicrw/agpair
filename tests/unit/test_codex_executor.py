@@ -155,7 +155,7 @@ def test_codex_executor_poll(tmp_path: pathlib.Path):
     assert state.is_done is True
     
     receipt = state.receipt
-    assert receipt["status"] == "COMMITTED"
+    assert receipt["status"] == "EVIDENCE_PACK"
     assert receipt["summary"] == "Hello World!"
     assert receipt["attempt_no"] == 1  # default
     assert receipt["payload"]["exit_code"] == 0

@@ -35,6 +35,12 @@ Do not use repeated Codex prompts as a polling loop. Use `agpair task watch <TAS
 
 Use Codex App thread automation only for very long tasks that should wake the same thread later.
 
+## Workflows
+
+Use `agpair workflow start` only for high-value multi-part, parallel, adversarial, or long-running work. Workflow manifests are declarative; AGPair rejects arbitrary script fields and creates normal V1.1 child tasks.
+
+Workflow `ready_for_review` means AGPair has an evidence pack for Codex verification, not final user-facing success.
+
 ## Blocked Retry
 
 ```bash
@@ -45,6 +51,10 @@ agpair task retry TASK-123 --from-block --authorization-profile local_mutating
 
 ## Executor Order
 
-Prefer `antigravity-cli`, then `grok-cli`, then `claude-code`, then `codex` as fallback. Do not use Gemini for new work.
+For Codex as controller, prefer `antigravity-cli`, then `grok-cli`, then `claude-code`.
+
+Do not request the AGPair-managed external `codex` executor by default; it is the Codex CLI worker and is suppressed for Codex controllers unless `--allow-self-executor` is explicitly justified. Use Codex native subagents as the fallback/review lane after external executors are unavailable, unsuitable, or not good enough.
+
+Do not use Gemini for new work.
 
 `ready_for_review`, `evidence_ready`, and `committed` mean the external executor claims completion. Codex still verifies the diff, receipt, raw evidence paths, and tests.

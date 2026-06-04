@@ -106,6 +106,9 @@ def _append_start_metadata_args(
     args: list[str],
     *,
     executor: str | None,
+    controller: str | None,
+    completion_policy: str | None,
+    allow_self_executor: bool,
     depends_on: list[str] | None,
     isolated_worktree: bool,
     setup_commands: list[str] | None,
@@ -120,6 +123,12 @@ def _append_start_metadata_args(
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
         args.extend(["--executor", normalized_executor])
+    if controller:
+        args.extend(["--controller", controller])
+    if completion_policy:
+        args.extend(["--completion-policy", completion_policy])
+    if allow_self_executor:
+        args.append("--allow-self-executor")
     if depends_on:
         args.extend(["--depends-on", json.dumps(depends_on, ensure_ascii=False)])
     if isolated_worktree:
@@ -135,6 +144,27 @@ def _append_start_metadata_args(
     if spotlight_testing:
         args.append("--spotlight-testing")
 
+
+
+def _workflow_paths():
+    from agpair.config import AppPaths
+    from agpair.storage.db import ensure_database
+
+    paths = AppPaths.default()
+    ensure_database(paths.db_path)
+    return paths
+
+
+def _resolve_workflow_repo_for_mcp(repo_path: str | None) -> str:
+    if repo_path:
+        _validate_repo_path(repo_path)
+        return str(Path(repo_path).expanduser().resolve())
+    from agpair.targets import detect_git_root
+
+    detected = detect_git_root()
+    if detected:
+        return detected
+    raise RuntimeError("repo_path is required when no current git root is detectable")
 
 def _extract_task_id(stdout: str) -> str:
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
@@ -216,9 +246,12 @@ def agpair_wait_task(
 
 
 @mcp.tool()
-def agpair_get_logs(task_id: str, limit: int = 20) -> dict[str, Any]:
-    """Fetch structured task logs."""
-    return _run_cli_json(["task", "logs", task_id, "--json", "--limit", str(limit)], allow_nonzero=True)
+def agpair_get_logs(task_id: str, limit: int = 20, include_executor_output: bool = False) -> dict[str, Any]:
+    """Fetch structured task logs, optionally with safe durable executor-output excerpts."""
+    args = ["task", "logs", task_id, "--json", "--limit", str(limit)]
+    if include_executor_output:
+        args.append("--include-executor-output")
+    return _run_cli_json(args, allow_nonzero=True)
 
 
 @mcp.tool()
@@ -229,6 +262,9 @@ def agpair_start_task(
     task_id: str | None = None,
     idempotency_key: str | None = None,
     executor: str | None = None,
+    controller: str | None = None,
+    completion_policy: str | None = None,
+    allow_self_executor: bool = False,
     depends_on: list[str] | None = None,
     isolated_worktree: bool = False,
     setup_commands: list[str] | None = None,
@@ -242,7 +278,7 @@ def agpair_start_task(
 ) -> dict[str, Any]:
     """Dispatch a new task via agpair and optionally wait for a terminal phase."""
     args = ["task", "start"]
-    _append_repo_locator_args(args, repo_path=repo_path, target=target, require_locator=True)
+    _append_repo_locator_args(args, repo_path=repo_path, target=target, require_locator=False)
     args.extend(["--body", body])
     if task_id:
         args.extend(["--task-id", task_id])
@@ -251,6 +287,9 @@ def agpair_start_task(
     _append_start_metadata_args(
         args,
         executor=executor,
+        controller=controller,
+        completion_policy=completion_policy,
+        allow_self_executor=allow_self_executor,
         depends_on=depends_on,
         isolated_worktree=isolated_worktree,
         setup_commands=setup_commands,
@@ -355,7 +394,7 @@ def agpair_inspect_repo(
 ) -> dict[str, Any]:
     """Inspect repo-level bridge health plus the most relevant task. Use this when you need repo readiness/context, not just a known task_id."""
     args = ["inspect", "--json"]
-    _append_repo_locator_args(args, repo_path=repo_path, target=target, require_locator=True)
+    _append_repo_locator_args(args, repo_path=repo_path, target=target, require_locator=False)
     if task_id:
         args.extend(["--task-id", task_id])
     return _run_cli_json(args)
@@ -373,6 +412,108 @@ def agpair_doctor(
     if fresh:
         args.append("--fresh")
     return _run_cli_json(args)
+
+
+@mcp.tool()
+def agpair_start_workflow(
+    manifest: dict[str, Any],
+    repo_path: str | None = None,
+    controller: str | None = None,
+    wait: bool = False,
+    interval_seconds: float = 2.0,
+    timeout_seconds: float = 3600.0,
+) -> dict[str, Any]:
+    """Start a validated declarative workflow manifest. Script fields are rejected by the shared validator."""
+    from time import monotonic, sleep
+
+    from agpair.workflows.schema import validate_manifest
+    from agpair.workflows.scheduler import TERMINAL_WORKFLOW_PHASES, WorkflowScheduler
+    from agpair.workflows.store import WorkflowRepository
+    from agpair.workflows.watch import workflow_status_payload
+
+    paths = _workflow_paths()
+    manifest_payload = dict(manifest)
+    if controller:
+        manifest_payload["controller"] = controller
+    effective_repo_path = _resolve_workflow_repo_for_mcp(repo_path or manifest_payload.get("repo_path"))
+    parsed = validate_manifest(manifest_payload, require_repo_path=True, repo_path=effective_repo_path)
+    workflow_id = WorkflowRepository(paths.db_path).create_workflow(parsed, repo_path=effective_repo_path)
+    scheduler = WorkflowScheduler(paths)
+    tick_payload = scheduler.tick(workflow_id, repo_path=effective_repo_path)
+    status = workflow_status_payload(paths, workflow_id)
+    if wait:
+        deadline = monotonic() + timeout_seconds
+        while status.get("phase") not in TERMINAL_WORKFLOW_PHASES and monotonic() < deadline:
+            scheduler.tick(workflow_id, repo_path=effective_repo_path)
+            status = workflow_status_payload(paths, workflow_id)
+            if status.get("phase") in TERMINAL_WORKFLOW_PHASES:
+                break
+            sleep(interval_seconds)
+    status["tick"] = tick_payload
+    status["status_command"] = f"agpair workflow status {workflow_id} --json"
+    status["watch_command"] = f"agpair workflow watch {workflow_id} --json"
+    return status
+
+
+@mcp.tool()
+def agpair_get_workflow(workflow_id: str) -> dict[str, Any]:
+    """Get workflow status with node states and durable artifact paths."""
+    from agpair.workflows.watch import workflow_status_payload
+
+    return workflow_status_payload(_workflow_paths(), workflow_id)
+
+
+@mcp.tool()
+def agpair_watch_workflow(workflow_id: str, cursor: str | None = None) -> dict[str, Any]:
+    """Return one low-noise workflow watch event or an unchanged cursor response."""
+    from agpair.workflows.watch import workflow_event_payload
+
+    return workflow_event_payload(_workflow_paths(), workflow_id, previous_cursor=cursor)
+
+
+@mcp.tool()
+def agpair_cancel_workflow(workflow_id: str, reason: str = "cancelled") -> dict[str, Any]:
+    """Abandon a workflow and active child tasks without deleting task rows or artifacts."""
+    from agpair.workflows.control import cancel_workflow
+
+    paths = _workflow_paths()
+    return cancel_workflow(paths, workflow_id, reason=reason)
+
+
+@mcp.tool()
+def agpair_retry_workflow_node(
+    workflow_id: str,
+    node_id: str,
+    authorization_profile: str | None = None,
+    executor: str | None = None,
+    repo_path: str | None = None,
+) -> dict[str, Any]:
+    """Reset one workflow node for a new child task attempt and run one scheduler tick."""
+    from agpair.models import validate_authorization_profile
+    from agpair.executors.routing import validate_supported_executor
+    from agpair.workflows.scheduler import WorkflowScheduler
+    from agpair.workflows.store import WorkflowRepository
+    from agpair.workflows.watch import workflow_status_payload
+
+    paths = _workflow_paths()
+    repo = WorkflowRepository(paths.db_path)
+    workflow = repo.require_workflow(workflow_id)
+    if authorization_profile:
+        authorization_profile = validate_authorization_profile(authorization_profile)
+    if executor:
+        executor = validate_supported_executor(executor)
+    repo.reset_node_for_retry(
+        workflow_id,
+        node_id,
+        authorization_profile=authorization_profile,
+        executor_backend=executor,
+        reason="mcp retry workflow node",
+    )
+    effective_repo_path = _resolve_workflow_repo_for_mcp(repo_path or workflow.repo_path)
+    tick_payload = WorkflowScheduler(paths).tick(workflow_id, repo_path=effective_repo_path)
+    status = workflow_status_payload(paths, workflow_id)
+    status["tick"] = tick_payload
+    return status
 
 
 # Seal the built-in registry so any external extensions or dynamic loads

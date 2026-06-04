@@ -36,12 +36,12 @@ from agpair.models import TERMINAL_PHASES  # noqa: E402
 
 #: Terminal phases for the approve command — evidence_ready is NOT terminal
 #: because approve starts from evidence_ready and waits for committed.
-APPROVE_TERMINAL_PHASES: frozenset[str] = TERMINAL_PHASES - {"evidence_ready"}
+APPROVE_TERMINAL_PHASES: frozenset[str] = TERMINAL_PHASES - {"evidence_ready", "ready_for_review"}
 
 #: Terminal phases considered *successful* for dispatch commands
 #: (start / continue / reject / retry).
 DISPATCH_SUCCESS_PHASES: frozenset[str] = frozenset(
-    {"evidence_ready", "committed"}
+    {"ready_for_review", "evidence_ready", "committed"}
 )
 
 #: Terminal phases considered *successful* for the approve command.
@@ -141,31 +141,27 @@ def _try_inline_poll(
 
         if state and state.is_done:
             receipt = state.receipt or {}
-            status = receipt.get("status", messages.BLOCKED)
             message_id = f"inline-{current_task.executor_backend}-{current_task.task_id}-{current_task.attempt_no}-done"
+            from agpair.config import AppPaths
+            from agpair.task_terminal import finalize_executor_receipt
 
-            # Parse for consistent journal formatting
-            structured = terminal_receipts.validate_structured_receipt_dict(receipt)
-            journal_body = json.dumps(receipt, ensure_ascii=False)
+            original_body = None
+            for row in journal.tail(current_task.task_id, limit=200):
+                if row.source == "cli" and row.event == "created":
+                    original_body = row.body
+                    break
+            finalize_executor_receipt(
+                state_root=AppPaths.default().root,
+                tasks=tasks,
+                journal=journal,
+                task=current_task,
+                raw_receipt=receipt,
+                source="inline_poll",
+                message_id=message_id,
+                original_body=original_body,
+            )
 
-            if status == messages.EVIDENCE_PACK:
-                tasks.mark_evidence_ready(task_id=current_task.task_id, last_receipt_id=message_id)
-                journal.append(current_task.task_id, "wait", "inline_poll_closed", journal_body)
-            elif status == messages.BLOCKED:
-                reason = receipt.get("summary") or receipt.get("message") or "blocked"
-                if structured:
-                    reason = terminal_receipts.blocked_reason_from_receipt(structured, reason)
-                tasks.mark_blocked(task_id=current_task.task_id, reason=reason)
-                journal.append(current_task.task_id, "wait", "inline_poll_closed", journal_body)
-            elif status == messages.COMMITTED:
-                tasks.mark_committed(
-                    task_id=current_task.task_id,
-                    last_receipt_id=message_id,
-                    terminal_source="inline_poll",
-                )
-                journal.append(current_task.task_id, "wait", "inline_poll_closed", journal_body)
-
-            # Cleanup artifacts immediately
+            # Cleanup transient executor directory only after durable artifacts are recorded.
             executor.cleanup(current_task.antigravity_session_id)
             tasks.clear_session_id(task_id=current_task.task_id)
 

@@ -34,12 +34,13 @@ def make_paths(tmp_path: Path) -> AppPaths:
     return AppPaths.from_root(tmp_path / ".agpair")
 
 
-def seed_task(tmp_path: Path, task_id: str = "TASK-1") -> AppPaths:
+def seed_task(tmp_path: Path, task_id: str = "TASK-1", completion_policy: str = "auto") -> AppPaths:
     paths = make_paths(tmp_path)
     ensure_database(paths.db_path)
     TaskRepository(paths.db_path).create_task(
         task_id=task_id, 
-        repo_path=str(tmp_path / "repo")
+        repo_path=str(tmp_path / "repo"),
+        completion_policy=completion_policy,
     )
     return paths
 
@@ -47,7 +48,7 @@ def seed_task(tmp_path: Path, task_id: str = "TASK-1") -> AppPaths:
 def test_direct_commit_policy_rejects_evidence_pack(tmp_path: Path) -> None:
     from agpair.daemon.loop import run_once
 
-    paths = seed_task(tmp_path)
+    paths = seed_task(tmp_path, completion_policy="direct_commit")
     repo = TaskRepository(paths.db_path)
     repo.mark_acked(task_id="TASK-1", session_id="session-123")
     
@@ -66,11 +67,17 @@ def test_direct_commit_policy_rejects_evidence_pack(tmp_path: Path) -> None:
 
     task = repo.get_task("TASK-1")
     assert task is not None
-    assert task.phase == "acked"
+    assert task.phase == "blocked"
+    assert task.completion_policy == "commit"
+    receipt = json.loads(task.terminal_receipt_json or "{}")
+    assert receipt["status"] == "BLOCKED"
+    assert receipt["payload"]["blocker_type"] == "validation_failure"
+    assert receipt["payload"]["claimed_status"] == "EVIDENCE_PACK"
     
     rows = JournalRepository(paths.db_path).tail("TASK-1", limit=1)
-    assert rows[0].event == "policy_rejection"
-    assert "EVIDENCE_PACK not permitted" in rows[0].body
+    assert rows[0].event == "blocked"
+    row_receipt = json.loads(rows[0].body)
+    assert row_receipt["payload"]["blocker_type"] == "validation_failure"
 
 
 def test_repo_evidence_fallback_direct_commit_evidence_ready(tmp_path: Path, monkeypatch) -> None:
@@ -88,7 +95,7 @@ def test_repo_evidence_fallback_direct_commit_evidence_ready(tmp_path: Path, mon
     assert closed_count == 1
     
     task = repo.get_task("TASK-1")
-    assert task.phase == "committed"
+    assert task.phase == "ready_for_review"
     assert task.terminal_source == "repo_evidence"
 
 
@@ -106,7 +113,7 @@ def test_repo_evidence_fallback_direct_commit_acked(tmp_path: Path, monkeypatch)
     assert closed_count == 1
     
     task = repo.get_task("TASK-1")
-    assert task.phase == "committed"
+    assert task.phase == "ready_for_review"
     assert task.terminal_source == "repo_evidence"
 
 

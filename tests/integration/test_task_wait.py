@@ -76,11 +76,11 @@ class FakeClock:
 
 
 def test_terminal_phases_contain_required_values():
-    assert TERMINAL_PHASES == {"evidence_ready", "blocked", "committed", "stuck", "abandoned"}
+    assert TERMINAL_PHASES == {"ready_for_review", "evidence_ready", "blocked", "committed", "stuck", "abandoned"}
 
 
 def test_dispatch_success_phases():
-    assert DISPATCH_SUCCESS_PHASES == {"evidence_ready", "committed"}
+    assert DISPATCH_SUCCESS_PHASES == {"ready_for_review", "evidence_ready", "committed"}
 
 
 def test_approve_success_phases():

@@ -17,7 +17,7 @@ def _approval_args() -> list[str]:
 class CodexExecutor(LocalCLIExecutor):
     def __init__(self, codex_bin: str | None = None) -> None:
         super().__init__(
-            bin_path=codex_bin or os.environ.get("AGPAIR_CODEX_CLI", "codex"),
+            bin_path=codex_bin or os.environ.get("AGPAIR_CODEX_BIN") or os.environ.get("AGPAIR_CODEX_CLI", "codex"),
             backend_id="codex",
             build_cmd=self._build_codex_cmd,
         )

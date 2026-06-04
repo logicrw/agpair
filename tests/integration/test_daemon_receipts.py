@@ -182,14 +182,15 @@ def test_daemon_ingests_structured_committed_receipt_preserves_payload(tmp_path:
             "review_round": 0,
             "status": "COMMITTED",
             "summary": "Committed cleanly",
-            "payload": {
-                "commit_sha": "abc1234",
-                "branch": "main",
-                "diff_stat": "1 file changed",
-                "changed_files": ["companion-extension/src/services/delegationReceiptWatcher.ts"],
-                "validation": "npm test",
-                "residual_risks": "none",
-            },
+                "payload": {
+                    "commit_sha": "abc1234",
+                    "branch": "main",
+                    "diff_stat": "1 file changed",
+                    "changed_files": ["companion-extension/src/services/delegationReceiptWatcher.ts"],
+                    "scope_violations": [],
+                    "validation": "npm test",
+                    "residual_risks": "none",
+                },
         }
     )
     bus = FakePullBus(
@@ -207,7 +208,7 @@ def test_daemon_ingests_structured_committed_receipt_preserves_payload(tmp_path:
 
     task = repo.get_task("TASK-1")
     assert task is not None
-    assert task.phase == "committed"
+    assert task.phase == "ready_for_review"
     rows = JournalRepository(paths.db_path).tail("TASK-1", limit=1)
     parsed = json.loads(rows[0].body)
     assert parsed["summary"] == "Committed cleanly"

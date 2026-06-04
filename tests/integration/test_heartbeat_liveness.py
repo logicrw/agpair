@@ -10,6 +10,7 @@ Covers:
 """
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import sqlite3
@@ -65,6 +66,25 @@ def seed_acked_task(tmp_path: Path, task_id: str = "TASK-HB1") -> AppPaths:
     repo.create_task(task_id=task_id, repo_path="/tmp/repo")
     repo.mark_acked(task_id=task_id, session_id="session-hb")
     return paths
+
+
+def committed_receipt_body(task_id: str = "TASK-HB1") -> str:
+    return json.dumps(
+        {
+            "schema_version": "1",
+            "task_id": task_id,
+            "attempt_no": 1,
+            "review_round": 0,
+            "status": "COMMITTED",
+            "summary": "done",
+            "payload": {
+                "commit_sha": "abc1234",
+                "changed_files": ["file.txt"],
+                "scope_violations": [],
+                "validation": "pytest -q",
+            },
+        }
+    )
 
 
 def _to_iso(dt: datetime) -> str:
@@ -167,13 +187,13 @@ def test_running_followed_by_terminal_receipt(tmp_path: Path) -> None:
     run_once(paths, now=t1, bus=bus1)
     assert repo.get_task("TASK-HB1").phase == "acked"
 
-    # Then: terminal committed
+    # Then: terminal ready_for_review from a valid committed receipt
     t2 = datetime(2026, 3, 24, 12, 10, tzinfo=UTC)
-    bus2 = FakePullBus([{"id": 11, "task_id": "TASK-HB1", "status": "COMMITTED", "body": "done"}])
+    bus2 = FakePullBus([{"id": 11, "task_id": "TASK-HB1", "status": "COMMITTED", "body": committed_receipt_body()}])
     run_once(paths, now=t2, bus=bus2)
 
     task = repo.get_task("TASK-HB1")
-    assert task.phase == "committed"
+    assert task.phase == "ready_for_review"
     assert task.last_receipt_id == "11"
 
 

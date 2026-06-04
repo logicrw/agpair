@@ -23,14 +23,49 @@ CREATE TABLE IF NOT EXISTS tasks (
   env_vars TEXT,
   worktree_boundary TEXT,
   spotlight_testing INTEGER NOT NULL DEFAULT 0,
-  completion_policy TEXT NOT NULL DEFAULT 'direct_commit',
+  completion_policy TEXT NOT NULL DEFAULT 'auto',
   terminal_source TEXT,
+  terminal_receipt_json TEXT,
   is_approved INTEGER NOT NULL DEFAULT 0,
   authorization_profile TEXT NOT NULL DEFAULT 'local_mutating',
-  authorization_summary TEXT
+  authorization_summary TEXT,
+  workflow_id TEXT,
+  workflow_node_id TEXT,
+  parent_task_id TEXT,
+  child_role TEXT
 );
 -- NOTE: uq_tasks_repo_idempotency index on (repo_path, client_idempotency_key)
 -- is created by _migrate_schema() in db.py to support both fresh and migrated databases.
+
+CREATE TABLE IF NOT EXISTS task_attempts (
+  task_id TEXT NOT NULL,
+  attempt_no INTEGER NOT NULL,
+  executor_backend TEXT,
+  authorization_profile TEXT NOT NULL DEFAULT 'local_mutating',
+  requested_completion_policy TEXT NOT NULL DEFAULT 'auto',
+  effective_policy_json TEXT,
+  executor_session_id TEXT,
+  phase TEXT NOT NULL DEFAULT 'new',
+  terminal_receipt_json TEXT,
+  terminal_source TEXT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (task_id, attempt_no)
+);
+
+CREATE TABLE IF NOT EXISTS task_artifacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id TEXT NOT NULL,
+  attempt_no INTEGER NOT NULL,
+  artifact_type TEXT NOT NULL,
+  path TEXT NOT NULL,
+  size_bytes INTEGER,
+  sha256 TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(task_id, attempt_no, artifact_type)
+);
 
 CREATE TABLE IF NOT EXISTS receipts (
   message_id TEXT PRIMARY KEY,
@@ -72,3 +107,52 @@ CREATE TABLE IF NOT EXISTS waiters (
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_waiters_active_task
   ON waiters (task_id) WHERE state = 'waiting';
+
+CREATE TABLE IF NOT EXISTS workflows (
+  workflow_id TEXT PRIMARY KEY,
+  repo_path TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  controller TEXT NOT NULL DEFAULT 'generic',
+  phase TEXT NOT NULL DEFAULT 'new',
+  manifest_json TEXT NOT NULL,
+  limits_json TEXT NOT NULL DEFAULT '{}',
+  result_json TEXT,
+  evidence_path TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  cancelled_at TEXT,
+  stuck_reason TEXT,
+  error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS workflow_nodes (
+  workflow_id TEXT NOT NULL,
+  node_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  role TEXT,
+  phase TEXT NOT NULL DEFAULT 'pending',
+  depends_on TEXT,
+  depends_on_json TEXT NOT NULL DEFAULT '[]',
+  task_id TEXT,
+  body TEXT,
+  completion_policy TEXT NOT NULL DEFAULT 'auto',
+  requested_completion_policy TEXT NOT NULL DEFAULT 'auto',
+  effective_policy_json TEXT NOT NULL DEFAULT '{}',
+  authorization_profile TEXT NOT NULL DEFAULT 'local_mutating',
+  executor_backend TEXT,
+  attempt_no INTEGER NOT NULL DEFAULT 0,
+  max_retries INTEGER NOT NULL DEFAULT 0,
+  allow_partial INTEGER NOT NULL DEFAULT 0,
+  isolated_worktree INTEGER NOT NULL DEFAULT 0,
+  evidence_json TEXT,
+  result_json TEXT,
+  error TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  PRIMARY KEY (workflow_id, node_id)
+);

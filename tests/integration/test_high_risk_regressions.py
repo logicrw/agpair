@@ -53,6 +53,24 @@ def seed_task(tmp_path: Path, task_id: str = "TASK-1", repo_path: str = "/tmp/re
     return paths
 
 
+def committed_receipt(task_id: str, attempt_no: int, summary: str) -> dict:
+    return {
+        "schema_version": "1",
+        "task_id": task_id,
+        "attempt_no": attempt_no,
+        "review_round": 0,
+        "status": "COMMITTED",
+        "summary": summary,
+        "payload": {
+            "exit_code": 0,
+            "commit_sha": f"abc{attempt_no}",
+            "changed_files": ["file.txt"],
+            "scope_violations": [],
+            "validation": "pytest -q",
+        },
+    }
+
+
 # --------------------------------------------------------------------------
 # Test 1: Retry receipt dedup — second terminal receipt must NOT be dropped
 # --------------------------------------------------------------------------
@@ -82,11 +100,7 @@ def test_retry_terminal_receipt_not_deduped(tmp_path: Path, monkeypatch) -> None
         def poll(self, task_id, session_id, attempt_no=1):
             return TaskState(
                 is_done=True,
-                receipt={
-                    "schema_version": "1", "task_id": task_id, "attempt_no": attempt_no,
-                    "review_round": 0, "status": "COMMITTED", "summary": "Attempt 1 done",
-                    "payload": {"exit_code": 0},
-                },
+                receipt=committed_receipt(task_id, attempt_no, "Attempt 1 done"),
             )
         def cleanup(self, session_id):
             pass
@@ -95,7 +109,7 @@ def test_retry_terminal_receipt_not_deduped(tmp_path: Path, monkeypatch) -> None
     run_once(paths, now=datetime(2026, 4, 6, 12, 0, tzinfo=UTC), bus=FakePullBus())
 
     task = tasks.get_task("TASK-RETRY")
-    assert task.phase == "committed", "Attempt 1 should land as committed"
+    assert task.phase == "ready_for_review", "Attempt 1 should land as ready_for_review"
 
     # --- Retry: reset to new → ack attempt 2 ---
     tasks.apply_retry_dispatch(task_id="TASK-RETRY")
@@ -116,11 +130,7 @@ def test_retry_terminal_receipt_not_deduped(tmp_path: Path, monkeypatch) -> None
         def poll(self, task_id, session_id, attempt_no=1):
             return TaskState(
                 is_done=True,
-                receipt={
-                    "schema_version": "1", "task_id": task_id, "attempt_no": attempt_no,
-                    "review_round": 0, "status": "COMMITTED", "summary": "Attempt 2 done",
-                    "payload": {"exit_code": 0},
-                },
+                receipt=committed_receipt(task_id, attempt_no, "Attempt 2 done"),
             )
         def cleanup(self, session_id):
             pass
@@ -129,8 +139,8 @@ def test_retry_terminal_receipt_not_deduped(tmp_path: Path, monkeypatch) -> None
     run_once(paths, now=datetime(2026, 4, 6, 12, 5, tzinfo=UTC), bus=FakePullBus())
 
     task = tasks.get_task("TASK-RETRY")
-    assert task.phase == "committed", \
-        "Attempt 2 terminal receipt must NOT be deduped — task should reach committed again"
+    assert task.phase == "ready_for_review", \
+        "Attempt 2 terminal receipt must NOT be deduped — task should reach ready_for_review again"
 
 
 # --------------------------------------------------------------------------

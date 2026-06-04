@@ -15,8 +15,9 @@ Prefer executors in this order:
 
 1. `antigravity-cli` for default external implementation work.
 2. `grok-cli` for cheap parallel review, research, or alternative implementation attempts.
-3. `claude-code` when another Claude Code instance is the right external executor.
-4. `codex` when explicitly useful as a fallback executor.
+3. `codex` when an AGPair-managed external Codex CLI worker is useful as a fallback executor.
+
+Do not request the AGPair-managed external `claude-code` executor by default; Claude Code already has native subagents and `claude-code` is suppressed for Claude Code controllers unless `--allow-self-executor` is explicitly justified.
 
 Do not route new work to Gemini. Legacy `gemini_cli` tasks may be inspected or cleaned up, but not used for new `task start` or retry dispatch.
 
@@ -48,6 +49,12 @@ agpair task watch TASK-123 --json
 ```
 
 `watch --json` emits state changes and raw evidence paths. Do not stream full executor logs into the main Claude context unless the terminal receipt or raw path needs inspection.
+
+## Workflows
+
+Use `agpair workflow start` only for high-value multi-part, parallel, adversarial, or long-running work. Workflow manifests are declarative; AGPair rejects arbitrary script fields and creates normal V1.1 child tasks.
+
+Workflow `ready_for_review` means AGPair has an evidence pack for Claude Code verification, not final user-facing success.
 
 ## Authorization
 

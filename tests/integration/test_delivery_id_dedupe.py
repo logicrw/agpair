@@ -12,6 +12,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -62,6 +63,25 @@ def seed_task(tmp_path: Path, task_id: str = "TASK-1") -> AppPaths:
     TaskRepository(paths.db_path).create_task(task_id=task_id, repo_path="/tmp/repo")
     TaskRepository(paths.db_path).mark_acked(task_id=task_id, session_id="session-1")
     return paths
+
+
+def _committed_receipt_body(task_id: str = "TASK-1", *, summary: str = "committed") -> str:
+    return json.dumps(
+        {
+            "schema_version": "1",
+            "task_id": task_id,
+            "attempt_no": 1,
+            "review_round": 0,
+            "status": "COMMITTED",
+            "summary": summary,
+            "payload": {
+                "commit_sha": "abc1234",
+                "changed_files": ["file.txt"],
+                "scope_violations": [],
+                "validation": "pytest -q",
+            },
+        }
+    )
 
 
 # ===========================================================================
@@ -167,8 +187,8 @@ def test_same_delivery_id_different_task_allowed(tmp_path: Path) -> None:
 
 
 def test_e2e_duplicate_delivery_id_ignored(tmp_path: Path) -> None:
-    """Two EVIDENCE_PACK receipts with different msg ids but same delivery id:
-    only the first should advance the task phase."""
+    """Two prose-only COMMITTED receipts with the same delivery id:
+    only the first should produce a terminal blocked phase."""
     from agpair.daemon.loop import run_once
 
     paths = seed_task(tmp_path)
@@ -185,7 +205,7 @@ def test_e2e_duplicate_delivery_id_ignored(tmp_path: Path) -> None:
 
     task = TaskRepository(paths.db_path).get_task("TASK-1")
     assert task is not None
-    assert task.phase == "committed"
+    assert task.phase == "blocked"
     assert task.last_receipt_id == "10"
 
     # Second delivery — same delivery id, different message id
@@ -200,7 +220,7 @@ def test_e2e_duplicate_delivery_id_ignored(tmp_path: Path) -> None:
     # Phase and receipt id must NOT have changed
     task2 = TaskRepository(paths.db_path).get_task("TASK-1")
     assert task2 is not None
-    assert task2.phase == "committed"
+    assert task2.phase == "blocked"
     assert task2.last_receipt_id == "10"  # NOT overwritten to 20
 
 
@@ -243,14 +263,14 @@ def test_terminal_without_header_still_works(tmp_path: Path) -> None:
         "id": 50,
         "task_id": "TASK-1",
         "status": "COMMITTED",
-        "body": "plain evidence body, no header",
+        "body": _committed_receipt_body(summary="plain evidence body, no header"),
     }])
 
     run_once(paths, now=datetime(2026, 3, 24, 12, 0, tzinfo=UTC), bus=bus)
 
     task = TaskRepository(paths.db_path).get_task("TASK-1")
     assert task is not None
-    assert task.phase == "committed"
+    assert task.phase == "ready_for_review"
     journal = JournalRepository(paths.db_path).tail("TASK-1", limit=5)
     assert any("plain evidence body" in j.body for j in journal)
 
@@ -356,12 +376,12 @@ def test_journal_body_is_clean(tmp_path: Path) -> None:
         "id": 80,
         "task_id": "TASK-1",
         "status": "COMMITTED",
-        "body": "X-Delivery-Id: dlv-ep-1\nevidence body here",
+        "body": f"X-Delivery-Id: dlv-ep-1\n{_committed_receipt_body(summary='evidence body here')}",
     }])
     run_once(paths, now=datetime(2026, 3, 24, 12, 0, tzinfo=UTC), bus=bus_ep)
 
     journal = JournalRepository(paths.db_path).tail("TASK-1", limit=5)
-    ep_entries = [j for j in journal if j.event == "committed"]
+    ep_entries = [j for j in journal if j.event == "ready_for_review"]
     assert len(ep_entries) == 1
     assert "X-Delivery-Id" not in ep_entries[0].body
     assert "evidence body here" in ep_entries[0].body
@@ -454,5 +474,5 @@ def test_stale_receipt_watermark_resets_on_reack(tmp_path: Path) -> None:
 
     task2 = TaskRepository(paths.db_path).get_task("TASK-1")
     assert task2 is not None
-    assert task2.phase == "committed"
+    assert task2.phase == "blocked"
     assert task2.last_receipt_id == "50"

@@ -15,8 +15,10 @@ Controllers plan and verify. AGPair dispatches external CLI executors, persists 
 - Default external executor: `antigravity-cli`
 - Cheap challenger / backup: `grok-cli`
 - Quality escalation: `claude-code`
-- Fallback external Codex worker: `codex`
+- Fallback external Codex CLI worker: `codex`
 - Native Codex / Claude Code subagents: fallback or review only
+
+Controller-aware routing suppresses self-executors by default: Codex controllers do not choose AGPair-managed external `codex`, and Claude Code controllers do not choose AGPair-managed external `claude-code`, unless `--allow-self-executor` is explicitly used.
 
 Gemini is not used for new work. Legacy `gemini_cli` records can still be inspected or cleaned up.
 
@@ -158,6 +160,7 @@ AGPair is not a semantic controller. The AI controller still owns planning, scop
 | --- | --- |
 | [Getting Started](docs/getting-started.en.md) | Minimal setup and first task |
 | [Command Reference](docs/usage.md) | Full CLI reference |
+| [Workflows V2](docs/workflows.md) | Declarative multi-task workflow orchestration |
 | [Claude Code Integration](docs/claude-code-integration.zh-CN.md) | Claude Code setup and routing rules |
 | [中文说明](README.zh-CN.md) | Chinese README |
 | [中文命令参考](docs/usage.zh-CN.md) | Chinese command reference |

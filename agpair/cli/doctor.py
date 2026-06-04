@@ -219,20 +219,23 @@ def _is_cli_available(binary: str) -> bool:
 
 
 def _build_executor_cli_health() -> dict[str, dict[str, object]]:
-    specs = {
-        "antigravity-cli": ("AGPAIR_ANTIGRAVITY_CLI", "antigravity"),
-        "grok-cli": ("AGPAIR_GROK_CLI", "grok"),
-        "claude-code": ("AGPAIR_CLAUDE_CODE_CLI", "claude"),
-        "codex": ("AGPAIR_CODEX_CLI", "codex"),
-    }
+    from agpair.executors.policy import EXECUTOR_SPECS, executor_health_snapshot
+
+    snapshot = executor_health_snapshot()
     health: dict[str, dict[str, object]] = {}
-    for executor_id, (env_var, default_binary) in specs.items():
-        configured = os.environ.get(env_var)
-        binary = configured or default_binary
+    for executor_id, spec in EXECUTOR_SPECS.items():
+        item = snapshot[executor_id]
+        configured_env_var = item.get("configured_env_var")
+        configured = os.environ.get(str(configured_env_var), "").strip() if configured_env_var else None
+        binary = configured or spec.default_binary
         health[executor_id] = {
-            "env_var": env_var,
+            "env_var": spec.env_var,
+            "env_aliases": list(spec.env_aliases),
+            "env_vars": [spec.env_var, *spec.env_aliases],
+            "configured_env_var": configured_env_var,
             "binary": binary,
-            "available": _is_cli_available(binary),
+            "binary_path": item.get("binary_path"),
+            "available": bool(item.get("available")),
             "configured": configured is not None,
         }
     return health

@@ -119,7 +119,7 @@ def test_gemini_executor_poll(tmp_path):
     assert state.is_done is True
     assert state.receipt["payload"]["exit_code"] == 0
     assert state.receipt["payload"]["events_count"] == 2
-    assert state.receipt["status"] == "COMMITTED"
+    assert state.receipt["status"] == "EVIDENCE_PACK"
 
 def test_gemini_poll_error(tmp_path):
     executor = GeminiExecutor()

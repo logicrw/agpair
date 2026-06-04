@@ -94,7 +94,9 @@ def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch
     payload = json.loads(result.stdout)
     health = payload["executor_cli_health"]
     assert health["antigravity-cli"]["available"] is True
-    assert health["antigravity-cli"]["env_var"] == "AGPAIR_ANTIGRAVITY_CLI"
+    assert health["antigravity-cli"]["env_var"] == "AGPAIR_ANTIGRAVITY_CLI_BIN"
+    assert "AGPAIR_ANTIGRAVITY_CLI" in health["antigravity-cli"]["env_aliases"]
+    assert health["antigravity-cli"]["configured_env_var"] == "AGPAIR_ANTIGRAVITY_CLI"
     assert health["grok-cli"]["available"] is True
     assert health["claude-code"]["available"] is True
     assert "codex" in health

@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from agpair.config import AppPaths
+from agpair.storage.tasks import TaskRepository
+from agpair.workflows.store import WorkflowRepository
+
+
+def workflow_status_payload(paths: AppPaths, workflow_id: str) -> dict[str, Any]:
+    workflows = WorkflowRepository(paths.db_path)
+    tasks = TaskRepository(paths.db_path)
+    workflow = workflows.require_workflow(workflow_id)
+    nodes = workflows.list_nodes(workflow_id)
+    node_payloads = []
+    cursor_parts = [workflow.updated_at, workflow.phase]
+    for node in nodes:
+        artifact_paths: dict[str, str] = {}
+        if node.task_id:
+            task = tasks.get_task(node.task_id)
+            if task is not None:
+                for artifact in tasks.list_artifacts(task_id=task.task_id, attempt_no=task.attempt_no):
+                    artifact_paths[artifact.artifact_type] = artifact.path
+        cursor_parts.append(f"{node.node_id}:{node.phase}:{node.updated_at}:{node.task_id or ''}")
+        node_payloads.append({
+            "node_id": node.node_id,
+            "kind": node.kind,
+            "role": node.role,
+            "phase": node.phase,
+            "depends_on": node.depends_list(),
+            "task_id": node.task_id,
+            "attempt_no": node.attempt_no,
+            "authorization_profile": node.authorization_profile,
+            "requested_completion_policy": node.requested_completion_policy,
+            "completion_policy": node.requested_completion_policy,
+            "effective_policy_json": node.effective_policy_json,
+            "executor_backend": node.executor_backend,
+            "allow_partial": node.allow_partial,
+            "max_retries": node.max_retries,
+            "artifact_paths": artifact_paths,
+            "error": node.error or node.last_error,
+            "evidence": _json_object(node.evidence_json),
+            "result": _json_object(node.result_json),
+        })
+    return {
+        "ok": True,
+        "workflow_id": workflow.workflow_id,
+        "name": workflow.name,
+        "controller": workflow.controller,
+        "repo_path": workflow.repo_path,
+        "phase": workflow.phase,
+        "evidence_path": workflow.evidence_path,
+        "result": _json_object(workflow.result_json),
+        "created_at": workflow.created_at,
+        "updated_at": workflow.updated_at,
+        "started_at": workflow.started_at,
+        "finished_at": workflow.finished_at,
+        "cancelled_at": workflow.cancelled_at,
+        "error": workflow.error or workflow.stuck_reason,
+        "cursor": "|".join(cursor_parts),
+        "nodes": node_payloads,
+    }
+
+
+def workflow_event_payload(paths: AppPaths, workflow_id: str, *, previous_cursor: str | None = None) -> dict[str, Any]:
+    status = workflow_status_payload(paths, workflow_id)
+    cursor = str(status.get("cursor") or "")
+    if previous_cursor == cursor:
+        return {
+            "schema_version": "1",
+            "workflow_id": workflow_id,
+            "event": "unchanged",
+            "cursor": cursor,
+            "phase": status["phase"],
+        }
+    summary = f"Workflow reached {status['phase']}"
+    event = "workflow_state_changed"
+    node_id = None
+    node_phase = None
+    task_id = None
+    receipt_path = None
+    raw_log_path = None
+    for node in status["nodes"]:
+        if node.get("phase") in {"ready_for_review", "blocked", "stuck", "skipped", "abandoned", "cancelled"}:
+            event = "node_state_changed"
+            node_id = node.get("node_id")
+            node_phase = node.get("phase")
+            task_id = node.get("task_id")
+            paths = node.get("artifact_paths") or {}
+            receipt_path = paths.get("receipt")
+            raw_log_path = paths.get("stdout")
+            summary = f"Node {node_id} reached {node_phase}"
+            break
+    return {
+        "schema_version": "1",
+        "workflow_id": workflow_id,
+        "event": event,
+        "cursor": cursor,
+        "phase": status["phase"],
+        "node_id": node_id,
+        "node_phase": node_phase,
+        "task_id": task_id,
+        "summary": summary,
+        "receipt_path": receipt_path,
+        "raw_log_path": raw_log_path,
+        "evidence_path": status.get("evidence_path"),
+        "error": status.get("error"),
+    }
+
+
+def _json_object(text: str | None) -> dict[str, Any] | None:
+    if not text:
+        return None
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None

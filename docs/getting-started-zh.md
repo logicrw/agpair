@@ -110,18 +110,30 @@ agpair task retry TASK-123 \
 
 retry 会带上原 brief、blocked 原因、terminal receipt、journal tail、当前 git status、diff/commits 和新的授权 profile。
 
-## 7. Executor 选择
+## 7. 多段任务使用工作流
 
-默认顺序：
+普通工作继续使用 `agpair task start`。高价值、多段、并行、对抗审查或长时间任务再使用 `agpair workflow start`：
+
+```bash
+agpair workflow validate --file templates/workflows/fanout-synthesize.json
+agpair workflow start --file templates/workflows/fanout-synthesize.json --controller codex --repo-path /path/to/repo --json
+agpair workflow watch WF-ABC123DEF456 --json
+```
+
+工作流清单是声明式的，不是脚本运行器。Workflow `ready_for_review` 表示 AGPair 已生成 evidence pack 等待主控验收，不是最终用户侧完成。
+
+## 8. Executor 选择
+
+默认先选：
 
 1. `antigravity-cli`：默认外部实现 executor。
 2. `grok-cli`：低成本 challenger / backup。
-3. `claude-code`：质量升级或 Claude 相关外部执行。
-4. `codex`：外部 Codex worker fallback。
+
+Codex 主控之后用 `claude-code`；外部 `codex` 默认被抑制，因为它是 AGPair 管理的 Codex CLI worker。Claude Code 主控之后用 `codex`；外部 `claude-code` 默认被抑制，因为 Claude Code 已有原生 subagent。只有明确需要时才用 `--allow-self-executor` 覆盖。
 
 新任务不要使用 Gemini。历史 `gemini_cli` 记录只用于检查或清理。
 
-## 8. 本地文件
+## 9. 本地文件
 
 不要提交本地运行状态或个人配置：
 

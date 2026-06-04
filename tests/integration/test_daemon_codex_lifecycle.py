@@ -129,9 +129,9 @@ def test_codex_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
     mock_bus = mock.MagicMock()
     run_once(paths, now=datetime.now(UTC), bus=mock_bus)
     
-    # 4. Check the task phase is now 'evidence_ready' and receipt matches
+    # 4. Check the task phase is now 'ready_for_review' and receipt matches
     task = tasks.get_task("TASK-CODEX-TEST")
-    assert task.phase == "committed"
+    assert task.phase == "ready_for_review"
     
     assert not temp_dir.exists(), "temp_dir must be cleaned up after terminal transition"
     
@@ -140,7 +140,7 @@ def test_codex_lifecycle_success(tmp_path: pathlib.Path, monkeypatch) -> None:
     journal = JournalRepository(paths.db_path)
     terminal_event = None
     for row in journal.tail("TASK-CODEX-TEST", limit=10):
-        if row.event == "committed":
+        if row.event == "ready_for_review":
             terminal_event = row
             break
             
@@ -273,19 +273,19 @@ def test_codex_evidence_ready_not_repolled(tmp_path: pathlib.Path, monkeypatch) 
     mock_bus = mock.MagicMock()
     run_once(paths, now=datetime.now(UTC), bus=mock_bus)
     task = tasks.get_task("TASK-CODEX-NR")
-    assert task.phase == "committed"
+    assert task.phase == "ready_for_review"
 
     from agpair.storage.journal import JournalRepository
     journal = JournalRepository(paths.db_path)
 
-    # Second tick should NOT produce new evidence_ready entries
+    # Second tick should NOT produce new ready_for_review entries
     run_once(paths, now=datetime.now(UTC), bus=mock_bus)
     task = tasks.get_task("TASK-CODEX-NR")
-    assert task.phase == "committed"
+    assert task.phase == "ready_for_review"
 
     rows_after = journal.tail("TASK-CODEX-NR", limit=100)
-    evidence_events = [r for r in rows_after if r.event == "committed"]
-    assert len(evidence_events) == 1, "evidence_ready must not be emitted twice"
+    evidence_events = [r for r in rows_after if r.event == "ready_for_review"]
+    assert len(evidence_events) == 1, "ready_for_review must not be emitted twice"
 
 
 def test_codex_receipt_carries_real_attempt_no(tmp_path: pathlib.Path, monkeypatch) -> None:
@@ -326,14 +326,14 @@ def test_codex_receipt_carries_real_attempt_no(tmp_path: pathlib.Path, monkeypat
     mock_bus = mock.MagicMock()
     run_once(paths, now=datetime.now(UTC), bus=mock_bus)
     task = tasks.get_task("TASK-CODEX-ATT")
-    assert task.phase == "committed"
+    assert task.phase == "ready_for_review"
 
     from agpair.storage.journal import JournalRepository
     journal = JournalRepository(paths.db_path)
     for row in journal.tail("TASK-CODEX-ATT", limit=10):
-        if row.event == "committed":
+        if row.event == "ready_for_review":
             receipt = json.loads(row.body)
             assert receipt["attempt_no"] == 1
             break
     else:
-        raise AssertionError("evidence_ready journal entry not found")
+        raise AssertionError("ready_for_review journal entry not found")

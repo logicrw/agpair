@@ -110,18 +110,30 @@ agpair task retry TASK-123 \
 
 The retry includes the original brief, blocked reason, terminal receipt, journal tail, current git status, diff/commits, and the new authorization profile.
 
-## 7. Executor Selection
+## 7. Use Workflows For Multi-Part Work
+
+Use normal `agpair task start` for ordinary work. Use `agpair workflow start` for high-value multi-part, parallel, adversarial, or long-running work:
+
+```bash
+agpair workflow validate --file templates/workflows/fanout-synthesize.json
+agpair workflow start --file templates/workflows/fanout-synthesize.json --controller codex --repo-path /path/to/repo --json
+agpair workflow watch WF-ABC123DEF456 --json
+```
+
+Workflow manifests are declarative and are not a script runner. Workflow `ready_for_review` means AGPair has an evidence pack for controller verification, not final user-facing success.
+
+## 8. Executor Selection
 
 Use this order unless the task gives a better reason:
 
 1. `antigravity-cli`: default external implementation executor.
 2. `grok-cli`: cheap challenger / backup.
-3. `claude-code`: quality escalation or Claude-specific external run.
-4. `codex`: fallback external Codex worker.
+
+For Codex controllers, next use `claude-code`; external `codex` is suppressed by default because it is the AGPair-managed Codex CLI worker. For Claude Code controllers, next use `codex`; external `claude-code` is suppressed by default because Claude Code already has native subagents. Override self-executor suppression only with `--allow-self-executor`.
 
 Do not use Gemini for new work. Legacy `gemini_cli` records may be inspected or cleaned up only.
 
-## 8. Local Files
+## 9. Local Files
 
 Do not commit local runtime or personal config:
 

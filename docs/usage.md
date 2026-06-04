@@ -132,8 +132,8 @@ Other new-task executor ids are:
 
 - `antigravity-cli`: default external implementation executor
 - `grok-cli`: cheap alternate external executor
-- `claude-code`: external Claude Code executor
-- `codex`: Codex CLI executor
+- `claude-code`: AGPair-managed external Claude Code CLI executor
+- `codex`: AGPair-managed external Codex CLI executor
 
 `gemini_cli` is legacy-read-only for historical tasks. New `task start` and `task retry` dispatches reject Gemini.
 
@@ -146,18 +146,25 @@ Executor resolution order when `--executor` is omitted:
 Recommended controller-side defaults:
 
 - Codex and Claude Code should prefer external AGPair executors first.
+- Codex controllers suppress AGPair-managed external `codex` by default; use `claude-code` before Codex native subagents.
+- Claude Code controllers suppress AGPair-managed external `claude-code` by default; use `codex` before Claude Code native subagents.
 - Native Codex or Claude subagents are fallback/review resources.
 - Review `ready_for_review` receipts, diffs, and tests before reporting success.
 
 Local CLI approval modes can be adjusted with environment variables:
 
-- `AGPAIR_ANTIGRAVITY_CLI=/absolute/path/to/antigravity`
+- `AGPAIR_ANTIGRAVITY_CLI_BIN=/absolute/path/to/antigravity`
+  Legacy alias: `AGPAIR_ANTIGRAVITY_CLI`
 - `AGPAIR_ANTIGRAVITY_APPROVAL_MODE=default|auto_edit|yolo`
   Default: `yolo`
-- `AGPAIR_GROK_CLI=/absolute/path/to/grok`
-- `AGPAIR_CLAUDE_CODE_CLI=/absolute/path/to/claude`
+- `AGPAIR_GROK_CLI_BIN=/absolute/path/to/grok`
+  Legacy alias: `AGPAIR_GROK_CLI`
+- `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
+  Legacy alias: `AGPAIR_CLAUDE_CODE_CLI`
 - `AGPAIR_CLAUDE_CODE_PERMISSION_MODE=<claude --permission-mode value>`
   Default: `bypassPermissions`
+- `AGPAIR_CODEX_BIN=/absolute/path/to/codex`
+  Legacy alias: `AGPAIR_CODEX_CLI`
 - `AGPAIR_CODEX_APPROVAL_MODE=default|full_auto|bypass_all`
   Default: `bypass_all`
 
@@ -340,7 +347,7 @@ agpair task wait TASK-SMOKE-001
 agpair task wait TASK-SMOKE-001 --timeout-seconds 600 --interval-seconds 10
 ```
 
-Exit code `0` means success (`evidence_ready` / `committed`).
+Exit code `0` means success (`ready_for_review` / `evidence_ready` / `committed`).
 Exit code `1` means `blocked`, `stuck`, `abandoned`, timeout, or **watchdog** (the
 daemon flagged `retry_recommended=true` while the task was still `acked`).
 
@@ -360,6 +367,23 @@ All dispatching commands (`start`, `retry`) accept:
 | `--timeout-seconds` | `3600` | Maximum wait duration (intentionally > daemon stuck timeout of 1800s) |
 
 `status`, `logs`, and `wait` do **not** have `--wait/--no-wait`.
+
+## Workflows
+
+Use `agpair task start` for ordinary work. Use `agpair workflow start` for high-value multi-part, parallel, adversarial, or long-running work.
+
+```bash
+agpair workflow validate --file templates/workflows/fanout-synthesize.json
+agpair workflow start --file templates/workflows/fanout-synthesize.json --controller codex --repo-path /absolute/path/to/repo --json
+agpair workflow status WF-ABC123DEF456 --json
+agpair workflow watch WF-ABC123DEF456 --json --cursor '<cursor>'
+agpair workflow retry-node WF-ABC123DEF456 scan-routing --authorization-profile local_mutating
+agpair workflow cancel WF-ABC123DEF456 --reason 'operator requested'
+```
+
+Workflow manifests are declarative. AGPair rejects arbitrary script fields and dispatches normal V1.1 child tasks with durable artifacts, completion policies, structured receipts, and controller-aware executor routing.
+
+Workflow `ready_for_review` means AGPair has an evidence pack for controller verification, not final user-facing success. `workflow watch --json` emits low-noise state changes and artifact paths, not full raw logs.
 
 ## Failure posture
 
