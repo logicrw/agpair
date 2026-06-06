@@ -123,6 +123,8 @@ def test_isolated_auth_requirement_marks_executor_unavailable(monkeypatch, tmp_p
     blocker = executor_start_blocker("claude-code", require_available=True)
     assert blocker is not None
     assert blocker["blocker_type"] == "executor_auth_required"
+    assert "agpair claude worker-settings" in blocker["reason"]
+    assert "OAuth/keychain login" in blocker["reason"]
     assert "AGPAIR_CLAUDE_CODE_BARE=0" in blocker["reason"]
 
 
@@ -130,8 +132,10 @@ def test_isolated_auth_requirement_can_be_satisfied_by_settings(monkeypatch, tmp
     fake_binary = tmp_path / "claude"
     fake_binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fake_binary.chmod(0o755)
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text('{"apiKeyHelper":"op read op://Private/anthropic/api-key"}', encoding="utf-8")
     monkeypatch.setenv("AGPAIR_CLAUDE_CODE_BIN", str(fake_binary))
-    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_SETTINGS", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_SETTINGS", str(settings_path))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     health = executor_health_snapshot()["claude-code"]
@@ -139,3 +143,39 @@ def test_isolated_auth_requirement_can_be_satisfied_by_settings(monkeypatch, tmp
     assert health["available"] is True
     assert health["isolation_auth_satisfied"] is True
     assert health["last_failure_type"] is None
+
+
+def test_claude_missing_worker_settings_file_marks_executor_unavailable(monkeypatch, tmp_path: Path) -> None:
+    fake_binary = tmp_path / "claude"
+    fake_binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_binary.chmod(0o755)
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_BIN", str(fake_binary))
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_SETTINGS", str(tmp_path / "missing.json"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.delenv("AGPAIR_CLAUDE_CODE_BARE", raising=False)
+
+    health = executor_health_snapshot()["claude-code"]
+
+    assert health["available"] is False
+    assert health["isolation_auth_satisfied"] is False
+    assert health["last_failure_type"] == "executor_auth_required"
+    assert "missing file" in health["last_error_excerpt"]
+
+
+def test_claude_default_worker_settings_requires_api_key(monkeypatch, tmp_path: Path) -> None:
+    fake_binary = tmp_path / "claude"
+    fake_binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_binary.chmod(0o755)
+    settings_path = tmp_path / "claude-worker-settings.json"
+    settings_path.write_text('{"apiKeyHelper":"printenv ANTHROPIC_API_KEY"}', encoding="utf-8")
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_BIN", str(fake_binary))
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_SETTINGS", str(settings_path))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("AGPAIR_CLAUDE_CODE_BARE", raising=False)
+
+    health = executor_health_snapshot()["claude-code"]
+
+    assert health["available"] is False
+    assert health["isolation_auth_satisfied"] is False
+    assert health["last_failure_type"] == "executor_auth_required"
+    assert "ANTHROPIC_API_KEY is empty" in health["last_error_excerpt"]

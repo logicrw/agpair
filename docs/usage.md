@@ -154,6 +154,8 @@ Recommended controller-side defaults:
 - Native Codex or Claude subagents are fallback/review resources.
 - Review `ready_for_review` receipts, diffs, and tests before reporting success, then run `agpair task accept TASK_ID` to mark that receipt handled.
 
+This keeps cross-controller workers explicit: `codex` is for Claude Code controllers, and `claude-code` is for Codex controllers. Each controller should use its native subagents only as its own fallback/review lane.
+
 Local CLI approval modes can be adjusted with environment variables:
 
 - `AGPAIR_ANTIGRAVITY_CLI_BIN=/absolute/path/to/agy`
@@ -173,6 +175,10 @@ Local CLI approval modes can be adjusted with environment variables:
 - `AGPAIR_CLAUDE_CODE_SETTINGS=/absolute/path/to/settings.json`
   Optional Claude Code settings JSON or path. Use this when bare mode needs an
   `apiKeyHelper`; OAuth/keychain auth is intentionally not used in bare mode.
+  Generate a safe template with:
+  `agpair claude worker-settings > ~/.agpair/claude-worker-settings.json`
+  then set `AGPAIR_CLAUDE_CODE_SETTINGS` to that path and make the helper return
+  a valid API key, usually via `ANTHROPIC_API_KEY`.
 - `AGPAIR_CLAUDE_CODE_PERMISSION_MODE=<claude --permission-mode value>`
   Default: `bypassPermissions`
 - `AGPAIR_CODEX_BIN=/absolute/path/to/codex`

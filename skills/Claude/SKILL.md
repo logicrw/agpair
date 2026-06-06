@@ -17,6 +17,8 @@ Prefer executors in this order:
 2. `grok-cli` for cheap parallel review, research, or alternative implementation attempts.
 3. `codex` when an AGPair-managed external Codex CLI worker is useful as a fallback executor.
 
+`codex` is the AGPair-managed external Codex CLI worker for Claude Code controllers. It is the cross-controller fallback lane, not a Claude Code native subagent.
+
 Do not request the AGPair-managed external `claude-code` executor by default; Claude Code already has native subagents and `claude-code` is suppressed for Claude Code controllers unless `--allow-self-executor` is explicitly justified.
 
 Do not route new work to Gemini. Legacy `gemini_cli` tasks may be inspected or cleaned up, but not used for new `task start` or retry dispatch.

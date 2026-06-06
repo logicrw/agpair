@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import pathlib
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -237,6 +239,34 @@ def _env_flag_disabled(env_var: str | None) -> bool:
     return os.environ.get(env_var, "1").strip().lower() in _FALSE_ENV_VALUES
 
 
+def _claude_code_settings_error(value: str) -> str | None:
+    stripped = value.strip()
+    if not stripped:
+        return None
+    try:
+        if stripped.startswith("{"):
+            settings = json.loads(stripped)
+        else:
+            settings_path = pathlib.Path(stripped).expanduser()
+            if not settings_path.is_file():
+                return f"AGPAIR_CLAUDE_CODE_SETTINGS points to a missing file: {stripped}"
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return f"AGPAIR_CLAUDE_CODE_SETTINGS is not readable JSON: {exc}"
+    if not isinstance(settings, dict):
+        return "AGPAIR_CLAUDE_CODE_SETTINGS must be a JSON object or a path to one"
+    api_key_helper = str(settings.get("apiKeyHelper", "")).strip()
+    if (
+        api_key_helper == "printenv ANTHROPIC_API_KEY"
+        and not os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    ):
+        return (
+            "AGPAIR_CLAUDE_CODE_SETTINGS uses the default API key helper, "
+            "but ANTHROPIC_API_KEY is empty"
+        )
+    return None
+
+
 def _isolation_auth_error(spec: ExecutorSpec) -> str | None:
     profile = spec.isolation_profile or {}
     required_env_vars = tuple(str(item) for item in profile.get("isolated_auth_env_vars") or ())
@@ -245,13 +275,26 @@ def _isolation_auth_error(spec: ExecutorSpec) -> str | None:
     disable_env_var = profile.get("isolation_disable_env_var")
     if _env_flag_disabled(str(disable_env_var) if disable_env_var else None):
         return None
+    if spec.executor_id == "claude-code":
+        settings_error = _claude_code_settings_error(
+            os.environ.get("AGPAIR_CLAUDE_CODE_SETTINGS", "")
+        )
+        if settings_error:
+            return settings_error
     if any(os.environ.get(env_var, "").strip() for env_var in required_env_vars):
         return None
     required = ", ".join(required_env_vars)
-    disable_hint = f" or set {disable_env_var}=0 for diagnostics" if disable_env_var else ""
+    disable_hint = f". Set {disable_env_var}=0 for diagnostics only" if disable_env_var else ""
+    setup_hint = ""
+    if spec.executor_id == "claude-code":
+        setup_hint = (
+            ". Run `agpair claude worker-settings > ~/.agpair/claude-worker-settings.json` "
+            "and set AGPAIR_CLAUDE_CODE_SETTINGS to that file, or export ANTHROPIC_API_KEY. "
+            "OAuth/keychain login does not satisfy Claude Code --bare worker auth"
+        )
     return (
         f"executor {spec.executor_id} requires one of {required} for isolated external-worker auth"
-        f"{disable_hint}"
+        f"{setup_hint}{disable_hint}"
     )
 
 

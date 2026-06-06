@@ -100,6 +100,21 @@ def test_cli_help_lists_claude_group() -> None:
     assert "claude" in result.stdout
 
 
+def test_claude_worker_settings_emits_isolated_api_key_helper_template() -> None:
+    result = CliRunner().invoke(app, ["claude", "worker-settings"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "apiKeyHelper": "printenv ANTHROPIC_API_KEY",
+        "env": {
+            "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
+        },
+    }
+    assert "ANTHROPIC_AUTH_TOKEN" not in result.stdout
+    assert "sk-" not in result.stdout
+
+
 def test_claude_statusline_shows_idle_state_for_repo(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"

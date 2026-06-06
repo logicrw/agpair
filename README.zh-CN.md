@@ -20,6 +20,8 @@ AGPair 是给 Codex 和 Claude Code 使用的 external-agent-first 控制面。
 
 路由是 controller-aware 的：Codex 主控默认不选择 AGPair 管理的外部 `codex`，Claude Code 主控默认不选择 AGPair 管理的外部 `claude-code`，除非明确使用 `--allow-self-executor`。
 
+实际分工是：`codex` 是给 Claude Code 主控使用的外部 Codex CLI worker；Codex 主控自己的 fallback / review lane 应使用 Codex 原生 subagent。`claude-code` 是给 Codex 主控使用的外部 Claude Code worker；Claude Code 主控自己的 fallback / review lane 应使用 Claude Code 原生 subagent。
+
 新任务不再使用 Gemini。历史 `gemini_cli` 记录仍可检查或清理。
 
 ## 快速开始
@@ -90,6 +92,15 @@ mkdir -p ~/.claude/skills/agpair
 cp "$PWD/skills/Claude/SKILL.md" ~/.claude/skills/agpair/SKILL.md
 agpair claude config
 agpair claude config --install --scope project --repo-path /path/to/repo
+```
+
+要让 Codex 稳定调用外部 `claude-code` worker，需要给 bare 隔离模式显式配置 worker auth。`claude --bare` 不会读取 OAuth / keychain 登录：
+
+```bash
+mkdir -p ~/.agpair
+agpair claude worker-settings > ~/.agpair/claude-worker-settings.json
+export AGPAIR_CLAUDE_CODE_SETTINGS="$HOME/.agpair/claude-worker-settings.json"
+export ANTHROPIC_API_KEY="..."
 ```
 
 AGPair 管理的 hook 是提示和护栏，AGPair 不可用时 fail open。安装器会保留无关本地设置，卸载时只移除 AGPair 自己管理的条目。

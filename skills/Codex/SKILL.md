@@ -53,6 +53,8 @@ agpair task retry TASK-123 --from-block --authorization-profile local_mutating
 
 For Codex as controller, prefer `antigravity-cli`, then `grok-cli`, then `claude-code`.
 
+`claude-code` is the AGPair-managed external Claude Code worker for Codex controllers. It is the cross-controller quality escalation lane, not a native Codex subagent. It requires isolated worker auth in bare mode; if `agpair doctor` reports `executor_auth_required`, configure `AGPAIR_CLAUDE_CODE_SETTINGS` with `agpair claude worker-settings` or fall back to the earlier external executors and native Codex subagents.
+
 Do not request the AGPair-managed external `codex` executor by default; it is the Codex CLI worker and is suppressed for Codex controllers unless `--allow-self-executor` is explicitly justified. Use Codex native subagents as the fallback/review lane after external executors are unavailable, unsuitable, or not good enough.
 
 Do not use Gemini for new work.

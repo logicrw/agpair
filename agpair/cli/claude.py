@@ -389,6 +389,25 @@ def config(
     typer.echo(f"Updated {settings_path}")
 
 
+@app.command("worker-settings")
+def worker_settings(
+    api_key_helper: str = typer.Option(
+        "printenv ANTHROPIC_API_KEY",
+        "--api-key-helper",
+        help="Command Claude Code --bare should run to obtain an API key.",
+    ),
+) -> None:
+    """Emit a minimal isolated Claude Code settings template for AGPair workers."""
+    _emit_json(
+        {
+            "apiKeyHelper": api_key_helper,
+            "env": {
+                "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
+            },
+        }
+    )
+
+
 @hook_app.command("session-start")
 def hook_session_start() -> None:
     """Emit SessionStart hook context that nudges Claude Code toward AGPair for durable task orchestration."""

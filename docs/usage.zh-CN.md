@@ -167,6 +167,8 @@ agpair task start \
 - Claude Code 主控默认抑制 AGPair 管理的外部 `claude-code`；先用 `codex`，再把 Claude Code 原生 subagent 作为 fallback / review。
 - `ready_for_review` 只是验收门槛，不是自动完成；主控仍要检查 receipt、diff 和测试证据，然后运行 `agpair task accept TASK_ID` 标记这个 receipt 已处理。
 
+这意味着跨主控 worker 分工是显式的：`codex` 给 Claude Code 主控使用，`claude-code` 给 Codex 主控使用；各自主控的原生 subagent 只作为自己的 fallback / review lane。
+
 本地 CLI 的 approval 模式可以通过环境变量调整：
 
 - `AGPAIR_ANTIGRAVITY_CLI_BIN=/absolute/path/to/agy`
@@ -186,6 +188,10 @@ agpair task start \
 - `AGPAIR_CLAUDE_CODE_SETTINGS=/absolute/path/to/settings.json`
   可选 Claude Code settings JSON 或路径。bare mode 需要 `apiKeyHelper` 时使用；
   OAuth / keychain 登录在 bare mode 下会被刻意跳过。
+  可用下面的命令生成安全模板：
+  `agpair claude worker-settings > ~/.agpair/claude-worker-settings.json`
+  然后把 `AGPAIR_CLAUDE_CODE_SETTINGS` 指向该文件，并让 helper 返回有效 API key，
+  通常是通过 `ANTHROPIC_API_KEY`。
 - `AGPAIR_CLAUDE_CODE_PERMISSION_MODE=<claude --permission-mode 支持的值>`
   默认：`bypassPermissions`
 - `AGPAIR_CODEX_BIN=/absolute/path/to/codex`

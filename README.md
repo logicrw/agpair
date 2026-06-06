@@ -20,6 +20,8 @@ Controllers plan and verify. AGPair dispatches external CLI executors, persists 
 
 Controller-aware routing suppresses self-executors by default: Codex controllers do not choose AGPair-managed external `codex`, and Claude Code controllers do not choose AGPair-managed external `claude-code`, unless `--allow-self-executor` is explicitly used.
 
+Operationally, `codex` is the external Codex CLI worker for Claude Code controllers. Codex controllers should use native Codex subagents as their fallback/review lane. `claude-code` is the external Claude Code worker for Codex controllers. Claude Code controllers should use native Claude Code subagents as their fallback/review lane.
+
 Gemini is not used for new work. Legacy `gemini_cli` records can still be inspected or cleaned up.
 
 ## Quick Start
@@ -90,6 +92,15 @@ mkdir -p ~/.claude/skills/agpair
 cp "$PWD/skills/Claude/SKILL.md" ~/.claude/skills/agpair/SKILL.md
 agpair claude config
 agpair claude config --install --scope project --repo-path /path/to/repo
+```
+
+To let Codex use the external `claude-code` worker in isolated bare mode, provide worker auth explicitly. OAuth/keychain login is not read by `claude --bare`:
+
+```bash
+mkdir -p ~/.agpair
+agpair claude worker-settings > ~/.agpair/claude-worker-settings.json
+export AGPAIR_CLAUDE_CODE_SETTINGS="$HOME/.agpair/claude-worker-settings.json"
+export ANTHROPIC_API_KEY="..."
 ```
 
 The managed hooks are advisory and fail open when AGPair state is unavailable. They preserve unrelated local settings and remove only AGPair-managed entries on uninstall.
