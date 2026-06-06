@@ -1,7 +1,37 @@
 import pathlib
+import sqlite3
+import json
 
 from agpair.executors.claude_code import ClaudeCodeExecutor
 from agpair.models import ContinuationCapability
+
+
+def _write_ccswitch_provider(home: pathlib.Path) -> None:
+    home.mkdir(parents=True)
+    conn = sqlite3.connect(home / "cc-switch.db")
+    conn.execute(
+        "create table providers (id text, app_type text, name text, settings_config text, is_current integer)"
+    )
+    conn.execute(
+        "insert into providers values (?, ?, ?, ?, ?)",
+        (
+            "kimi",
+            "claude",
+            "Kimi Claude Code",
+            json.dumps(
+                {
+                    "env": {
+                        "ANTHROPIC_BASE_URL": "https://api.moonshot.ai/anthropic",
+                        "ANTHROPIC_AUTH_TOKEN": "test-secret",
+                        "ANTHROPIC_MODEL": "kimi-k2.5",
+                    }
+                }
+            ),
+            1,
+        ),
+    )
+    conn.commit()
+    conn.close()
 
 
 def test_claude_code_executor_uses_env_binary(monkeypatch) -> None:
@@ -84,3 +114,27 @@ def test_claude_code_settings_file_is_passed_to_api_worker(monkeypatch) -> None:
     )
 
     assert cmd[:6] == ["env", "CLAUDE_CODE_MAX_RETRIES=0", "fake-claude", "--bare", "--settings", "/tmp/claude-settings.json"]
+
+
+def test_claude_code_ccswitch_mode_uses_provider_env_without_command_secret(monkeypatch, tmp_path) -> None:
+    _write_ccswitch_provider(tmp_path / ".cc-switch")
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_AUTH_MODE", "ccswitch")
+    monkeypatch.setenv("AGPAIR_CC_SWITCH_HOME", str(tmp_path / ".cc-switch"))
+    executor = ClaudeCodeExecutor(claude_bin="fake-claude")
+
+    cmd = executor._build_claude_cmd(
+        "Goal: inspect the repo",
+        "/tmp/repo",
+        pathlib.Path("/tmp/agpair"),
+    )
+    env = executor._build_claude_env(
+        "Goal: inspect the repo",
+        "/tmp/repo",
+        pathlib.Path("/tmp/agpair"),
+    )
+
+    assert cmd[:4] == ["env", "CLAUDE_CODE_MAX_RETRIES=0", "fake-claude", "--bare"]
+    assert "test-secret" not in " ".join(cmd)
+    assert env["ANTHROPIC_API_KEY"] == "test-secret"
+    assert env["ANTHROPIC_BASE_URL"] == "https://api.moonshot.ai/anthropic"
+    assert env["ANTHROPIC_MODEL"] == "kimi-k2.5"

@@ -170,11 +170,17 @@ Local CLI approval modes can be adjusted with environment variables:
 - `AGPAIR_GROK_MAX_TURNS=24`
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
   Legacy alias: `AGPAIR_CLAUDE_CODE_CLI`
-- `AGPAIR_CLAUDE_CODE_AUTH_MODE=oauth|api`
-  Default: `oauth`. OAuth mode reuses the local Claude Code subscription/OAuth
-  login reported by `claude auth status` and does not pass `--bare`.
-  `doctor --fresh` and dispatch preflight also run a tiny live auth probe so
-  stale OAuth tokens fail before a delegated task is launched.
+- `AGPAIR_CLAUDE_CODE_AUTH_MODE=auto|oauth|ccswitch|api`
+  Default: `auto`. Auto mode first uses a valid local Claude Code
+  subscription/OAuth login, then falls back to the current Claude provider in
+  CC Switch. Force `oauth` to disable provider fallback, `ccswitch` to use the
+  CC Switch provider directly, or `api` for a separate bare-mode worker
+  credential.
+- `AGPAIR_CC_SWITCH_HOME=/absolute/path/to/.cc-switch`
+  Optional. Defaults to `~/.cc-switch`. AGPair reads CC Switch's current
+  Claude provider settings and injects them as worker process environment
+  variables; provider secrets are not written to AGPair command files or health
+  JSON.
 - `AGPAIR_CLAUDE_CODE_MAX_RETRIES=<integer>`
   Default: `0`. AGPair sets `CLAUDE_CODE_MAX_RETRIES` for worker launches so
   invalid OAuth/API credentials fail quickly instead of silently retrying.

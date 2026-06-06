@@ -22,6 +22,46 @@ class DummyLocalCLIExecutor(LocalCLIExecutor):
         return ContinuationCapability.UNSUPPORTED
 
 
+class EnvDummyLocalCLIExecutor(LocalCLIExecutor):
+    def __init__(self) -> None:
+        super().__init__(
+            bin_path="dummy-cli",
+            backend_id="dummy_cli",
+            build_cmd=self._build_dummy_cmd,
+            build_env=self._build_dummy_env,
+        )
+
+    def _build_dummy_cmd(self, body: str, repo_path: str, temp_dir) -> list[str]:
+        return [self.bin_path, body]
+
+    def _build_dummy_env(self, body: str, repo_path: str, temp_dir) -> dict[str, str]:
+        return {"AGPAIR_TEST_SECRET": "secret-value"}
+
+    @property
+    def continuation_capability(self) -> ContinuationCapability:
+        return ContinuationCapability.UNSUPPORTED
+
+
+def test_dispatch_injects_executor_env_without_writing_secret_to_cmd_json(tmp_path):
+    executor = EnvDummyLocalCLIExecutor()
+
+    with mock.patch("agpair.executors.local_cli._git_head", return_value="fake-head"), \
+         mock.patch("agpair.executors.local_cli.subprocess.Popen") as mock_popen:
+        process = mock.Mock()
+        process.pid = 12345
+        mock_popen.return_value = process
+
+        dispatch = executor.dispatch(
+            task_id="TASK-ENV-1",
+            body="Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+            repo_path=str(tmp_path),
+        )
+
+    cmd = json.loads((Path(dispatch.session_id) / "cmd.json").read_text(encoding="utf-8"))
+    assert "secret-value" not in json.dumps(cmd)
+    assert mock_popen.call_args.kwargs["env"]["AGPAIR_TEST_SECRET"] == "secret-value"
+
+
 def test_dispatch_injects_task_id_commit_requirement(tmp_path):
     executor = DummyLocalCLIExecutor()
 

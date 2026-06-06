@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -9,6 +11,34 @@ from agpair.executors import get_executor, is_local_cli_backend
 from agpair.executors.policy import EXECUTOR_SPECS, executor_health_snapshot, resolve_controller_policy
 from agpair.executors.registry import active_executor_ids, executor_start_blocker
 from agpair.executors.routing import is_supported_executor, supported_executor_ids, validate_supported_executor
+
+
+def _write_ccswitch_provider(home: Path) -> None:
+    home.mkdir(parents=True)
+    conn = sqlite3.connect(home / "cc-switch.db")
+    conn.execute(
+        "create table providers (id text, app_type text, name text, settings_config text, is_current integer)"
+    )
+    conn.execute(
+        "insert into providers values (?, ?, ?, ?, ?)",
+        (
+            "kimi",
+            "claude",
+            "Kimi Claude Code",
+            json.dumps(
+                {
+                    "env": {
+                        "ANTHROPIC_BASE_URL": "https://api.moonshot.ai/anthropic",
+                        "ANTHROPIC_AUTH_TOKEN": "test-secret",
+                        "ANTHROPIC_MODEL": "kimi-k2.5",
+                    }
+                }
+            ),
+            1,
+        ),
+    )
+    conn.commit()
+    conn.close()
 
 
 @pytest.mark.parametrize("status", ["disabled", "deprecated", "removed"])
@@ -108,6 +138,7 @@ def test_isolated_auth_requirement_marks_executor_unavailable(monkeypatch, tmp_p
     monkeypatch.delenv("AGPAIR_CLAUDE_CODE_SETTINGS", raising=False)
     monkeypatch.delenv("AGPAIR_CLAUDE_CODE_BARE", raising=False)
     monkeypatch.delenv("AGPAIR_CLAUDE_CODE_AUTH_MODE", raising=False)
+    monkeypatch.setenv("AGPAIR_CC_SWITCH_HOME", str(tmp_path / ".missing-cc-switch"))
 
     health = executor_health_snapshot()["claude-code"]
 
@@ -171,6 +202,32 @@ def test_claude_oauth_live_probe_detects_invalid_auth(monkeypatch, tmp_path: Pat
     assert health["isolation_auth_satisfied"] is False
     assert health["last_failure_type"] == "executor_auth_required"
     assert "Invalid Authentication" in health["last_error_excerpt"]
+
+
+def test_claude_auto_auth_falls_back_to_ccswitch_provider(monkeypatch, tmp_path: Path) -> None:
+    fake_binary = tmp_path / "claude"
+    fake_binary.write_text(
+        '#!/bin/sh\nif [ "$1" = "auth" ] && [ "$2" = "status" ]; then '
+        'printf "{\\"loggedIn\\":true,\\"authMethod\\":\\"oauth_token\\"}\\n"; exit 0; fi\n'
+        'if [ "$ANTHROPIC_API_KEY" = "test-secret" ]; then '
+        'printf "{\\"type\\":\\"result\\",\\"subtype\\":\\"success\\",\\"is_error\\":false}\\n"; exit 0; fi\n'
+        'printf "{\\"type\\":\\"result\\",\\"is_error\\":true,\\"api_error_status\\":401}\\n"\nexit 0\n',
+        encoding="utf-8",
+    )
+    fake_binary.chmod(0o755)
+    _write_ccswitch_provider(tmp_path / ".cc-switch")
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_BIN", str(fake_binary))
+    monkeypatch.setenv("AGPAIR_CC_SWITCH_HOME", str(tmp_path / ".cc-switch"))
+    monkeypatch.delenv("AGPAIR_CLAUDE_CODE_AUTH_MODE", raising=False)
+
+    health = executor_health_snapshot(run_launch_probe=True)["claude-code"]
+
+    assert health["available"] is True
+    assert health["isolation_auth_satisfied"] is True
+    assert health["last_failure_type"] is None
+    assert health["auth_mode"] == "ccswitch"
+    assert health["ccswitch_provider"] == "Kimi Claude Code"
+    assert "test-secret" not in json.dumps(health)
 
 
 def test_claude_oauth_live_probe_accepts_success(monkeypatch, tmp_path: Path) -> None:

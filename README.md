@@ -94,16 +94,25 @@ agpair claude config
 agpair claude config --install --scope project --repo-path /path/to/repo
 ```
 
-To let Codex use the external `claude-code` worker, AGPair reuses the local Claude Code OAuth/subscription login by default. Verify that Claude Code is logged in:
+To let Codex use the external `claude-code` worker, AGPair uses Claude auth
+mode `auto` by default. It first tries a valid local Claude Code
+OAuth/subscription login; if that is absent or the live probe fails, it reuses
+the current Claude provider selected in CC Switch, such as Kimi or any future
+Anthropic-compatible provider. AGPair does not need a separate Claude API key
+configuration.
 
 ```bash
 claude auth status
 agpair doctor --fresh --repo-path /path/to/repo
 ```
 
-`doctor --fresh` runs a tiny live auth probe; if it reports `Invalid Authentication`, refresh the local Claude Code login with `claude auth login`.
+`doctor --fresh` runs a tiny live auth probe and reports the selected
+`auth_mode` as `oauth` or `ccswitch`. If OAuth fails, refresh the local Claude
+Code login with `claude auth login`; if CC Switch fails, update the current
+Claude provider inside CC Switch.
 
-Use API-key bare mode only when you explicitly want a separate worker credential:
+Use API-key bare mode only when you explicitly want a separate worker credential
+outside OAuth and CC Switch:
 
 ```bash
 mkdir -p ~/.agpair

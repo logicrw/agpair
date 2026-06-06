@@ -119,6 +119,9 @@ def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch
     assert health["grok-cli"]["available"] is True
     assert health["claude-code"]["available"] is True
     assert health["claude-code"]["auth_mode"] == "oauth"
+    assert "ccswitch_provider" in health["claude-code"]
+    assert "ccswitch_provider_id" in health["claude-code"]
+    assert "ccswitch_source" in health["claude-code"]
     assert health["claude-code"]["isolation_auth_satisfied"] is True
     assert health["codex"]["available"] is True
     assert "codex" in health

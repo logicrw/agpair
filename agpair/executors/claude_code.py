@@ -3,6 +3,13 @@ from __future__ import annotations
 import os
 import pathlib
 
+from agpair.executors.claude_auth import (
+    ccswitch_env_overrides,
+    claude_retry_env,
+    explicit_claude_auth_mode,
+    load_current_ccswitch_provider,
+    resolve_claude_auth,
+)
 from agpair.executors.local_cli import LocalCLIExecutor
 from agpair.executors.registry import executor_safety_metadata
 from agpair.models import ContinuationCapability
@@ -15,29 +22,25 @@ def _permission_args() -> list[str]:
     return ["--permission-mode", mode]
 
 
-def _auth_mode() -> str:
-    explicit = os.environ.get("AGPAIR_CLAUDE_CODE_AUTH_MODE", "").strip().lower()
-    if explicit in {"api", "bare"}:
-        return "api"
-    if explicit in {"oauth", "subscription"}:
-        return "oauth"
-    legacy_bare = os.environ.get("AGPAIR_CLAUDE_CODE_BARE")
-    if legacy_bare is not None and legacy_bare.strip().lower() not in {"0", "false", "no", "off"}:
-        return "api"
-    return "oauth"
+def _auth_mode(binary_path: str | None = None, *, live_probe: bool = False) -> str:
+    explicit = explicit_claude_auth_mode()
+    if explicit:
+        return explicit
+    resolution = resolve_claude_auth(binary_path, live_probe=live_probe)
+    return resolution.mode if resolution.error is None else "oauth"
 
 
 def _retry_env_args() -> list[str]:
-    retries = os.environ.get("AGPAIR_CLAUDE_CODE_MAX_RETRIES", "0").strip() or "0"
+    retries = claude_retry_env()["CLAUDE_CODE_MAX_RETRIES"]
     return ["env", f"CLAUDE_CODE_MAX_RETRIES={retries}"]
 
 
-def _bare_args() -> list[str]:
-    return ["--bare"] if _auth_mode() == "api" else []
+def _bare_args(auth_mode: str) -> list[str]:
+    return ["--bare"] if auth_mode in {"api", "ccswitch"} else []
 
 
-def _oauth_profile_args() -> list[str]:
-    if _auth_mode() != "oauth":
+def _oauth_profile_args(auth_mode: str) -> list[str]:
+    if auth_mode != "oauth":
         return []
     profile = os.environ.get("AGPAIR_CLAUDE_CODE_OAUTH_PROFILE", "quiet").strip().lower()
     if profile in {"natural", "full", "inherit"}:
@@ -61,9 +64,14 @@ def _settings_args() -> list[str]:
 class ClaudeCodeExecutor(LocalCLIExecutor):
     def __init__(self, claude_bin: str | None = None) -> None:
         super().__init__(
-            bin_path=claude_bin or os.environ.get("AGPAIR_CLAUDE_CODE_BIN") or os.environ.get("AGPAIR_CLAUDE_CODE_CLI", "claude"),
+            bin_path=(
+                claude_bin
+                or os.environ.get("AGPAIR_CLAUDE_CODE_BIN")
+                or os.environ.get("AGPAIR_CLAUDE_CODE_CLI", "claude")
+            ),
             backend_id="claude-code",
             build_cmd=self._build_claude_cmd,
+            build_env=self._build_claude_env,
             safety_metadata=executor_safety_metadata("claude-code"),
         )
 
@@ -73,11 +81,13 @@ class ClaudeCodeExecutor(LocalCLIExecutor):
         repo_path: str,
         temp_dir: pathlib.Path,
     ) -> list[str]:
+        del repo_path, temp_dir
+        auth_mode = _auth_mode(self.bin_path, live_probe=True)
         return [
             *_retry_env_args(),
             self.bin_path,
-            *_bare_args(),
-            *_oauth_profile_args(),
+            *_bare_args(auth_mode),
+            *_oauth_profile_args(auth_mode),
             *_settings_args(),
             *_permission_args(),
             "--no-session-persistence",
@@ -86,6 +96,17 @@ class ClaudeCodeExecutor(LocalCLIExecutor):
             "--print",
             body,
         ]
+
+    def _build_claude_env(
+        self,
+        body: str,
+        repo_path: str,
+        temp_dir: pathlib.Path,
+    ) -> dict[str, str]:
+        del body, repo_path, temp_dir
+        if _auth_mode(self.bin_path, live_probe=True) == "ccswitch":
+            return ccswitch_env_overrides(load_current_ccswitch_provider())
+        return claude_retry_env()
 
     @property
     def continuation_capability(self) -> ContinuationCapability:

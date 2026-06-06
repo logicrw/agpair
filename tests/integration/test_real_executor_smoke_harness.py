@@ -115,6 +115,7 @@ def _env(
     env["AGPAIR_CLAUDE_CODE_BIN"] = str(_fake_executor(bin_dir / "claude"))
     if missing_claude_auth:
         env["FAKE_CLAUDE_LOGGED_IN"] = "0"
+        env["AGPAIR_CLAUDE_CODE_AUTH_MODE"] = "oauth"
     else:
         env["FAKE_CLAUDE_LOGGED_IN"] = "1"
     env["AGPAIR_CODEX_BIN"] = str(_fake_executor(bin_dir / "codex"))

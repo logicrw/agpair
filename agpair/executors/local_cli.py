@@ -424,11 +424,13 @@ class LocalCLIExecutor(ExecutorAdapter):
         bin_path: str,
         backend_id: str,
         build_cmd: Callable[[str, str, pathlib.Path], list[str]],
+        build_env: Callable[[str, str, pathlib.Path], dict[str, str]] | None = None,
         safety_metadata: ExecutorSafetyMetadata | None = None,
     ) -> None:
         self.bin_path = bin_path
         self._backend_id = backend_id
         self._build_cmd = build_cmd
+        self._build_env = build_env
         self._safety_metadata = safety_metadata or ExecutorSafetyMetadata(
             is_mutating=True,
             is_concurrency_safe=False,
@@ -461,16 +463,20 @@ class LocalCLIExecutor(ExecutorAdapter):
         temp_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"agpair_{self._backend_id}_{task_id}_"))
 
         start_head = _git_head(execution_repo_path)
-        cli_cmd = self._build_cmd(
-            _body_with_task_contract(
-                task_id,
-                body,
-                authorization_profile=authorization_profile,
-                authorization_summary=authorization_summary,
-            ),
-            execution_repo_path,
-            temp_dir,
+        contracted_body = _body_with_task_contract(
+            task_id,
+            body,
+            authorization_profile=authorization_profile,
+            authorization_summary=authorization_summary,
         )
+        cli_cmd = self._build_cmd(contracted_body, execution_repo_path, temp_dir)
+        env_overrides = {}
+        if self._build_env:
+            env_overrides = self._build_env(
+                contracted_body,
+                execution_repo_path,
+                temp_dir,
+            )
 
         cmd_json = temp_dir / "cmd.json"
         runner_script = temp_dir / "runner.py"
@@ -541,6 +547,10 @@ sys.exit(rc)
         stderr_fh = (temp_dir / "stderr.log").open("w", encoding="utf-8")
         
         try:
+            process_env = os.environ.copy()
+            process_env.update(
+                {str(key): str(value) for key, value in env_overrides.items() if value is not None}
+            )
             process = subprocess.Popen(
                 [str(wrapper_script)],
                 stdout=stdout_fh, 
@@ -548,6 +558,7 @@ sys.exit(rc)
                 cwd=execution_repo_path,
                 text=True,
                 start_new_session=True,
+                env=process_env,
             )
         except Exception:
             stdout_fh.close()

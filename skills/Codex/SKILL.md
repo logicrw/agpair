@@ -53,7 +53,7 @@ agpair task retry TASK-123 --from-block --authorization-profile local_mutating
 
 For Codex as controller, prefer `antigravity-cli`, then `grok-cli`, then `claude-code`.
 
-`claude-code` is the AGPair-managed external Claude Code worker for Codex controllers. It is the cross-controller quality escalation lane, not a native Codex subagent. It reuses the local Claude Code OAuth/subscription login by default; `agpair doctor --fresh` runs a live auth probe, so if it reports `executor_auth_required` or `Invalid Authentication`, run `claude auth login` before falling back to earlier external executors or native Codex subagents. API-key bare mode is only an explicit fallback via `AGPAIR_CLAUDE_CODE_AUTH_MODE=api`.
+`claude-code` is the AGPair-managed external Claude Code worker for Codex controllers. It is the cross-controller quality escalation lane, not a native Codex subagent. Its default Claude auth mode is `auto`: `agpair doctor --fresh` first verifies the local Claude Code OAuth/subscription login, then falls back to the current Claude provider selected in CC Switch. Update Claude login or the CC Switch provider if `doctor --fresh` reports `executor_auth_required` or `Invalid Authentication`. API-key bare mode is only an explicit fallback via `AGPAIR_CLAUDE_CODE_AUTH_MODE=api`.
 
 Do not request the AGPair-managed external `codex` executor by default; it is the Codex CLI worker and is suppressed for Codex controllers unless `--allow-self-executor` is explicitly justified. Use Codex native subagents as the fallback/review lane after external executors are unavailable, unsuitable, or not good enough.
 

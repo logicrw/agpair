@@ -183,11 +183,15 @@ agpair task start \
 - `AGPAIR_GROK_MAX_TURNS=24`
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
   旧别名：`AGPAIR_CLAUDE_CODE_CLI`
-- `AGPAIR_CLAUDE_CODE_AUTH_MODE=oauth|api`
-  默认：`oauth`。OAuth mode 会复用 `claude auth status` 显示的本机
-  Claude Code 订阅 / OAuth 登录，并且不会传 `--bare`。
-  `doctor --fresh` 和 dispatch preflight 还会跑一个极小 live auth probe，
-  让过期 OAuth token 在派发任务前失败。
+- `AGPAIR_CLAUDE_CODE_AUTH_MODE=auto|oauth|ccswitch|api`
+  默认：`auto`。Auto mode 会先使用有效的本机 Claude Code 订阅 / OAuth 登录；
+  如果没有登录或 live probe 失败，就回退到 CC Switch 当前选中的 Claude
+  provider。设为 `oauth` 可禁用 provider 回退，设为 `ccswitch` 可直接使用 CC
+  Switch provider，设为 `api` 则使用单独 bare-mode worker credential。
+- `AGPAIR_CC_SWITCH_HOME=/absolute/path/to/.cc-switch`
+  可选，默认 `~/.cc-switch`。AGPair 读取 CC Switch 当前 Claude provider 的
+  settings，并把它们作为 worker 进程 env 注入；provider secret 不会写进 AGPair
+  command 文件或 health JSON。
 - `AGPAIR_CLAUDE_CODE_MAX_RETRIES=<integer>`
   默认：`0`。AGPair 会给 worker 设置 `CLAUDE_CODE_MAX_RETRIES`，让无效
   OAuth / API credential 快速失败，而不是静默重试。

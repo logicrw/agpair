@@ -94,16 +94,23 @@ agpair claude config
 agpair claude config --install --scope project --repo-path /path/to/repo
 ```
 
-要让 Codex 调用外部 `claude-code` worker，AGPair 默认复用本机 Claude Code OAuth / 订阅登录。先确认 Claude Code 已登录：
+要让 Codex 调用外部 `claude-code` worker，AGPair 默认使用 Claude auth
+mode `auto`：先尝试有效的本机 Claude Code OAuth / 订阅登录；如果没有登录或
+live probe 失败，就复用 CC Switch 当前选中的 Claude provider，例如 Kimi 或未来
+其他 Anthropic-compatible provider。AGPair 不需要再单独配置一套 Claude API key。
 
 ```bash
 claude auth status
 agpair doctor --fresh --repo-path /path/to/repo
 ```
 
-`doctor --fresh` 会跑一个极小 live auth probe；如果报告 `Invalid Authentication`，用 `claude auth login` 刷新本机 Claude Code 登录。
+`doctor --fresh` 会跑一个极小 live auth probe，并把选中的 `auth_mode` 显示为
+`oauth` 或 `ccswitch`。如果 OAuth 失败，用 `claude auth login` 刷新本机
+Claude Code 登录；如果 CC Switch 失败，就在 CC Switch 里更新当前 Claude
+provider。
 
-只有明确想给 worker 使用单独 API credential 时，才启用 API-key bare mode：
+只有明确想绕过 OAuth 和 CC Switch、给 worker 使用单独 API credential 时，才启用
+API-key bare mode：
 
 ```bash
 mkdir -p ~/.agpair
