@@ -51,6 +51,18 @@ def test_registry_returns_external_cli_adapters_for_canonical_ids() -> None:
     assert isinstance(get_executor("codex"), CodexExecutor)
 
 
+def test_registry_factories_preserve_environment_binary_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_CODEX_BIN", "/tmp/fake-codex")
+
+    executor = get_executor("codex")
+    legacy_executor = get_executor("codex_cli")
+
+    assert isinstance(executor, CodexExecutor)
+    assert executor.bin_path == "/tmp/fake-codex"
+    assert isinstance(legacy_executor, CodexExecutor)
+    assert legacy_executor.bin_path == "/tmp/fake-codex"
+
+
 def test_registry_keeps_legacy_executors_readable_without_marking_them_active() -> None:
     assert isinstance(get_executor("antigravity", agent_bus_bin="agent-bus"), AntigravityExecutor)
     assert isinstance(get_executor("codex_cli"), CodexExecutor)

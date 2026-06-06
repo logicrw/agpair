@@ -26,10 +26,39 @@ def test_claude_code_command_is_print_json_and_permission_scoped() -> None:
 
     assert cmd == [
         "fake-claude",
+        "--bare",
         "--permission-mode",
         "bypassPermissions",
+        "--no-session-persistence",
         "--output-format",
         "json",
         "--print",
         "Goal: edit the repo",
     ]
+
+
+def test_claude_code_bare_mode_can_be_explicitly_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_BARE", "0")
+    executor = ClaudeCodeExecutor(claude_bin="fake-claude")
+
+    cmd = executor._build_claude_cmd(
+        "Goal: inspect the repo",
+        "/tmp/repo",
+        pathlib.Path("/tmp/agpair"),
+    )
+
+    assert "--bare" not in cmd
+    assert cmd[:3] == ["fake-claude", "--permission-mode", "bypassPermissions"]
+
+
+def test_claude_code_settings_file_is_passed_to_bare_worker(monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_SETTINGS", "/tmp/claude-settings.json")
+    executor = ClaudeCodeExecutor(claude_bin="fake-claude")
+
+    cmd = executor._build_claude_cmd(
+        "Goal: inspect the repo",
+        "/tmp/repo",
+        pathlib.Path("/tmp/agpair"),
+    )
+
+    assert cmd[:4] == ["fake-claude", "--bare", "--settings", "/tmp/claude-settings.json"]

@@ -79,6 +79,37 @@ def test_dispatch_injects_authorization_and_structured_receipt_contract(tmp_path
     assert "payload.report" in prompt
 
 
+def test_structured_receipt_from_logs_parses_pretty_wrapped_text(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    receipt = {
+        "schema_version": "1",
+        "task_id": "TASK-WRAPPED-LOG",
+        "attempt_no": 1,
+        "review_round": 0,
+        "status": "EVIDENCE_PACK",
+        "summary": "Smoke complete",
+        "payload": {
+            "claimed_state": "ready_for_review",
+            "changed_files": ["tests/fixtures/external_executor_smoke/grok-cli.txt"],
+            "validation_not_run": "smoke",
+            "scope_violations": [],
+            "raw_log_path": "stdout.log",
+            "receipt_path": "receipt.json",
+        },
+    }
+    wrapper = {
+        "text": json.dumps(receipt, sort_keys=True),
+        "stopReason": "EndTurn",
+    }
+    (tmp_path / "stdout.log").write_text(json.dumps(wrapper, indent=2), encoding="utf-8")
+
+    parsed = executor._structured_receipt_from_logs(tmp_path, "TASK-WRAPPED-LOG")
+
+    assert parsed is not None
+    assert parsed.status == "EVIDENCE_PACK"
+    assert parsed.payload["changed_files"] == ["tests/fixtures/external_executor_smoke/grok-cli.txt"]
+
+
 def test_poll_persists_final_summary_to_state_json(tmp_path):
     executor = DummyLocalCLIExecutor()
     (tmp_path / "rc.txt").write_text("0", encoding="utf-8")
@@ -116,6 +147,95 @@ def test_poll_persists_error_summary_to_state_json(tmp_path):
     assert "boom" in persisted["error_summary"]
     assert persisted["final_summary"] is None
     assert state.receipt["payload"]["returncode"] == 7
+
+
+def test_poll_classifies_executor_quota_exhaustion(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    (tmp_path / "rc.txt").write_text("1", encoding="utf-8")
+    (tmp_path / "stdout.log").write_text(
+        "You've hit your usage limit. Visit settings to purchase more credits.\n",
+        encoding="utf-8",
+    )
+
+    state = executor.poll("TASK-LOCAL-QUOTA", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is True
+    assert state.receipt["status"] == "BLOCKED"
+    assert state.receipt["payload"]["blocker_type"] == "executor_quota_exhausted"
+    assert state.receipt["payload"]["recoverable"] is True
+    assert state.receipt["payload"]["recommended_next_action"] == "wait_or_switch_executor"
+
+
+def test_poll_classifies_executor_auth_failure(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    (tmp_path / "rc.txt").write_text("1", encoding="utf-8")
+    (tmp_path / "stderr.log").write_text("TokenRefreshFailed invalid_grant\n", encoding="utf-8")
+
+    state = executor.poll("TASK-LOCAL-AUTH", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is True
+    assert state.receipt["status"] == "BLOCKED"
+    assert state.receipt["payload"]["blocker_type"] == "executor_auth_failed"
+    assert state.receipt["payload"]["recoverable"] is False
+    assert state.receipt["payload"]["recommended_next_action"] == "repair_executor_auth"
+
+
+def test_poll_report_only_process_crash_reports_missing_report_not_commit(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "pid": None,
+                "repo_path": None,
+                "exit_code": None,
+                "is_process_alive": False,
+                "has_committed": False,
+                "authorization_profile": "local_readonly",
+                "updated_at": "2026-04-06T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = executor.poll("TASK-LOCAL-REPORT-CRASH", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is True
+    assert state.receipt["status"] == "BLOCKED"
+    assert "commit" not in state.receipt["summary"].lower()
+    assert state.receipt["payload"]["blocker_type"] == "report_output_missing"
+    assert state.receipt["payload"]["authorization_profile"] == "local_readonly"
+
+
+def test_poll_mutating_process_crash_mentions_commit_evidence(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "pid": None,
+                "repo_path": None,
+                "exit_code": None,
+                "is_process_alive": False,
+                "has_committed": False,
+                "authorization_profile": "local_mutating",
+                "updated_at": "2026-04-06T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = executor.poll("TASK-LOCAL-MUTATING-CRASH", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is True
+    assert state.receipt["status"] == "BLOCKED"
+    assert "commit evidence" in state.receipt["summary"]
+    assert state.receipt["payload"]["blocker_type"] == "terminal_receipt_missing"
+    assert state.receipt["payload"]["authorization_profile"] == "local_mutating"
 
 
 def test_poll_returns_evidence_pack_for_success_exit_without_commit_when_commit_evidence_available(tmp_path):

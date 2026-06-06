@@ -27,7 +27,34 @@ class ReceiptValidationResult:
 
 
 _VALID_STATUSES = frozenset({"EVIDENCE_PACK", "BLOCKED", "COMMITTED"})
+_STATUS_ALIASES = {
+    "evidence_pack": "EVIDENCE_PACK",
+    "evidence-ready": "EVIDENCE_PACK",
+    "evidence_ready": "EVIDENCE_PACK",
+    "ready-for-review": "EVIDENCE_PACK",
+    "ready_for_review": "EVIDENCE_PACK",
+    "report": "EVIDENCE_PACK",
+    "report_only": "EVIDENCE_PACK",
+    "blocked": "BLOCKED",
+    "block": "BLOCKED",
+    "failed": "BLOCKED",
+    "failure": "BLOCKED",
+    "committed": "COMMITTED",
+    "commit": "COMMITTED",
+}
 _LISTISH_COMMITTED_FIELDS = frozenset({"changed_files", "validation", "residual_risks"})
+
+
+def _normalize_status(value: Any) -> TerminalReceiptStatus | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if stripped in _VALID_STATUSES:
+        return stripped  # type: ignore[return-value]
+    alias = _STATUS_ALIASES.get(stripped.lower())
+    if alias in _VALID_STATUSES:
+        return alias  # type: ignore[return-value]
+    return None
 
 
 def validate_terminal_receipt_payload(
@@ -75,16 +102,17 @@ def validate_structured_receipt_dict(
     if parsed.get("schema_version") != "1":
         return None
 
-    status = parsed.get("status")
+    status = _normalize_status(parsed.get("status"))
     task_id = parsed.get("task_id")
     attempt_no = parsed.get("attempt_no")
     review_round = parsed.get("review_round")
     summary = parsed.get("summary")
     payload = parsed.get("payload")
 
-    if status not in _VALID_STATUSES:
+    if status is None:
         return None
-    if expected_status is not None and status != expected_status:
+    normalized_expected_status = _normalize_status(expected_status) if expected_status is not None else None
+    if expected_status is not None and status != normalized_expected_status:
         return None
     if not isinstance(task_id, str):
         return None
@@ -111,14 +139,22 @@ def validate_structured_receipt_dict(
     )
 
 
-def parse_structured_terminal_receipt(
+_WRAPPED_TEXT_KEYS = (
+    "result",
+    "output",
+    "text",
+    "content",
+    "message",
+    "response",
+)
+
+
+def _parse_direct_receipt(
     body: str,
     *,
     expected_status: str | None = None,
     expected_task_id: str | None = None,
 ) -> StructuredTerminalReceipt | None:
-    if not body:
-        return None
     try:
         parsed = json.loads(body)
     except json.JSONDecodeError:
@@ -129,6 +165,63 @@ def parse_structured_terminal_receipt(
         expected_status=expected_status,
         expected_task_id=expected_task_id,
     )
+
+
+def _wrapped_text_candidates(value: Any) -> list[str]:
+    candidates: list[str] = []
+    if isinstance(value, str):
+        candidates.append(value)
+        return candidates
+    if isinstance(value, list):
+        for item in value:
+            candidates.extend(_wrapped_text_candidates(item))
+        return candidates
+    if isinstance(value, dict):
+        visited_keys: set[str] = set()
+        for key in _WRAPPED_TEXT_KEYS:
+            if key in value:
+                visited_keys.add(key)
+                candidates.extend(_wrapped_text_candidates(value[key]))
+        for key, item in value.items():
+            if key in visited_keys:
+                continue
+            candidates.extend(_wrapped_text_candidates(item))
+        return candidates
+    return candidates
+
+
+def parse_structured_terminal_receipt(
+    body: str,
+    *,
+    expected_status: str | None = None,
+    expected_task_id: str | None = None,
+) -> StructuredTerminalReceipt | None:
+    if not body:
+        return None
+    direct = _parse_direct_receipt(
+        body,
+        expected_status=expected_status,
+        expected_task_id=expected_task_id,
+    )
+    if direct is not None:
+        return direct
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    for candidate in _wrapped_text_candidates(parsed):
+        for line in reversed(candidate.splitlines()):
+            stripped = line.strip()
+            if not stripped.startswith("{"):
+                continue
+            nested = _parse_direct_receipt(
+                stripped,
+                expected_status=expected_status,
+                expected_task_id=expected_task_id,
+            )
+            if nested is not None:
+                return nested
+    return None
 
 
 def structured_receipt_to_dict(receipt: StructuredTerminalReceipt) -> dict[str, Any]:
@@ -163,7 +256,7 @@ def blocked_failure_context_from_receipt(receipt: StructuredTerminalReceipt) -> 
     recoverable = payload.get("recoverable")
     if not isinstance(recoverable, bool):
         recoverable = False
-    recommended_next_action = payload.get("suggested_action")
+    recommended_next_action = payload.get("recommended_next_action") or payload.get("suggested_action")
     if not isinstance(recommended_next_action, str) or not recommended_next_action.strip():
         recommended_next_action = "inspect_logs"
     last_error_excerpt = payload.get("last_error_excerpt")

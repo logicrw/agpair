@@ -26,6 +26,7 @@ class LivenessState(str, enum.Enum):
     silent = "silent"
     active_via_heartbeat = "active_via_heartbeat"
     active_via_workspace = "active_via_workspace"
+    active_via_output = "active_via_output"
     active_via_both = "active_via_both"
 
 
@@ -38,6 +39,26 @@ def _is_fresh(iso_timestamp: str | None, cutoff: datetime) -> bool:
         return dt > cutoff
     except (ValueError, TypeError):
         return False
+
+
+def _latest_output_timestamp(task: TaskRecord) -> str | None:
+    session_id = getattr(task, "executor_session_id", None) or getattr(task, "antigravity_session_id", None)
+    if not session_id:
+        return None
+    attempt_dir = Path(str(session_id))
+    latest: datetime | None = None
+    for filename in ("stdout.log", "stderr.log"):
+        path = attempt_dir / filename
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        if not path.is_file() or stat.st_size <= 0:
+            continue
+        modified = datetime.fromtimestamp(stat.st_mtime, UTC)
+        if latest is None or modified > latest:
+            latest = modified
+    return latest.isoformat() if latest is not None else None
 
 
 def classify_liveness(
@@ -66,6 +87,7 @@ def classify_liveness(
 
     hb_fresh = _is_fresh(task.last_heartbeat_at, cutoff)
     ws_fresh = _is_fresh(task.last_workspace_activity_at, cutoff)
+    output_fresh = _is_fresh(_latest_output_timestamp(task), cutoff)
 
     if hb_fresh and ws_fresh:
         return LivenessState.active_via_both
@@ -73,6 +95,8 @@ def classify_liveness(
         return LivenessState.active_via_heartbeat
     if ws_fresh:
         return LivenessState.active_via_workspace
+    if output_fresh:
+        return LivenessState.active_via_output
     return LivenessState.silent
 
 

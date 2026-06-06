@@ -25,6 +25,19 @@ class FakeExecutor:
 
 def make_paths(tmp_path: Path, monkeypatch) -> AppPaths:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    for env_var, filename in (
+        ("AGPAIR_CODEX_BIN", "codex"),
+        ("AGPAIR_CLAUDE_CODE_BIN", "claude"),
+        ("AGPAIR_ANTIGRAVITY_CLI_BIN", "agy"),
+        ("AGPAIR_GROK_CLI_BIN", "grok"),
+    ):
+        bin_path = bin_dir / filename
+        bin_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        bin_path.chmod(0o755)
+        monkeypatch.setenv(env_var, str(bin_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-api-key")
     paths = AppPaths.default()
     ensure_database(paths.db_path)
     return paths

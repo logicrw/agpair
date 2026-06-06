@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import os
 import shutil
-from dataclasses import asdict, dataclass
+import subprocess
+from dataclasses import asdict, dataclass, field
 from typing import Any
+
+from agpair.executors.lifecycle import ACTIVE, lifecycle_decision
 
 CANONICAL_EXECUTOR_IDS = ("antigravity-cli", "grok-cli", "claude-code", "codex")
 LEGACY_EXECUTOR_ALIASES = {
@@ -16,6 +19,7 @@ LEGACY_EXECUTOR_ALIASES = {
     "codex_cli": "codex",
 }
 REJECTED_EXECUTOR_IDS = {"gemini", "gemini-cli", "gemini_cli"}
+_FALSE_ENV_VALUES = {"0", "false", "no", "off"}
 
 
 @dataclass(frozen=True)
@@ -30,9 +34,26 @@ class ExecutorSpec:
     is_mutating: bool
     is_concurrency_safe: bool
     requires_human_interaction: bool = False
+    display_name: str | None = None
+    lifecycle_status: str = ACTIVE
+    replacement_executor: str | None = None
+    supported_completion_policies: tuple[str, ...] = ("auto", "evidence", "report", "commit")
+    receipt_capable: str = "prompt_contract"
+    controller_suppression: tuple[str, ...] = ()
+    recommended_for_controllers: tuple[str, ...] = ("generic", "codex", "claude-code")
+    isolation_profile: dict[str, Any] = field(default_factory=dict)
+    launch_probe: tuple[str, ...] = ("--help",)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["binary_name"] = self.default_binary
+        payload["display_name"] = self.display_name or self.executor_id
+        payload["lifecycle"] = lifecycle_decision(
+            executor_id=self.executor_id,
+            lifecycle_status=self.lifecycle_status,
+            replacement_executor=self.replacement_executor,
+        ).to_dict()
+        return payload
 
 
 @dataclass(frozen=True)
@@ -60,6 +81,17 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
         default_authorization_profile="local_mutating",
         is_mutating=True,
         is_concurrency_safe=False,
+        display_name="Antigravity CLI",
+        receipt_capable="prompt_contract",
+        isolation_profile={
+            "supports_isolated_config_home": False,
+            "supports_turn_budget": "no",
+            "supports_streaming_json": "no",
+            "default_output_mode": "print",
+            "noninteractive_flags": ["--print", "--print-timeout"],
+            "isolated_auth_env_vars": [],
+            "isolation_disable_env_var": None,
+        },
     ),
     "grok-cli": ExecutorSpec(
         executor_id="grok-cli",
@@ -71,6 +103,26 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
         default_authorization_profile="local_readonly",
         is_mutating=True,
         is_concurrency_safe=False,
+        display_name="Grok CLI",
+        receipt_capable="prompt_contract",
+        isolation_profile={
+            "supports_isolated_config_home": "limited",
+            "supports_turn_budget": True,
+            "supports_streaming_json": True,
+            "default_output_mode": "json",
+            "noninteractive_flags": [
+                "--single",
+                "--cwd",
+                "--output-format",
+                "--always-approve",
+                "--max-turns",
+                "--no-memory",
+                "--no-subagents",
+                "--disable-web-search",
+            ],
+            "isolated_auth_env_vars": [],
+            "isolation_disable_env_var": None,
+        },
     ),
     "claude-code": ExecutorSpec(
         executor_id="claude-code",
@@ -82,6 +134,18 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
         default_authorization_profile="local_mutating",
         is_mutating=True,
         is_concurrency_safe=False,
+        display_name="Claude Code CLI",
+        controller_suppression=("claude", "claude-code", "claude_code"),
+        receipt_capable="prompt_contract",
+        isolation_profile={
+            "supports_isolated_config_home": "bare",
+            "supports_turn_budget": "unknown",
+            "supports_streaming_json": True,
+            "default_output_mode": "json",
+            "noninteractive_flags": ["--bare", "--print", "--output-format", "--no-session-persistence"],
+            "isolated_auth_env_vars": ["ANTHROPIC_API_KEY", "AGPAIR_CLAUDE_CODE_SETTINGS"],
+            "isolation_disable_env_var": "AGPAIR_CLAUDE_CODE_BARE",
+        },
     ),
     "codex": ExecutorSpec(
         executor_id="codex",
@@ -93,6 +157,25 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
         default_authorization_profile="local_mutating",
         is_mutating=True,
         is_concurrency_safe=False,
+        display_name="Codex CLI worker",
+        controller_suppression=("codex",),
+        receipt_capable="prompt_contract",
+        isolation_profile={
+            "supports_isolated_config_home": True,
+            "supports_turn_budget": "unknown",
+            "supports_streaming_json": True,
+            "default_output_mode": "json",
+            "noninteractive_flags": [
+                "exec",
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--ephemeral",
+                "--json",
+                "-C",
+            ],
+            "isolated_auth_env_vars": [],
+            "isolation_disable_env_var": "AGPAIR_CODEX_IGNORE_USER_CONFIG",
+        },
     ),
 }
 
@@ -119,25 +202,135 @@ def executor_binary_path(executor_id: str) -> str | None:
     return shutil.which(spec.default_binary)
 
 
-def executor_health_snapshot() -> dict[str, dict[str, Any]]:
+def _configured_executor_binary(spec: ExecutorSpec) -> tuple[str | None, str | None, str | None]:
+    for env_var in (spec.env_var, *spec.env_aliases):
+        configured = os.environ.get(env_var, "").strip()
+        if configured:
+            return configured, env_var, configured if os.path.exists(configured) or shutil.which(configured) else None
+    return spec.default_binary, None, shutil.which(spec.default_binary)
+
+
+def _launch_probe(binary_path: str, spec: ExecutorSpec, *, timeout_seconds: float = 3.0) -> tuple[bool | str, str | None]:
+    if not spec.launch_probe:
+        return "unknown", None
+    try:
+        proc = subprocess.run(
+            [binary_path, *spec.launch_probe],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    if proc.returncode == 0:
+        return True, None
+    excerpt = (proc.stderr or proc.stdout or "").strip().splitlines()
+    return False, excerpt[-1] if excerpt else f"launch probe exited {proc.returncode}"
+
+
+def _env_flag_disabled(env_var: str | None) -> bool:
+    if not env_var:
+        return False
+    return os.environ.get(env_var, "1").strip().lower() in _FALSE_ENV_VALUES
+
+
+def _isolation_auth_error(spec: ExecutorSpec) -> str | None:
+    profile = spec.isolation_profile or {}
+    required_env_vars = tuple(str(item) for item in profile.get("isolated_auth_env_vars") or ())
+    if not required_env_vars:
+        return None
+    disable_env_var = profile.get("isolation_disable_env_var")
+    if _env_flag_disabled(str(disable_env_var) if disable_env_var else None):
+        return None
+    if any(os.environ.get(env_var, "").strip() for env_var in required_env_vars):
+        return None
+    required = ", ".join(required_env_vars)
+    disable_hint = f" or set {disable_env_var}=0 for diagnostics" if disable_env_var else ""
+    return (
+        f"executor {spec.executor_id} requires one of {required} for isolated external-worker auth"
+        f"{disable_hint}"
+    )
+
+
+def executor_health_snapshot(*, run_launch_probe: bool = False) -> dict[str, dict[str, Any]]:
     snapshot: dict[str, dict[str, Any]] = {}
     for executor_id, spec in EXECUTOR_SPECS.items():
-        binary = executor_binary_path(executor_id)
-        configured_env_var = next(
-            (env_var for env_var in (spec.env_var, *spec.env_aliases) if os.environ.get(env_var, "").strip()),
-            None,
+        configured_binary, configured_env_var, binary = _configured_executor_binary(spec)
+        lifecycle = lifecycle_decision(
+            executor_id=executor_id,
+            lifecycle_status=spec.lifecycle_status,
+            replacement_executor=spec.replacement_executor,
+        )
+        binary_available = bool(binary)
+        launch_clean: bool | str = "unknown"
+        launch_error: str | None = None
+        if run_launch_probe and binary:
+            launch_clean, launch_error = _launch_probe(binary, spec)
+        isolation_auth_error = _isolation_auth_error(spec)
+        last_failure_type = None
+        if not lifecycle.allowed_for_new_tasks:
+            last_failure_type = lifecycle.blocker_type
+        elif not binary_available:
+            last_failure_type = "executor_unavailable"
+        elif launch_clean is False:
+            last_failure_type = "launch_probe_failed"
+        elif isolation_auth_error:
+            last_failure_type = "executor_auth_required"
+        available = (
+            lifecycle.allowed_for_new_tasks
+            and spec.enabled_by_default
+            and binary_available
+            and launch_clean is not False
+            and isolation_auth_error is None
         )
         snapshot[executor_id] = {
-            "available": bool(binary),
+            "available": available,
+            "binary": configured_binary,
+            "binary_name": spec.default_binary,
+            "binary_available": binary_available,
             "binary_path": binary,
             "env_var": spec.env_var,
             "env_aliases": list(spec.env_aliases),
             "env_vars": [spec.env_var, *spec.env_aliases],
             "configured_env_var": configured_env_var,
             "default_binary": spec.default_binary,
+            "display_name": spec.display_name or executor_id,
             "enabled_by_default": spec.enabled_by_default,
+            "lifecycle_status": lifecycle.lifecycle_status,
+            "replacement_executor": lifecycle.replacement_executor,
+            "lifecycle_allowed_for_new_tasks": lifecycle.allowed_for_new_tasks,
+            "lifecycle_reason": lifecycle.reason,
+            "receipt_capable": spec.receipt_capable,
+            "supported_completion_policies": list(spec.supported_completion_policies),
+            "controller_suppression": list(spec.controller_suppression),
+            "recommended_for_controllers": list(spec.recommended_for_controllers),
+            "isolation_profile": spec.isolation_profile,
+            "launch_probe": list(spec.launch_probe),
+            "launch_clean": launch_clean,
+            "isolation_auth_satisfied": isolation_auth_error is None,
+            "last_failure_type": last_failure_type,
+            "last_error_excerpt": launch_error or isolation_auth_error,
         }
     return snapshot
+
+
+def _controller_id(value: str | None) -> str:
+    normalized = (value or "generic").strip().lower().replace("_", "-")
+    return normalized or "generic"
+
+
+def _suppressed_executors_for_controller(controller_id: str, *, allow_self_executor: bool) -> tuple[str, ...]:
+    if allow_self_executor:
+        return ()
+    suppressed = [
+        spec.executor_id
+        for spec in sorted(EXECUTOR_SPECS.values(), key=lambda item: item.default_priority)
+        if controller_id in {item.replace("_", "-") for item in spec.controller_suppression}
+    ]
+    return tuple(suppressed)
 
 
 def resolve_controller_policy(
@@ -147,20 +340,23 @@ def resolve_controller_policy(
     allow_self_executor: bool = False,
     require_available: bool = False,
 ) -> ExecutorPolicyDecision:
-    controller_id = (controller or "generic").strip().lower() or "generic"
-    suppressed: list[str] = []
+    controller_id = _controller_id(controller)
+    suppressed = list(_suppressed_executors_for_controller(controller_id, allow_self_executor=allow_self_executor))
     reasons: list[str] = []
-    if controller_id == "codex" and not allow_self_executor:
-        suppressed.append("codex")
-        reasons.append("codex controller suppresses external codex by default")
-    if controller_id in {"claude-code", "claude_code", "claude"} and not allow_self_executor:
-        suppressed.append("claude-code")
-        reasons.append("claude-code controller suppresses external claude-code by default")
+    for executor_id in suppressed:
+        reasons.append(f"{controller_id} controller suppresses external {executor_id} by default")
 
     requested_normalized = normalize_executor_id(requested_executor) if requested_executor else None
-    health = executor_health_snapshot()
+    health = executor_health_snapshot(run_launch_probe=require_available)
     eligible = []
     for spec in sorted(EXECUTOR_SPECS.values(), key=lambda item: item.default_priority):
+        lifecycle = lifecycle_decision(
+            executor_id=spec.executor_id,
+            lifecycle_status=spec.lifecycle_status,
+            replacement_executor=spec.replacement_executor,
+        )
+        if not spec.enabled_by_default or not lifecycle.allowed_for_new_tasks:
+            continue
         if spec.executor_id in suppressed:
             continue
         if require_available and not health[spec.executor_id]["available"]:
@@ -173,10 +369,22 @@ def resolve_controller_policy(
         rejected = selected
         selected = None
         reasons.append(f"requested executor {rejected} suppressed for controller {controller_id}")
+    elif selected and not health[selected]["lifecycle_allowed_for_new_tasks"]:
+        rejected = selected
+        selected = None
+        reason = str(health[rejected].get("lifecycle_reason") or f"requested executor {rejected} is not active")
+        reasons.append(reason)
     elif selected and require_available and not health[selected]["available"]:
         rejected = selected
         selected = None
-        reasons.append(f"requested executor {rejected} is unavailable")
+        item = health[rejected]
+        reason = item.get("last_error_excerpt")
+        if not reason:
+            reason = (
+                f"requested executor {rejected} is unavailable; install {item['binary_name']} "
+                f"or set {item['env_var']}"
+            )
+        reasons.append(str(reason))
 
     if selected is None and eligible:
         selected = eligible[0]

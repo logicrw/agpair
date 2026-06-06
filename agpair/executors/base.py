@@ -37,7 +37,17 @@ class ExecutorAdapter(typing.Protocol):
         """Return static safety properties of this executor backend."""
         ...
 
-    def dispatch(self, *, task_id: str, body: str, repo_path: str, isolated_worktree: bool = False, worktree_boundary: str | None = None) -> DispatchResult:
+    def dispatch(
+        self,
+        *,
+        task_id: str,
+        body: str,
+        repo_path: str,
+        isolated_worktree: bool = False,
+        worktree_boundary: str | None = None,
+        authorization_profile: str = "local_mutating",
+        authorization_summary: str | None = None,
+    ) -> DispatchResult:
         """
         Dispatch a task payload to the underlying executor.
 

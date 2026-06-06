@@ -81,14 +81,16 @@ def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch
         ("AGPAIR_ANTIGRAVITY_CLI_BIN", "agy"),
         ("AGPAIR_GROK_CLI", "grok"),
         ("AGPAIR_CLAUDE_CODE_CLI", "claude"),
+        ("AGPAIR_CODEX_CLI", "codex"),
     ):
         bin_path = tmp_path / "bin" / filename
         bin_path.parent.mkdir(parents=True, exist_ok=True)
         bin_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         bin_path.chmod(0o755)
         monkeypatch.setenv(env_var, str(bin_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-api-key")
 
-    result = CliRunner().invoke(app, ["doctor"])
+    result = CliRunner().invoke(app, ["doctor", "--fresh"])
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -98,8 +100,18 @@ def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch
     assert "AGPAIR_ANTIGRAVITY_CLI" in health["antigravity-cli"]["env_aliases"]
     assert health["antigravity-cli"]["configured_env_var"] == "AGPAIR_ANTIGRAVITY_CLI_BIN"
     assert health["antigravity-cli"]["binary"].endswith("/agy")
+    assert health["antigravity-cli"]["binary_name"] == "agy"
+    assert health["antigravity-cli"]["binary_available"] is True
+    assert health["antigravity-cli"]["launch_clean"] is True
+    assert health["antigravity-cli"]["isolation_auth_satisfied"] is True
+    assert health["antigravity-cli"]["receipt_capable"] == "prompt_contract"
+    assert health["antigravity-cli"]["lifecycle_status"] == "active"
+    assert health["antigravity-cli"]["replacement_executor"] is None
+    assert health["antigravity-cli"]["last_failure_type"] is None
     assert health["grok-cli"]["available"] is True
     assert health["claude-code"]["available"] is True
+    assert health["claude-code"]["isolation_auth_satisfied"] is True
+    assert health["codex"]["available"] is True
     assert "codex" in health
     assert "gemini_cli" not in health
 

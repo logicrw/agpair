@@ -1,6 +1,6 @@
 # agpair Usage
 
-`agpair` is a durable task lifecycle layer for multiple executors.
+`agpair` is a durable task lifecycle layer for external CLI executors.
 
 Use it when:
 - Your AI coding agent is the main controller
@@ -14,7 +14,9 @@ Use it when:
 - default: `~/.agpair/`
 - override for testing: `AGPAIR_HOME=/path/to/custom/root`
 
-It expects an `agent-bus` executable:
+Local CLI executors do not require the legacy desktop bridge. `agent-bus` is
+only needed for older companion/bridge installations and their receipt-ingestion
+diagnostics:
 
 - default lookup: `agent-bus`
 - override: `AGPAIR_AGENT_BUS_BIN=/absolute/path/to/agent-bus`
@@ -32,30 +34,25 @@ The report includes:
 - config root
 - DB existence
 - `db_error` when the DB file exists but is unreadable/corrupt
-- `agent-bus` availability
 - daemon pid/status visibility
 - latest known receipt id
-- `desktop_reader_conflict` when another desktop-side watcher is already claiming the same `code -> desktop` receipts
-- optional repo bridge preflight when `--repo-path` is provided:
-  - repo bridge marker path / port
-  - bridge `/health` reachability
-  - `sdk_initialized`
-  - `ls_bridge_ready`
-  - `monitor_running`
-  - `workspace_paths` match
-  - `agent_bus_watch_running`
-  - `agent_bus_delegation_enabled`
-  - `receipt_watcher_running`
-  - consolidated `repo_bridge_warning` when the Antigravity host/session looks degraded
+- registered executor health, including binary, launch, receipt capability, lifecycle status, and routing eligibility
+- controller hook install status when `--repo-path` is provided
+- legacy companion bridge diagnostics when a repo still uses that path
+
+Legacy bridge diagnostics can include `agent-bus`, `desktop_reader_conflict`,
+repo bridge marker/port, bridge `/health`, `ls_bridge_ready`,
+`workspace_paths`, `receipt_watcher_running`, and `repo_bridge_warning`.
 
 If `repo_bridge_warning` mentions:
 - `ls_bridge_ready=false`: treat it as a likely stale Antigravity session / missing CSRF state
 - `workspace_paths missing repo`: you are pointed at the wrong Antigravity window
 - `bridge health probe failed`: the companion bridge is not currently reachable on the discovered port
 
-### Standalone mode matters
+### Legacy companion mode
 
-`agpair` v1 assumes it is the only desktop-side consumer for Antigravity receipts.
+Local CLI executors do not compete for desktop receipts. The standalone
+desktop-reader guard applies only to the legacy Antigravity companion bridge.
 
 If another desktop-side receipt watcher is already running on the same machine, both tools will compete for the same `code -> desktop` messages. In that situation:
 
@@ -128,6 +125,12 @@ agpair task start \
   --body "Goal: ..."
 ```
 
+Use a focused project directory for `--repo-path`. AGPair refuses filesystem
+roots, the user home directory, and paths above the user home by default because
+external executors can otherwise scan private logs, caches, and unrelated
+projects. If a broad path is intentional, pass `--allow-broad-repo-path`; that
+override is stored on the task and visible in `task status`.
+
 Other new-task executor ids are:
 
 - `antigravity-cli`: default external implementation executor
@@ -160,16 +163,41 @@ Local CLI approval modes can be adjusted with environment variables:
 - `AGPAIR_ANTIGRAVITY_PRINT_TIMEOUT=30m0s`
 - `AGPAIR_GROK_CLI_BIN=/absolute/path/to/grok`
   Legacy alias: `AGPAIR_GROK_CLI`
+- `AGPAIR_GROK_OUTPUT_FORMAT=json|streaming-json`
+  Default: `json`
+- `AGPAIR_GROK_MAX_TURNS=24`
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
   Legacy alias: `AGPAIR_CLAUDE_CODE_CLI`
+- `AGPAIR_CLAUDE_CODE_BARE=1|0`
+  Default: `1`. Keep this on for external-worker isolation; set `0` only for diagnostics.
+- `AGPAIR_CLAUDE_CODE_SETTINGS=/absolute/path/to/settings.json`
+  Optional Claude Code settings JSON or path. Use this when bare mode needs an
+  `apiKeyHelper`; OAuth/keychain auth is intentionally not used in bare mode.
 - `AGPAIR_CLAUDE_CODE_PERMISSION_MODE=<claude --permission-mode value>`
   Default: `bypassPermissions`
 - `AGPAIR_CODEX_BIN=/absolute/path/to/codex`
   Legacy alias: `AGPAIR_CODEX_CLI`
+- `AGPAIR_CODEX_IGNORE_USER_CONFIG=1|0`
+  Default: `1`. Keep this on for external-worker isolation; set `0` only for diagnostics.
 - `AGPAIR_CODEX_APPROVAL_MODE=default|full_auto|bypass_all`
   Default: `bypass_all`
 
+These knobs are adapter-local escape hatches. The registry profile remains the
+shared contract for every executor, and tests require declared noninteractive
+and isolation flags to match each adapter's default command.
+
 Note: all executors use fresh sessions for retries.
+
+### Completion policy
+
+Not every task needs a commit. Completion policy owns terminal semantics:
+
+- `report`: succeeds with a captured report, stdout report output, or valid structured receipt carrying report evidence.
+- `evidence`: succeeds with verifiable evidence such as receipt payloads, artifacts, changed files, or test output.
+- `commit`: requires a verifiable commit.
+- `auto`: resolves from the authorization profile and task brief.
+
+`local_readonly` and briefs that explicitly say `Required changes: none`, `no changes`, or `禁止写入` should use report/evidence semantics. They must not be blocked just because no commit was created.
 
 By default, `task start` blocks until the task reaches a terminal phase.
 To return immediately after dispatch:
@@ -190,17 +218,17 @@ agpair task start \
   --body "Goal: ..."
 ```
 
-### Task Metadata (Orchestration Hints)
+### Task metadata and worktree isolation
 
-You can attach orchestration metadata to a task to help the controller plan parallel and isolated execution.
-**Note:** These fields are currently **metadata-only**. They are persisted in the database and surfaced in `status` and `inspect` outputs, but they are *not* runtime-enforced or automatically executed by the `agpair` daemon.
+You can attach orchestration metadata to a task to help the controller plan
+parallel and isolated execution.
 
 - `depends_on`: List of previous task IDs that must complete before this one.
-- `isolated_worktree`: Boolean indicating intent to execute the task in a separate git worktree.
-- `worktree_boundary`: The intended root directory path for the task's execution boundary.
-- `setup_commands`: Pre-run shell steps (e.g., creating a worktree or starting a service).
-- `teardown_commands`: Post-run shell steps (e.g., cleaning up the worktree).
-- `env_vars`: Per-task environment overrides (e.g., `PORT`, `AGPAIR_PORT_OFFSET`).
+- `isolated_worktree`: Runs local CLI executors from a separate git worktree when AGPair can create or resolve one for the task.
+- `worktree_boundary`: The intended execution boundary for the worktree or task.
+- `setup_commands`: Persisted pre-run hints for the controller; AGPair does not run arbitrary setup scripts.
+- `teardown_commands`: Persisted post-run hints for the controller; AGPair does not run arbitrary teardown scripts.
+- `env_vars`: Persisted per-task environment hints; only explicitly supported executor env is applied automatically.
 - `spotlight_testing`: Boolean intent to prioritize localized test runs over full-suite execution.
 
 **Parallelism recommendation:** Always parallelize across worktrees, not inside one worktree.
@@ -217,8 +245,16 @@ All task-changing commands support the same wait controls:
 
 ```bash
 agpair task status TASK-SMOKE-001
+agpair task status TASK-SMOKE-001 --json
 agpair task logs TASK-SMOKE-001
+agpair task logs TASK-SMOKE-001 --raw stdout
+agpair task logs TASK-SMOKE-001 --raw stderr
 ```
+
+`status --json` exposes the active attempt, executor id, actual binary name,
+pid when available, stdout/stderr paths, log sizes, last output time, small tail
+excerpts, liveness state, effective completion policy, and precise blocker
+metadata. Full raw logs stay on disk unless explicitly requested.
 
 ### Fresh retry
 
@@ -402,3 +438,26 @@ If transport dispatch fails:
 - the CLI exits with code `1`
 - a failure event is written to the local journal
 - the task is not silently advanced
+
+## Executor lifecycle
+
+Every external executor is a registered module. Add, disable, deprecate, or
+remove executors through the shared profile contract rather than through custom
+state-machine branches. See [Executor Lifecycle](executor-lifecycle.md).
+
+Current active executor ids are `antigravity-cli`, `grok-cli`, `claude-code`,
+and `codex`. `codex` means an AGPair-managed external Codex CLI worker, not
+Codex native subagents. `claude-code` means an AGPair-managed external Claude
+Code worker, not Claude Code native subagents.
+
+## Release and privacy checklist
+
+Before publishing or opening a PR:
+
+- Run the targeted tests plus the full unit/integration suite.
+- Run real smoke for the controller matrix and keep smoke reports local.
+- Run `git diff --check`.
+- Inspect `git status --short --untracked-files=all`.
+- Do not stage `.agpair/`, `~/.agpair`, raw executor logs, local receipts, session transcripts, personal Codex/Claude config, or generated hook debug output.
+- Sanitize local paths and private artifact references from committed docs.
+- Check GitHub About/description/topics manually; repository metadata is outside the source diff and can become stale.

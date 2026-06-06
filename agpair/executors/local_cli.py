@@ -333,6 +333,20 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
 
 
+def _classify_executor_error(summary: str) -> tuple[str, bool, str | None]:
+    normalized = summary.lower()
+    if "usage limit" in normalized or "purchase more credits" in normalized or "quota" in normalized:
+        return "executor_quota_exhausted", True, "wait_or_switch_executor"
+    if (
+        "invalid_grant" in normalized
+        or "tokenrefreshfailed" in normalized
+        or "auth(" in normalized
+        or "not authenticated" in normalized
+    ):
+        return "executor_auth_failed", False, "repair_executor_auth"
+    return "execution_error", False, "inspect_logs"
+
+
 def _reap_child_process(pid: int | None) -> None:
     """Best-effort reap for finished wrapper processes to avoid zombie buildup."""
     if not pid:
@@ -401,14 +415,25 @@ def _body_with_task_contract(
 
 
 class LocalCLIExecutor(ExecutorAdapter):
-    """Base class for local CLI executors (Codex, Gemini, etc.)."""
+    """Base class for registered local CLI executors."""
 
     post_commit_grace_seconds: int = 30
 
-    def __init__(self, bin_path: str, backend_id: str, build_cmd: Callable[[str, str, pathlib.Path], list[str]]) -> None:
+    def __init__(
+        self,
+        bin_path: str,
+        backend_id: str,
+        build_cmd: Callable[[str, str, pathlib.Path], list[str]],
+        safety_metadata: ExecutorSafetyMetadata | None = None,
+    ) -> None:
         self.bin_path = bin_path
         self._backend_id = backend_id
         self._build_cmd = build_cmd
+        self._safety_metadata = safety_metadata or ExecutorSafetyMetadata(
+            is_mutating=True,
+            is_concurrency_safe=False,
+            requires_human_interaction=False,
+        )
 
     @property
     def backend_id(self) -> str:
@@ -416,11 +441,7 @@ class LocalCLIExecutor(ExecutorAdapter):
 
     @property
     def safety_metadata(self) -> ExecutorSafetyMetadata:
-        return ExecutorSafetyMetadata(
-            is_mutating=True,
-            is_concurrency_safe=False,
-            requires_human_interaction=False,
-        )
+        return self._safety_metadata
 
     def dispatch(self, *, task_id: str, body: str, repo_path: str, isolated_worktree: bool = False, worktree_boundary: str | None = None, authorization_profile: str = "local_mutating", authorization_summary: str | None = None) -> DispatchResult:
         execution_repo_path = repo_path
@@ -511,6 +532,7 @@ sys.exit(rc)
             "error_summary": None,
             "termination_requested_at": None,
             "termination_signal": None,
+            "authorization_profile": authorization_profile,
             "updated_at": _now_iso(),
         }
         _atomic_write_state(temp_dir / "state.json", state)
@@ -570,6 +592,13 @@ sys.exit(rc)
             except ValueError:
                 exit_code = 1
             state["exit_code"] = exit_code
+        if exit_code is not None:
+            # rc.txt is written only by the AGPair local runner after the wrapped
+            # executor command returns. Treat that as the durable terminal signal
+            # instead of returning a spurious RUNNING heartbeat while the wrapper
+            # process is in its final interpreter shutdown window.
+            process_alive = False
+            state["is_process_alive"] = False
 
         # ========= 第三层：Git 语义仲裁 =========
         repo_path = state.get("repo_path")
@@ -664,7 +693,14 @@ sys.exit(rc)
             log_path = temp_dir / log_name
             if not log_path.exists():
                 continue
-            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            log_body = log_path.read_text(encoding="utf-8", errors="replace")
+            receipt = parse_structured_terminal_receipt(
+                log_body,
+                expected_task_id=task_id,
+            )
+            if receipt is not None:
+                return receipt
+            lines = log_body.splitlines()
             for line in reversed(lines):
                 candidate = line.strip()
                 if not candidate:
@@ -868,6 +904,7 @@ sys.exit(rc)
                 )
             else:
                 summary = self._extract_error_summary(temp_dir)
+                blocker_type, recoverable, recommended_next_action = _classify_executor_error(summary)
                 state["final_summary"] = None
                 state["error_summary"] = summary or f"Exited with code {exit_code}"
                 return True, self._make_receipt(
@@ -877,7 +914,9 @@ sys.exit(rc)
                     summary or f"Exited with code {exit_code}",
                     {
                         "exit_code": exit_code,
-                        "blocker_type": "execution_error",
+                        "blocker_type": blocker_type,
+                        "recoverable": recoverable,
+                        "recommended_next_action": recommended_next_action,
                         **self._raw_log_payload(temp_dir),
                         "receipt_path": str(temp_dir / "receipt.json"),
                     },
@@ -925,7 +964,13 @@ sys.exit(rc)
                     },
                 )
             else:
-                summary = "Process died without committing"
+                authorization_profile = str(state.get("authorization_profile") or "local_mutating")
+                if authorization_profile == "local_readonly":
+                    summary = "Executor process ended before producing a report or terminal receipt"
+                    blocker_type = "report_output_missing"
+                else:
+                    summary = "Executor process ended before producing a terminal receipt or commit evidence"
+                    blocker_type = "terminal_receipt_missing"
                 state["final_summary"] = None
                 state["error_summary"] = summary
                 return True, self._make_receipt(
@@ -935,7 +980,8 @@ sys.exit(rc)
                     summary,
                     {
                         "exit_code": -1,
-                        "blocker_type": "process_crash",
+                        "blocker_type": blocker_type,
+                        "authorization_profile": authorization_profile,
                         **self._raw_log_payload(temp_dir),
                         "receipt_path": str(temp_dir / "receipt.json"),
                     },

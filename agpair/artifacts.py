@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -98,4 +99,29 @@ def artifact_metadata(path: str | Path | None, *, artifact_type: str) -> dict[st
         "size_bytes": stat.st_size,
         "sha256": sha256_file(p),
         "captured_at": utcnow_iso(),
+    }
+
+
+def live_artifact_metadata(
+    path: str | Path | None,
+    *,
+    artifact_type: str,
+    max_excerpt_chars: int = 2000,
+) -> dict[str, Any] | None:
+    if not path:
+        return None
+    p = Path(path)
+    try:
+        stat = p.stat()
+    except OSError:
+        return None
+    if not p.is_file():
+        return None
+    return {
+        "type": artifact_type,
+        "path": str(p),
+        "size_bytes": stat.st_size,
+        "modified_at": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
+        "mtime_ns": stat.st_mtime_ns,
+        "excerpt": read_excerpt(p, max_chars=max_excerpt_chars),
     }

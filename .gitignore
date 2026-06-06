@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.DS_Store
 .supervisor/
 .agpair/
 .omc/
@@ -13,3 +14,5 @@ companion-extension/*.vsix
 
 .omx/
 .firecrawl/
+docs/goals/**/.goalbuddy-board/
+docs/goals/agpair-executor-reliability-v2-1/

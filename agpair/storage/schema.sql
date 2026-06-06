@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   env_vars TEXT,
   worktree_boundary TEXT,
   spotlight_testing INTEGER NOT NULL DEFAULT 0,
+  broad_repo_path_override INTEGER NOT NULL DEFAULT 0,
   completion_policy TEXT NOT NULL DEFAULT 'auto',
   terminal_source TEXT,
   terminal_receipt_json TEXT,

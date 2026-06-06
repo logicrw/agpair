@@ -3,7 +3,7 @@
 Covers:
   - `task retry` blocked on active acked task, allowed with --force
   - `task abandon` blocked on active acked task, allowed with --force
-  - Liveness classification (silent / active_via_heartbeat / active_via_workspace / active_via_both)
+  - Liveness classification (silent / active_via_heartbeat / active_via_workspace / active_via_output / active_via_both)
   - Workspace activity prevents watchdog
   - Stale workspace activity does not prevent watchdog
   - DB migration adds last_workspace_activity_at column
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import click
 from datetime import UTC, datetime, timedelta
+import os
 from pathlib import Path
 import sqlite3
 
@@ -50,7 +51,7 @@ def _seed_acked_task(tmp_path: Path, task_id: str = "TASK-LG1") -> TaskRepositor
     repo_path.mkdir(parents=True, exist_ok=True)
     repo = TaskRepository(db_path)
     repo.create_task(task_id=task_id, repo_path=str(repo_path))
-    repo.mark_acked(task_id=task_id, session_id="session-live")
+    repo.mark_acked(task_id=task_id, session_id=str(tmp_path / "session-live"))
     return repo
 
 
@@ -64,6 +65,22 @@ def _make_live_via_workspace(repo: TaskRepository, task_id: str) -> None:
     """Record very recent workspace activity so the task appears live."""
     recent = _to_iso(datetime.now(UTC) - timedelta(seconds=30))
     repo.update_workspace_activity(task_id=task_id, activity_at=recent)
+
+
+def _make_live_via_output(tmp_path: Path, repo: TaskRepository, task_id: str, *, stale: bool = False) -> Path:
+    """Create live stdout output under the task session directory."""
+    session_dir = tmp_path / "session-live"
+    session_dir.mkdir(exist_ok=True)
+    stdout_path = session_dir / "stdout.log"
+    stdout_path.write_text("executor is still writing\n", encoding="utf-8")
+    if stale:
+        stale_time = (datetime.now(UTC) - timedelta(seconds=900)).timestamp()
+        os.utime(stdout_path, (stale_time, stale_time))
+    task = repo.get_task(task_id)
+    assert task is not None
+    if task.antigravity_session_id != str(session_dir):
+        repo.mark_acked(task_id=task_id, session_id=str(session_dir))
+    return stdout_path
 
 
 def _make_live_via_both(repo: TaskRepository, task_id: str) -> None:
@@ -97,6 +114,22 @@ def test_classify_active_via_workspace(tmp_path: Path) -> None:
     task = repo.get_task("TASK-LG1")
     assert classify_liveness(task) == LivenessState.active_via_workspace
     assert is_task_live(task) is True
+
+
+def test_classify_active_via_output(tmp_path: Path) -> None:
+    repo = _seed_acked_task(tmp_path)
+    _make_live_via_output(tmp_path, repo, "TASK-LG1")
+    task = repo.get_task("TASK-LG1")
+    assert classify_liveness(task) == LivenessState.active_via_output
+    assert is_task_live(task) is True
+
+
+def test_stale_output_activity_is_silent(tmp_path: Path) -> None:
+    repo = _seed_acked_task(tmp_path)
+    _make_live_via_output(tmp_path, repo, "TASK-LG1", stale=True)
+    task = repo.get_task("TASK-LG1")
+    assert classify_liveness(task) == LivenessState.silent
+    assert is_task_live(task) is False
 
 
 def test_classify_active_via_both(tmp_path: Path) -> None:
@@ -362,6 +395,42 @@ def test_wait_does_not_watchdog_exit_with_fresh_workspace_activity(tmp_path: Pat
         interval_seconds=5, timeout_seconds=60,
         heartbeat_silence_seconds=300,
         _clock=clock,
+        _utcnow=lambda: fixed_now,
+    )
+    assert result.phase == "evidence_ready"
+    assert result.watchdog_triggered is False
+
+
+def test_wait_does_not_watchdog_exit_with_fresh_output_activity(tmp_path: Path) -> None:
+    """Wait should NOT trigger watchdog when live stdout has recent output."""
+    from agpair.cli.wait import wait_for_terminal_phase
+
+    paths = _make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    repo = TaskRepository(paths.db_path)
+    repo.create_task(task_id="T-OUT-W1", repo_path="/r")
+    repo.mark_acked(task_id="T-OUT-W1", session_id=str(tmp_path / "session-live"))
+    repo.recommend_retry(task_id="T-OUT-W1")
+    _make_live_via_output(tmp_path, repo, "T-OUT-W1")
+
+    fixed_now = datetime.now(UTC)
+    poll_count = 0
+
+    class TrackingClock(FakeClock):
+        def sleep(self, seconds: float) -> None:
+            nonlocal poll_count
+            poll_count += 1
+            super().sleep(seconds)
+            if poll_count == 1:
+                repo.mark_evidence_ready(task_id="T-OUT-W1")
+
+    result = wait_for_terminal_phase(
+        paths.db_path,
+        "T-OUT-W1",
+        interval_seconds=5,
+        timeout_seconds=60,
+        heartbeat_silence_seconds=300,
+        _clock=TrackingClock(),
         _utcnow=lambda: fixed_now,
     )
     assert result.phase == "evidence_ready"

@@ -80,35 +80,36 @@ def is_watchdog_triggered(
     heartbeat_silence_seconds: float = DEFAULT_HEARTBEAT_SILENCE_SECONDS,
     _utcnow: object | None = None,
 ) -> bool:
-    """Return True if tasks is acked + retry_recommended + has silent heartbeats."""
+    """Return True if an acked task has no fresh liveness signals."""
     from datetime import UTC, datetime
 
-    if task is None or task.phase != "acked" or not task.retry_recommended:
+    from agpair.runtime_liveness import LivenessState, classify_liveness
+
+    if task is None or task.phase != "acked":
         return False
 
     utcnow_fn = _utcnow or (lambda: datetime.now(UTC))
+    now_dt = utcnow_fn()  # type: ignore[operator]
+    liveness = classify_liveness(
+        task,
+        now=now_dt,
+        freshness_seconds=heartbeat_silence_seconds,
+    )
+    if liveness != LivenessState.silent:
+        return False
+    if task.retry_recommended:
+        return True
 
-    has_fresh_heartbeat = False
-    if task.last_heartbeat_at:
+    for timestamp in (getattr(task, "last_activity_at", None), getattr(task, "updated_at", None)):
+        if not timestamp:
+            continue
         try:
-            hb_dt = datetime.fromisoformat(task.last_heartbeat_at.replace("Z", "+00:00"))
-            now_dt = utcnow_fn()  # type: ignore[operator]
-            silence = (now_dt - hb_dt).total_seconds()
-            has_fresh_heartbeat = silence < heartbeat_silence_seconds
+            dt = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
         except (ValueError, TypeError):
-            pass
-
-    has_fresh_workspace = False
-    if task.last_workspace_activity_at:
-        try:
-            ws_dt = datetime.fromisoformat(task.last_workspace_activity_at.replace("Z", "+00:00"))
-            now_dt = utcnow_fn()  # type: ignore[operator]
-            ws_silence = (now_dt - ws_dt).total_seconds()
-            has_fresh_workspace = ws_silence < heartbeat_silence_seconds
-        except (ValueError, TypeError):
-            pass
-
-    return not has_fresh_heartbeat and not has_fresh_workspace
+            continue
+        if (now_dt - dt).total_seconds() < heartbeat_silence_seconds:
+            return False
+    return True
 
 
 def _try_inline_poll(
@@ -125,7 +126,8 @@ def _try_inline_poll(
     from agpair.models import TaskRecord
     current_task = typing.cast(TaskRecord, task)
 
-    if not current_task.antigravity_session_id or not is_local_cli_backend(current_task.executor_backend):
+    session_id = current_task.executor_session_id or current_task.antigravity_session_id
+    if not session_id or not is_local_cli_backend(current_task.executor_backend):
         return
 
     try:
@@ -135,7 +137,7 @@ def _try_inline_poll(
 
         state = executor.poll(
             current_task.task_id,
-            current_task.antigravity_session_id,
+            session_id,
             attempt_no=current_task.attempt_no,
         )
 
@@ -162,7 +164,7 @@ def _try_inline_poll(
             )
 
             # Cleanup transient executor directory only after durable artifacts are recorded.
-            executor.cleanup(current_task.antigravity_session_id)
+            executor.cleanup(session_id)
             tasks.clear_session_id(task_id=current_task.task_id)
 
     except Exception as exc:
@@ -248,7 +250,8 @@ def wait_for_terminal_phase(
                 return WaitResult(phase=current_phase, timed_out=False)
 
             # --- Inline executor poll (daemon-free close) ---
-            if current_phase == "acked" and task and task.antigravity_session_id:
+            session_id = (task.executor_session_id or task.antigravity_session_id) if task else None
+            if current_phase == "acked" and task and session_id:
                 _try_inline_poll(tasks, task, journal)
                 # Re-check phase after potential state transition
                 task = tasks.get_task(task_id)

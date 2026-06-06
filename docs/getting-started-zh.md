@@ -132,6 +132,9 @@ Codex 主控之后用 `claude-code`；外部 `codex` 默认被抑制，因为它
 
 新任务不要使用 Gemini。历史 `gemini_cli` 记录只用于检查或清理。
 
+新增、禁用、弃用或移除 executor 时，走共享 registry profile contract。详见
+[Executor Lifecycle](executor-lifecycle.md)。
+
 ## 9. 本地文件
 
 不要提交本地运行状态或个人配置：
@@ -146,6 +149,6 @@ Codex 主控之后用 `claude-code`；外部 `codex` 默认被抑制，因为它
 
 项目级 `.claude/settings.json` 或 Codex hook config 只有在清理过、且明确要共享时才应提交。
 
-## Legacy 说明
+## 兼容性说明
 
 Antigravity 桌面端 companion extension 和 bridge 诊断仍保留给旧安装使用。新任务应使用 `antigravity-cli`。

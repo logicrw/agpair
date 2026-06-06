@@ -4,7 +4,24 @@ import os
 import pathlib
 
 from agpair.executors.local_cli import LocalCLIExecutor
+from agpair.executors.registry import executor_safety_metadata
 from agpair.models import ContinuationCapability
+
+
+def _output_format() -> str:
+    value = os.environ.get("AGPAIR_GROK_OUTPUT_FORMAT", "json").strip() or "json"
+    if value not in {"json", "streaming-json"}:
+        raise ValueError("Unsupported AGPAIR_GROK_OUTPUT_FORMAT; use json or streaming-json")
+    return value
+
+
+def _max_turn_args() -> list[str]:
+    value = os.environ.get("AGPAIR_GROK_MAX_TURNS", "24").strip()
+    if not value:
+        return []
+    if not value.isdigit() or int(value) <= 0:
+        raise ValueError("Unsupported AGPAIR_GROK_MAX_TURNS; use a positive integer or unset it")
+    return ["--max-turns", value]
 
 
 class GrokCLIExecutor(LocalCLIExecutor):
@@ -13,6 +30,7 @@ class GrokCLIExecutor(LocalCLIExecutor):
             bin_path=grok_bin or os.environ.get("AGPAIR_GROK_CLI_BIN") or os.environ.get("AGPAIR_GROK_CLI", "grok"),
             backend_id="grok-cli",
             build_cmd=self._build_grok_cmd,
+            safety_metadata=executor_safety_metadata("grok-cli"),
         )
 
     def _build_grok_cmd(
@@ -26,8 +44,12 @@ class GrokCLIExecutor(LocalCLIExecutor):
             "--cwd",
             repo_path,
             "--output-format",
-            "json",
+            _output_format(),
             "--always-approve",
+            *_max_turn_args(),
+            "--no-memory",
+            "--no-subagents",
+            "--disable-web-search",
             "--single",
             body,
         ]

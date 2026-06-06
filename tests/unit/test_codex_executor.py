@@ -117,6 +117,8 @@ def test_codex_executor_dispatch_uses_bypass_all_by_default(monkeypatch):
 
     assert "--dangerously-bypass-approvals-and-sandbox" in cmd
     assert "--full-auto" not in cmd
+    assert "--ignore-user-config" in cmd
+    assert "--ignore-rules" in cmd
 
 
 def test_codex_executor_dispatch_honors_full_auto_mode(monkeypatch):
@@ -137,6 +139,16 @@ def test_codex_executor_dispatch_honors_default_mode(monkeypatch):
 
     assert "--full-auto" not in cmd
     assert "--dangerously-bypass-approvals-and-sandbox" not in cmd
+
+
+def test_codex_executor_can_disable_config_isolation(monkeypatch):
+    monkeypatch.setenv("AGPAIR_CODEX_IGNORE_USER_CONFIG", "0")
+    executor = CodexExecutor(codex_bin="fake-codex")
+
+    cmd = executor._build_codex_cmd("Do something", "/fake/repo", pathlib.Path("/tmp"))
+
+    assert "--ignore-user-config" not in cmd
+    assert "--ignore-rules" not in cmd
 
 
 def test_codex_executor_poll(tmp_path: pathlib.Path):

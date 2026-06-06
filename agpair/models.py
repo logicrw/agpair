@@ -83,6 +83,7 @@ class TaskRecord:
     env_vars: str | None = None
     worktree_boundary: str | None = None
     spotlight_testing: bool = False
+    broad_repo_path_override: bool = False
     completion_policy: str = "auto"
     terminal_source: str | None = None
     terminal_receipt_json: str | None = None

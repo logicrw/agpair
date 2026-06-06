@@ -186,7 +186,7 @@ def test_claude_config_dry_run_prints_diff_without_writing(tmp_path: Path, monke
     assert not (repo_path / ".claude" / "settings.json").exists()
 
 
-def test_claude_config_install_refuses_foreign_statusline_without_force(tmp_path: Path, monkeypatch) -> None:
+def test_claude_config_install_preserves_foreign_statusline_without_force(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
@@ -200,9 +200,10 @@ def test_claude_config_install_refuses_foreign_statusline_without_force(tmp_path
 
     result = CliRunner().invoke(app, ["claude", "config", "--install"])
 
-    assert result.exit_code == 1
-    assert "statusLine" in result.output
-    assert "manual merge" in result.output
+    assert result.exit_code == 0
+    updated = json.loads((settings_dir / "settings.json").read_text())
+    assert updated["statusLine"]["command"] == "~/.claude/custom-statusline.sh"
+    assert "agpair claude hook session-start" in hook_commands(updated, "SessionStart")
 
 
 def test_claude_config_install_user_scope_writes_home_settings(tmp_path: Path, monkeypatch) -> None:

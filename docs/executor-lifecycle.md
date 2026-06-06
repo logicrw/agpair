@@ -1,0 +1,118 @@
+# External Executor Lifecycle
+
+AGPair treats every external CLI executor as a registered module. Add, disable,
+deprecate, or remove executors through the shared profile contract, not through
+task-state-machine branches.
+
+## Profile Contract
+
+Each active executor must define one profile entry with:
+
+- executor id and display name
+- binary name, primary env var, and env aliases
+- default authorization profile and safety metadata
+- supported completion policies and receipt capability
+- noninteractive command shape owned by the adapter
+- isolation profile and health probe metadata
+- controller suppression rules
+- lifecycle status and replacement guidance
+
+The profile is executable documentation, not decorative metadata. If a profile
+declares noninteractive or isolation flags, the adapter command must emit those
+flags by default, and unit tests must prove that parity for every active
+executor. Provider-specific escape hatches may exist for diagnostics, but the
+safe isolated mode stays the default.
+
+If isolated mode changes the executor's authentication source, declare the
+required auth environment or settings source in the profile. Health checks and
+dispatch preflight must then report `executor_auth_required` before launch
+instead of letting the process sit silently until a no-progress timeout.
+
+Current active executor ids are `antigravity-cli`, `grok-cli`, `claude-code`,
+and `codex`. `codex` means an external Codex CLI worker; it is different from
+Codex native subagents. `claude-code` means an external Claude Code worker; it
+is different from Claude Code native subagents.
+
+## Onboarding
+
+1. Add one adapter file or thin `LocalCLIExecutor` subclass.
+2. Add one `ExecutorSpec` profile entry.
+3. Add command, binary/env, isolation, safety, routing, health, and lifecycle
+   tests.
+4. Make `doctor --fresh` report the executor through the same schema as all
+   others.
+5. Add fake smoke coverage that requires no private credentials.
+6. Add real smoke eligibility for the controller matrix.
+7. Update retained docs and skills with current behavior only.
+
+Do not add provider-specific branches to task start, retry, wait/watch,
+completion arbitration, artifact capture, workflow scheduling, or doctor
+formatting. If a provider needs custom flags, environment cleanup, receipt
+instructions, or output parsing, keep that behavior inside the adapter or the
+shared profile fields consumed by the adapter.
+
+Minimum verification for a new active executor:
+
+- unit tests for registry/profile fields and routing eligibility;
+- unit tests for command construction with a fake binary;
+- unit tests proving declared profile isolation and noninteractive flags match
+  the adapter's default command;
+- unit tests proving isolated auth requirements produce a pre-dispatch blocker
+  when the required env/settings source is absent;
+- doctor test proving binary and launch probes surface through the common schema;
+- task dispatch test proving completion policies are honored;
+- smoke harness entry proving the executor can run in a disposable worktree;
+- docs/skills update naming the executor only in the shared routing order.
+
+## Offboarding
+
+Use profile lifecycle status:
+
+- `active`: eligible for new tasks when healthy.
+- `disabled`: intentionally unavailable for new tasks.
+- `deprecated`: readable for old tasks, refused for default new dispatch.
+- `removed`: no new dispatch; historical tasks and receipts remain readable.
+
+Offboarding should require the profile status/replacement update plus tests and
+docs. It must not require deleting historical task rows, receipts, or logs.
+
+Offboarding checklist:
+
+1. Change the profile lifecycle status and replacement guidance.
+2. Update routing tests so default selection skips the executor.
+3. Keep historical status/log/receipt inspection readable.
+4. Update doctor output expectations.
+5. Update docs and skills so the executor is not advertised for new work.
+6. Run fake smoke and, when the binary is still installed, diagnostic smoke to
+   prove the refusal reason is precise.
+
+## Routing
+
+Controller suppression belongs in the profile:
+
+- Codex controller normally uses `antigravity-cli`, `grok-cli`, and
+  `claude-code`; it suppresses external `codex`.
+- Claude Code controller normally uses `antigravity-cli`, `grok-cli`, and
+  external `codex`; it suppresses external `claude-code`.
+- Diagnostic mode may include self executors only when explicitly allowed.
+
+Direct selection of a disabled, deprecated, removed, or locally unavailable
+executor must fail before dispatch with a precise reason. It must never silently
+fall through to another executor.
+
+## Smoke Matrix
+
+Normal controller smoke covers the executors each controller should actually
+use:
+
+- Codex controller: `antigravity-cli`, `grok-cli`, `claude-code`.
+- Claude Code controller: `antigravity-cli`, `grok-cli`, `codex`.
+
+Diagnostic all-registered smoke may include self executors with an explicit
+allow-self flag. It should report every active executor as `success`, `skipped`,
+or a precise blocker such as `executor_unavailable`,
+`executor_quota_exhausted`, `no_progress_timeout`, or
+`report_output_missing`.
+
+Smoke reports are local evidence. Do not commit raw smoke reports, executor
+logs, receipts, or worktrees.

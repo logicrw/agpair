@@ -44,6 +44,26 @@ def test_report_policy_finishes_without_commit_when_report_artifact_exists(tmp_p
     assert decision.phase == "ready_for_review"
 
 
+def test_report_policy_blocks_when_report_artifact_missing(tmp_path: Path) -> None:
+    stdout = tmp_path / "stdout.log"
+    stdout.write_text("executor produced output but no report artifact", encoding="utf-8")
+    policy = resolve_effective_task_policy(
+        requested_completion_policy="report",
+        authorization_profile="local_readonly",
+        body="Required changes: none",
+    )
+    decision = evaluate_completion(
+        effective_policy=policy,
+        receipt={"status": messages.EVIDENCE_PACK, "summary": "no report", "payload": {}},
+        evidence=ExecutionEvidence(stdout_path=str(stdout), receipt_valid=True),
+        process_returncode=0,
+    )
+    assert decision.ok is False
+    assert decision.phase == "blocked"
+    assert decision.reason_code == "report_missing"
+    assert decision.blocker_type == "report_missing"
+
+
 def test_commit_policy_blocks_without_commit(tmp_path: Path) -> None:
     stdout = tmp_path / "stdout.log"
     stdout.write_text("done", encoding="utf-8")

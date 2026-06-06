@@ -32,7 +32,7 @@ synthetic receipt 的 msg_id 已包含这三个维度。
 state.json、repo evidence 统一引用。好处是解耦 attempt 编号与执行体身份，
 为未来竞速执行（同一 attempt 多个 executor 并行）留接口。
 
-**Trigger:** 当需要支持同一 attempt 内多个并行执行体（如 Codex + Gemini 竞速）时。
+**Trigger:** 当需要支持同一 attempt 内多个并行执行体（如 Grok + Antigravity CLI 竞速）时。
 
 **Effort:** M — DB schema migration + 全链路 receipt/journal/state 引用改造。
 
@@ -98,7 +98,7 @@ running → terminating → killed → reaped → cleaned
 
 ## TD-6: Executor 能力矩阵下沉到类型系统/元数据
 
-**Current state:** `task start` / `task retry` 之前的 `review_then_commit` 路径已被移除（仅保留 `direct_commit`）。目前 local CLI 的逻辑判断仍然是 controller 侧的 `is_local_cli_backend(...)` 分支。
+**Current state:** Executor metadata now lives in the shared registry/profile contract, and task completion policy is no longer commit-only. Some lower-level lifecycle paths still consult local CLI backend predicates directly.
 
 **Improvement:** 给 executor 增加声明式 capability，例如：
 
@@ -108,24 +108,24 @@ running → terminating → killed → reaped → cleaned
 这样 CLI、daemon、doctor、docs 都可以读取同一份能力定义，而不是各自
 硬编码 backend 特判。
 
-**Trigger:** 当引入第 3 个 CLI executor 时。
+**Trigger:** 当新增 executor 需要表达 registry 之外的 runtime capability, or when direct backend predicates start leaking into new orchestration code.
 
 **Effort:** M — 需要给 executor metadata 扩字段，并把 CLI/doctor/docs 的判断统一。
 
 ---
 
-## TD-7: 用户文档显式暴露 local CLI commit contract
+## TD-7: 用户文档显式暴露 local CLI receipt/evidence contract
 
-**Current state:** runtime 已经把 `task_id` 和 “commit message 必须包含 task_id”
-注入到 local CLI prompt，但 README / usage 文档还没有把这条 contract 说清楚。
+**Current state:** `report`, `evidence`, and `commit` completion policies are distinct. Runtime prompts ask local CLI executors to return structured receipts and durable evidence paths. README / usage docs describe review gates, but future executor docs should keep the receipt/evidence contract explicit when new executors are added.
 
 **Improvement:** 在 `docs/usage*.md` 和 getting-started 文档里补一段简短说明：
 
-- `codex` / `gemini` backend 的成功判定依赖可验证 commit
-- commit message 应包含 task id
-- 如果任务只是分析/验证而不提交，应返回失败或切换到适配的 completion policy / executor
+- `report` tasks require a report receipt, not a commit.
+- `evidence` tasks require machine-checkable evidence paths and changed-file summaries.
+- `commit` tasks require commit evidence when the brief or policy requires it.
+- 外部 executor 的自然语言输出不是最终证明，controller 必须核验 receipt、artifact path、diff 和测试。
 
-这样用户在手写 brief 或做外部集成时，不会以为 “exit 0” 就代表任务成功落地。
+这样用户在手写 brief 或做外部集成时，不会以为 “exit 0” 就代表任务成功。
 
 **Trigger:** 下次文档更新批次。
 

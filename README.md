@@ -165,12 +165,13 @@ AGPair is not a semantic controller. The AI controller still owns planning, scop
 | --- | --- |
 | [Getting Started](docs/getting-started.en.md) | Minimal setup and first task |
 | [Command Reference](docs/usage.md) | Full CLI reference |
+| [Executor Lifecycle](docs/executor-lifecycle.md) | Add, disable, deprecate, or remove external executors |
 | [Workflows V2](docs/workflows.md) | Declarative multi-task workflow orchestration |
 | [Claude Code Integration](docs/claude-code-integration.zh-CN.md) | Claude Code setup and routing rules |
 | [中文说明](README.zh-CN.md) | Chinese README |
 | [中文命令参考](docs/usage.zh-CN.md) | Chinese command reference |
 
-## Legacy Surfaces
+## Compatibility
 
 The repository still contains the Antigravity desktop companion extension and legacy bridge diagnostics for existing installations. The current recommended path for new work is the `antigravity-cli` executor, not the IDE bridge.
 

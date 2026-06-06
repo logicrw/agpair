@@ -5,6 +5,7 @@ import pathlib
 import re
 
 from agpair.executors.local_cli import LocalCLIExecutor
+from agpair.executors.registry import executor_safety_metadata
 from agpair.models import ContinuationCapability
 
 _GO_DURATION_RE = re.compile(r"^\d+(?:ns|us|ms|s|m|h)(?:\d+(?:ns|us|ms|s|m|h))*$")
@@ -41,6 +42,7 @@ class AntigravityCLIExecutor(LocalCLIExecutor):
             bin_path=antigravity_bin or os.environ.get("AGPAIR_ANTIGRAVITY_CLI_BIN") or os.environ.get("AGPAIR_ANTIGRAVITY_CLI", "agy"),
             backend_id="antigravity-cli",
             build_cmd=self._build_antigravity_cmd,
+            safety_metadata=executor_safety_metadata("antigravity-cli"),
         )
 
     def _build_antigravity_cmd(

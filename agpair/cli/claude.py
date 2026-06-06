@@ -240,10 +240,6 @@ def _merge_managed_config(current: dict[str, Any], *, force: bool) -> dict[str, 
         updated["statusLine"] = managed["statusLine"]
     elif force:
         updated["statusLine"] = managed["statusLine"]
-    else:
-        raise RuntimeError(
-            "Existing statusLine is not managed by AGPair. Refusing to overwrite; manual merge or --force required."
-        )
 
     hooks = updated.get("hooks")
     if hooks is None:
@@ -354,7 +350,7 @@ def config(
     merge: bool = typer.Option(False, "--merge", help="Alias of --install for explicit merge/update flows."),
     uninstall: bool = typer.Option(False, "--uninstall", help="Remove the AGPair-managed Claude Code config fragment."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print a unified diff instead of writing changes."),
-    force: bool = typer.Option(False, "--force", help="Replace conflicting AGPair-managed statusLine while preserving non-AGPair hooks."),
+    force: bool = typer.Option(False, "--force", help="Replace an existing non-AGPair statusLine while preserving non-AGPair hooks."),
     scope: str = typer.Option("project", "--scope", help="Where to manage Claude Code settings: project or user."),
     repo_path: str | None = typer.Option(None, "--repo-path", help="Project repo path for --scope project."),
     target: str | None = typer.Option(None, "--target", help="Target alias for --scope project."),

@@ -132,6 +132,9 @@ For Codex controllers, next use `claude-code`; external `codex` is suppressed by
 
 Do not use Gemini for new work. Legacy `gemini_cli` records may be inspected or cleaned up only.
 
+Executor onboarding, disabling, deprecation, and removal use the shared registry
+profile contract. See [Executor Lifecycle](executor-lifecycle.md).
+
 ## 9. Local Files
 
 Do not commit local runtime or personal config:
@@ -146,6 +149,6 @@ Do not commit local runtime or personal config:
 
 Project-level `.claude/settings.json` or Codex hook config should be committed only when sanitized and intentionally shared.
 
-## Legacy Note
+## Compatibility Note
 
 The Antigravity desktop companion extension and bridge diagnostics remain for older installations. New tasks should use `antigravity-cli`.

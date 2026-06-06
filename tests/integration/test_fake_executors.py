@@ -31,6 +31,10 @@ def write_fake_executor(tmp_path: pathlib.Path) -> pathlib.Path:
     bin_path.write_text(
         """#!/bin/bash
 set -euo pipefail
+if [ "${1:-}" = "--help" ]; then
+  echo "fake antigravity help"
+  exit 0
+fi
 PROMPT="$*"
 TASK_ID=$(printf '%s\n' "$PROMPT" | grep -o 'TASK-[A-Za-z0-9-]*' | head -n1)
 MODE="${AGPAIR_FAKE_EXECUTOR_MODE:-success}"

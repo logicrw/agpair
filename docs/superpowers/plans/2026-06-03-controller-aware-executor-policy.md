@@ -1,5 +1,10 @@
 # AGPair Core Task Model And Controller Policy V1.1 Implementation Plan
 
+> Historical archive: this plan preserves implementation context from an earlier
+> phase. It is not the current behavior contract. Use `README.md`,
+> `docs/usage.md`, and `docs/executor-lifecycle.md` for current executor
+> routing and lifecycle rules.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Refactor AGPair's single-task core so Codex and Claude Code can delegate to external CLI executors first while AGPair correctly handles commit, report, and evidence-based completion without hardcoding every successful task as a commit.

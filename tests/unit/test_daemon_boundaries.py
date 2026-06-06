@@ -434,9 +434,9 @@ def test_run_once_reports_auto_closed_in_health(tmp_path: Path) -> None:
 
     repo_dir = tmp_path / "repo"
     _init_git_repo(repo_dir)
+    paths, tasks = _seed_acked_task(tmp_path, "TASK-HEALTH-1", str(repo_dir))
     _commit_with_message(repo_dir, "feat: TASK-HEALTH-1 completed")
-
-    paths, _tasks = _seed_evidence_ready_task(tmp_path, "TASK-HEALTH-1", str(repo_dir))
+    tasks.mark_evidence_ready(task_id="TASK-HEALTH-1")
     fake_bus = FakeBus()
 
     run_once(paths, now=datetime(2026, 4, 1, 12, 0, tzinfo=UTC), bus=fake_bus, timeout_seconds=1800)

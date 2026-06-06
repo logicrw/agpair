@@ -138,7 +138,7 @@ def build_doctor_report(
 
     desktop_reader_conflict = None
 
-    executor_cli_health = _build_executor_cli_health()
+    executor_cli_health = _build_executor_cli_health(run_launch_probe=fresh)
     available_executor_backends = [
         executor_id
         for executor_id, health in executor_cli_health.items()
@@ -218,25 +218,41 @@ def _is_cli_available(binary: str) -> bool:
     return shutil.which(binary) is not None
 
 
-def _build_executor_cli_health() -> dict[str, dict[str, object]]:
+def _build_executor_cli_health(*, run_launch_probe: bool = False) -> dict[str, dict[str, object]]:
     from agpair.executors.policy import EXECUTOR_SPECS, executor_health_snapshot
 
-    snapshot = executor_health_snapshot()
+    snapshot = executor_health_snapshot(run_launch_probe=run_launch_probe)
     health: dict[str, dict[str, object]] = {}
     for executor_id, spec in EXECUTOR_SPECS.items():
         item = snapshot[executor_id]
         configured_env_var = item.get("configured_env_var")
         configured = os.environ.get(str(configured_env_var), "").strip() if configured_env_var else None
-        binary = configured or spec.default_binary
         health[executor_id] = {
             "env_var": spec.env_var,
             "env_aliases": list(spec.env_aliases),
             "env_vars": [spec.env_var, *spec.env_aliases],
             "configured_env_var": configured_env_var,
-            "binary": binary,
+            "binary": item.get("binary"),
+            "binary_name": item.get("binary_name"),
             "binary_path": item.get("binary_path"),
+            "binary_available": bool(item.get("binary_available")),
             "available": bool(item.get("available")),
             "configured": configured is not None,
+            "display_name": item.get("display_name"),
+            "enabled_by_default": item.get("enabled_by_default"),
+            "lifecycle_status": item.get("lifecycle_status"),
+            "replacement_executor": item.get("replacement_executor"),
+            "lifecycle_reason": item.get("lifecycle_reason"),
+            "receipt_capable": item.get("receipt_capable"),
+            "supported_completion_policies": item.get("supported_completion_policies"),
+            "controller_suppression": item.get("controller_suppression"),
+            "recommended_for_controllers": item.get("recommended_for_controllers"),
+            "isolation_profile": item.get("isolation_profile"),
+            "launch_probe": item.get("launch_probe"),
+            "launch_clean": item.get("launch_clean"),
+            "isolation_auth_satisfied": item.get("isolation_auth_satisfied"),
+            "last_failure_type": item.get("last_failure_type"),
+            "last_error_excerpt": item.get("last_error_excerpt"),
         }
     return health
 

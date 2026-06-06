@@ -49,10 +49,12 @@ def build_workflow_evidence_pack(paths: AppPaths, workflow_id: str, *, phase: st
                 attempt_no = task.attempt_no
                 terminal_receipt_payload = _parse_json_object(task.terminal_receipt_json)
                 if isinstance(terminal_receipt_payload, dict):
-                    for item in terminal_receipt_payload.get("changed_files") or []:
+                    payload = terminal_receipt_payload.get("payload")
+                    terminal_payload = payload if isinstance(payload, dict) else terminal_receipt_payload
+                    for item in terminal_payload.get("changed_files") or []:
                         if isinstance(item, str):
                             changed_files.add(item)
-                    for item in terminal_receipt_payload.get("scope_violations") or []:
+                    for item in terminal_payload.get("scope_violations") or []:
                         scope_violations.append({"node_id": node.node_id, "violation": item})
                 for artifact in tasks.list_artifacts(task_id=node.task_id, attempt_no=task.attempt_no):
                     artifact_paths[artifact.artifact_type] = artifact.path

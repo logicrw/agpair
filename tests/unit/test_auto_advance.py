@@ -40,12 +40,23 @@ def journal(tmp_paths: AppPaths) -> JournalRepository:
     return JournalRepository(tmp_paths.db_path)
 
 
-def _create_task(tasks, journal, task_id, repo_path="/repo", depends_on=None, executor="codex_cli"):
+def _create_task(
+    tasks,
+    journal,
+    task_id,
+    repo_path="/repo",
+    depends_on=None,
+    executor="codex_cli",
+    authorization_profile="local_mutating",
+    authorization_summary=None,
+):
     tasks.create_task(
         task_id=task_id,
         repo_path=repo_path,
         executor_backend=executor,
         depends_on=json.dumps(depends_on) if depends_on else None,
+        authorization_profile=authorization_profile,
+        authorization_summary=authorization_summary,
     )
     journal.append(task_id, "cli", "created", f"Goal: test task {task_id}. Scope: test. Required changes: none. Exit criteria: pass.")
 
@@ -97,6 +108,34 @@ class TestAutoAdvanceDependentTasks:
         task_b = tasks.get_task("T-B")
         assert task_b.phase == "acked"
         assert task_b.antigravity_session_id == "sess-b"
+
+
+    @patch("agpair.executors.get_executor")
+    def test_deps_satisfied_dispatch_preserves_authorization_profile(self, mock_get_executor, tmp_paths, tasks, journal):
+        """Deferred dispatch must keep the task's stored authorization profile."""
+        from agpair.executors.base import DispatchResult
+
+        mock_exec = MagicMock()
+        mock_exec.dispatch.return_value = DispatchResult(session_id="sess-b")
+        mock_get_executor.return_value = mock_exec
+
+        _create_task(tasks, journal, "T-A")
+        tasks.mark_acked(task_id="T-A", session_id="sess-a")
+        tasks.mark_committed(task_id="T-A", terminal_source="test")
+
+        _create_task(
+            tasks,
+            journal,
+            "T-B",
+            depends_on=["T-A"],
+            executor="codex",
+            authorization_profile="local_readonly",
+        )
+
+        assert auto_advance_dependent_tasks(tmp_paths) == 1
+        call_kwargs = mock_exec.dispatch.call_args.kwargs
+        assert call_kwargs["authorization_profile"] == "local_readonly"
+        assert call_kwargs["authorization_summary"] == tasks.get_task("T-B").authorization_summary
 
     @patch("agpair.executors.get_executor")
     def test_dispatch_failure_marks_blocked(self, mock_get_executor, tmp_paths, tasks, journal):

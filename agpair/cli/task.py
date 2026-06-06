@@ -24,7 +24,7 @@ from agpair.cli.wait import (
     maybe_auto_wait,
     wait_for_terminal_phase,
 )
-from agpair.artifacts import read_excerpt
+from agpair.artifacts import live_artifact_metadata, read_excerpt
 from agpair.completion import derive_effective_task_safety, resolve_effective_task_policy
 from agpair.config import AppPaths
 from agpair.executors.policy import resolve_controller_policy
@@ -60,6 +60,18 @@ _BRIDGE_PORT_MARKER = "bridge_port"
 _BRIDGE_AUTH_TOKEN_MARKER = "bridge_auth_token"
 
 
+def _broad_repo_path_reason(repo_path: str) -> str | None:
+    resolved = Path(repo_path).expanduser().resolve(strict=False)
+    home = Path.home().resolve(strict=False)
+    if resolved.parent == resolved:
+        return "repo path is a filesystem root; external executors need a focused project directory"
+    if resolved == home:
+        return "repo path is the user home directory; external executors can scan private logs, caches, and unrelated projects"
+    if resolved in home.parents:
+        return "repo path is above the user home directory; external executors need a focused project directory"
+    return None
+
+
 def _paths() -> AppPaths:
     paths = AppPaths.default()
     ensure_database(paths.db_path)
@@ -68,6 +80,16 @@ def _paths() -> AppPaths:
 
 def _emit_json(payload: dict) -> None:
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _no_available_executor_message(policy_decision) -> str:
+    reason = (
+        f"no available executor for controller {policy_decision.controller}; "
+        "run `agpair doctor --fresh` to inspect binary, launch, auth, and lifecycle blockers"
+    )
+    if policy_decision.reasons:
+        reason += f"; policy notes: {'; '.join(policy_decision.reasons)}"
+    return reason
 
 
 def _configured_default_executor(*, target: str | None, paths: AppPaths) -> str | None:
@@ -207,16 +229,46 @@ def _original_body_for_task(paths: AppPaths, task_id: str) -> str | None:
     return None
 
 
-def _artifact_payload(paths: AppPaths, task) -> tuple[dict[str, str], dict[str, str | None]]:
+def _artifact_payload(paths: AppPaths, task) -> tuple[dict[str, str], dict[str, object | None]]:
     tasks = TaskRepository(paths.db_path)
     artifacts = tasks.list_artifacts(task_id=task.task_id, attempt_no=task.attempt_no)
     paths_by_type = {artifact.artifact_type: artifact.path for artifact in artifacts}
-    stdout_path = paths_by_type.get("stdout")
-    stderr_path = paths_by_type.get("stderr")
-    report_path = paths_by_type.get("report")
-    receipt_path = paths_by_type.get("receipt")
+
+    active_metadata: dict[str, dict] = {}
+    active_paths: dict[str, str] = {}
+    session_id = task.executor_session_id or task.antigravity_session_id
+    if session_id:
+        attempt_dir = Path(session_id)
+        if attempt_dir.exists():
+            for artifact_type, filename in (
+                ("stdout", "stdout.log"),
+                ("stderr", "stderr.log"),
+                ("receipt", "receipt.json"),
+                ("report", "report.md"),
+            ):
+                metadata = live_artifact_metadata(attempt_dir / filename, artifact_type=artifact_type)
+                if metadata is not None:
+                    active_metadata[artifact_type] = metadata
+                    active_paths[artifact_type] = metadata["path"]
+
+    def path_for(kind: str) -> str | None:
+        return paths_by_type.get(kind) or active_paths.get(kind)
+
+    stdout_path = path_for("stdout")
+    stderr_path = path_for("stderr")
+    report_path = path_for("report")
+    receipt_path = path_for("receipt")
     evidence_path = paths_by_type.get("evidence")
     excerpt = read_excerpt(stdout_path, max_chars=2000) or read_excerpt(stderr_path, max_chars=2000)
+    last_output_at = None
+    output_mtimes = [
+        item.get("modified_at")
+        for key, item in active_metadata.items()
+        if key in {"stdout", "stderr"} and item.get("modified_at")
+    ]
+    if output_mtimes:
+        last_output_at = max(str(item) for item in output_mtimes)
+
     return paths_by_type, {
         "stdout_path": stdout_path,
         "stderr_path": stderr_path,
@@ -224,6 +276,9 @@ def _artifact_payload(paths: AppPaths, task) -> tuple[dict[str, str], dict[str, 
         "report_path": report_path,
         "evidence_path": evidence_path,
         "executor_output_excerpt": excerpt,
+        "active_attempt_artifact_paths": active_paths or None,
+        "active_attempt_artifacts": active_metadata or None,
+        "last_executor_output_at": last_output_at,
     }
 
 
@@ -443,7 +498,7 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "repo_path": task.repo_path,
         "execution_repo_path": execution_repo_path,
         "isolation_satisfied": isolation_satisfied,
-        "session_id": task.antigravity_session_id,
+        "session_id": task.executor_session_id or task.antigravity_session_id,
         "executor_session_id": task.executor_session_id or task.antigravity_session_id,
         "legacy_executor": is_legacy_executor(active_backend_id) and not is_supported_executor(active_backend_id),
         "retry_supported": is_supported_executor(active_backend_id),
@@ -468,6 +523,8 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "bridge_pending_tasks": derived_bridge_state.get("bridge_pending_tasks"),
         "status_sync": derived_bridge_state.get("status_sync"),
         "spotlight_testing": task.spotlight_testing,
+        "broad_repo_path_override": task.broad_repo_path_override,
+        "repo_path_guardrail_reason": _broad_repo_path_reason(task.repo_path),
         "completion_policy": task.completion_policy,
         "effective_completion_policy": effective_policy.effective_completion_policy,
         "terminal_source": task.terminal_source,
@@ -669,6 +726,7 @@ def start_task(
     env_vars: str | None = typer.Option(None, "--env-vars", help="JSON object of environment overrides (e.g. PORT) for this task's worktree."),
     worktree_boundary: str | None = typer.Option(None, "--worktree-boundary", help="Declared worktree boundary path/label for this task."),
     spotlight_testing: bool = typer.Option(False, "--spotlight-testing", help="Declare intent to prefer localized/spotlight tests over full-suite runs."),
+    allow_broad_repo_path: bool = typer.Option(False, "--allow-broad-repo-path", help="Explicitly allow a broad repo path such as $HOME for external executor dispatch."),
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
@@ -713,12 +771,16 @@ def start_task(
             controller=controller,
             requested_executor=requested_executor,
             allow_self_executor=allow_self_executor,
+            require_available=True,
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     if executor and policy_decision.rejected_executor:
-        raise typer.BadParameter("requested executor is suppressed by controller policy; pass --allow-self-executor to override")
-    selected_executor = policy_decision.selected_executor or default_executor_id()
+        reason = policy_decision.reasons[-1] if policy_decision.reasons else "requested executor is not eligible"
+        raise typer.BadParameter(reason)
+    if policy_decision.selected_executor is None:
+        raise typer.BadParameter(_no_available_executor_message(policy_decision))
+    selected_executor = policy_decision.selected_executor
     try:
         selected_executor = validate_supported_executor(selected_executor)
     except ValueError as exc:
@@ -728,6 +790,12 @@ def start_task(
     if exec_instance is None:
         raise typer.BadParameter(f"Executor {selected_executor!r} is not available in this build.")
     backend_to_store = selected_executor
+    broad_repo_path_reason = _broad_repo_path_reason(resolved_repo_path)
+    if broad_repo_path_reason and not allow_broad_repo_path:
+        raise typer.BadParameter(
+            f"Refused broad --repo-path {resolved_repo_path!r}: {broad_repo_path_reason}. "
+            "Use a focused project directory or pass --allow-broad-repo-path when this is intentional."
+        )
 
     tasks = TaskRepository(paths.db_path)
     journal = JournalRepository(paths.db_path)
@@ -783,6 +851,7 @@ def start_task(
             env_vars=env_vars,
             worktree_boundary=resolved_worktree_boundary,
             spotlight_testing=spotlight_testing,
+            broad_repo_path_override=allow_broad_repo_path,
             authorization_profile=normalized_authorization_profile,
             authorization_summary=normalized_authorization_summary,
             completion_policy=completion_policy,
@@ -940,12 +1009,29 @@ def task_status(
     typer.echo(f"bridge_state: {payload['bridge_state']}")
     typer.echo(f"bridge_pending_task_count: {payload['bridge_pending_task_count']}")
     typer.echo(f"spotlight_testing: {payload['spotlight_testing']}")
+    typer.echo(f"broad_repo_path_override: {payload['broad_repo_path_override']}")
+    typer.echo(f"repo_path_guardrail_reason: {payload['repo_path_guardrail_reason']}")
     typer.echo(f"completion_policy: {payload['completion_policy']}")
     typer.echo(f"effective_completion_policy: {payload['effective_completion_policy']}")
     typer.echo(f"stdout_path: {payload['stdout_path']}")
     typer.echo(f"stderr_path: {payload['stderr_path']}")
     typer.echo(f"receipt_path: {payload['receipt_path']}")
     typer.echo(f"report_path: {payload['report_path']}")
+    typer.echo(f"last_executor_output_at: {payload['last_executor_output_at']}")
+    active_artifacts = payload.get("active_attempt_artifacts")
+    if active_artifacts:
+        concise_artifacts = {
+            key: {
+                "path": item.get("path"),
+                "size_bytes": item.get("size_bytes"),
+                "modified_at": item.get("modified_at"),
+            }
+            for key, item in active_artifacts.items()
+        }
+        typer.echo(
+            "active_attempt_artifacts: "
+            + json.dumps(concise_artifacts, ensure_ascii=False, sort_keys=True)
+        )
     typer.echo(f"terminal_source: {payload['terminal_source']}")
     typer.echo(f"is_approved: {payload['is_approved']}")
     if payload["liveness_state"] is not None:
@@ -1086,9 +1172,12 @@ def task_logs(
             "task_id": task_id,
             "logs": [_journal_row_payload(row) for row in rows],
             "artifact_paths": artifact_paths,
+            "active_attempt_artifact_paths": artifact_top_level.get("active_attempt_artifact_paths"),
+            "last_executor_output_at": artifact_top_level.get("last_executor_output_at"),
         }
         if include_executor_output:
             payload["executor_output_excerpt"] = artifact_top_level.get("executor_output_excerpt")
+            payload["active_attempt_artifacts"] = artifact_top_level.get("active_attempt_artifacts")
         _emit_json(payload)
         return
     for row in rows:
@@ -1122,11 +1211,12 @@ def abandon_task(
     _guard_active_waiter(paths, task_id, force=force, command="abandon")
     _guard_live_task(task, force=force, command="abandon")
     bridge_cancel_attempted = False
-    if task.phase == "acked" and task.antigravity_session_id:
+    session_id = task.executor_session_id or task.antigravity_session_id
+    if task.phase == "acked" and session_id:
         from agpair.executors import get_executor, is_local_cli_backend
         exec_instance = get_executor(task.executor_backend)
         if exec_instance and is_local_cli_backend(task.executor_backend):
-            exec_instance.cancel(task_id=task.task_id, session_id=task.antigravity_session_id)
+            exec_instance.cancel(task_id=task.task_id, session_id=session_id)
             journal.append(task_id, "cli", "executor_cancelled", f"{task.executor_backend} cancelled locally")
         else:
             bridge_cancel_attempted = True
@@ -1351,7 +1441,8 @@ def watch_task(
         current_phase = task.phase
 
         # Inline executor poll for daemon-free detection
-        if current_phase == "acked" and task.antigravity_session_id:
+        session_id = task.executor_session_id or task.antigravity_session_id
+        if current_phase == "acked" and session_id:
             from agpair.cli.wait import _try_inline_poll
             _try_inline_poll(tasks, task, journal)
             # Re-read task after potential state transition
@@ -1367,15 +1458,20 @@ def watch_task(
         payload = build_task_payload(paths, task)
 
         # state tuple for deduplication:
-        # (phase, heartbeat, workspace_activity, stringified_terminal_receipt)
-        # Note: terminal_receipt might not be json-serializable if not a dict,
-        # but build_task_payload ensures it is parsed dict or None.
+        # (phase, heartbeat, workspace_activity, terminal_receipt, live output, cursor)
+        # Note: terminal_receipt and active artifacts are parsed dicts or None.
         event_cursor = f"{task.updated_at}:{task.phase}:{task.attempt_no}"
+        active_artifact_state = (
+            json.dumps(payload.get("active_attempt_artifacts"), sort_keys=True)
+            if payload.get("active_attempt_artifacts")
+            else None
+        )
         current_state = (
             payload["phase"],
             payload["last_heartbeat_at"],
             payload["last_workspace_activity_at"],
             json.dumps(payload.get("terminal_receipt"), sort_keys=True) if payload.get("terminal_receipt") else None,
+            active_artifact_state,
             event_cursor,
         )
 
@@ -1390,6 +1486,7 @@ def watch_task(
             activity_changed = (
                 current_state[1] != last_emitted_state[1]
                 or current_state[2] != last_emitted_state[2]
+                or current_state[4] != last_emitted_state[4]
             )
 
         now_mono = time.monotonic()
@@ -1425,6 +1522,8 @@ def watch_task(
                     "stderr_path": payload.get("stderr_path"),
                     "report_path": payload.get("report_path"),
                     "executor_output_excerpt": payload.get("executor_output_excerpt"),
+                    "active_attempt_artifacts": payload.get("active_attempt_artifacts"),
+                    "last_executor_output_at": payload.get("last_executor_output_at"),
                     "payload": payload,
                 }, ensure_ascii=False))
             else:
@@ -1480,8 +1579,9 @@ def _require_task_with_session(tasks: TaskRepository, task_id: str):
     if task is None:
         typer.echo(f"Error: task {task_id!r} not found", err=True)
         raise typer.Exit(code=1)
-    if not task.antigravity_session_id:
-        typer.echo(f"Error: task {task_id!r} has no Antigravity session (phase={task.phase!r})", err=True)
+    session_id = task.executor_session_id or task.antigravity_session_id
+    if not session_id:
+        typer.echo(f"Error: task {task_id!r} has no executor session (phase={task.phase!r})", err=True)
         raise typer.Exit(code=1)
     return task
 
@@ -1642,17 +1742,20 @@ def retry_task(
             controller=controller,
             requested_executor=executor or task.executor_backend,
             allow_self_executor=allow_self_executor,
+            require_available=True,
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     if executor and policy_decision.rejected_executor:
-        raise typer.BadParameter("requested executor is suppressed by controller policy; pass --allow-self-executor to override")
-    selected_executor = policy_decision.selected_executor or task.executor_backend
-    if selected_executor:
-        try:
-            selected_executor = validate_supported_executor(selected_executor)
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc)) from exc
+        reason = policy_decision.reasons[-1] if policy_decision.reasons else "requested executor is not eligible"
+        raise typer.BadParameter(reason)
+    if policy_decision.selected_executor is None:
+        raise typer.BadParameter(_no_available_executor_message(policy_decision))
+    selected_executor = policy_decision.selected_executor
+    try:
+        selected_executor = validate_supported_executor(selected_executor)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     if from_block:
         if task.phase not in {"blocked", "stuck"}:
             typer.echo("--from-block requires a blocked or stuck task", err=True)

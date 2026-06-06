@@ -244,6 +244,8 @@ def auto_advance_dependent_tasks(
                 repo_path=task.repo_path,
                 isolated_worktree=task.isolated_worktree,
                 worktree_boundary=task.worktree_boundary,
+                authorization_profile=task.authorization_profile,
+                authorization_summary=task.authorization_summary,
             )
         except Exception as exc:
             reason = f"auto-advance dispatch failed: {exc}"
@@ -326,7 +328,7 @@ def auto_close_evidence_ready_tasks(
     *,
     skip_task_ids: set[str] | None = None,
 ) -> int:
-    """Auto-close evidence_ready and acked direct_commit tasks whose delegated commit already landed.
+    """Auto-close eligible tasks when their delegated commit already landed.
 
     For each eligible task that was NOT just touched by receipt ingestion,
     check if a git commit containing the task_id exists in the task's repo.
@@ -418,11 +420,12 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
     for task in active_tasks:
         if is_local_cli_backend(task.executor_backend):
             exec_instance = get_executor(task.executor_backend)
-            if exec_instance and task.phase == "acked" and task.antigravity_session_id:
-                state = exec_instance.poll(task.task_id, task.antigravity_session_id, attempt_no=task.attempt_no)
+            session_id = task.executor_session_id or task.antigravity_session_id
+            if exec_instance and task.phase == "acked" and session_id:
+                state = exec_instance.poll(task.task_id, session_id, attempt_no=task.attempt_no)
                 if state is not None:
                     if state.is_done:
-                        msg_id = f"{task.executor_backend}-{task.task_id}-{task.attempt_no}-{task.antigravity_session_id}-done"
+                        msg_id = f"{task.executor_backend}-{task.task_id}-{task.attempt_no}-{session_id}-done"
                         receipt = state.receipt or {}
                         msg = {
                             "id": msg_id,
@@ -544,7 +547,7 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                     message_id=message_id,
                     original_body=original_body,
                 )
-                if current_task.antigravity_session_id:
+                if current_task.executor_session_id or current_task.antigravity_session_id:
                     _cleanup_local_cli_session(tasks, current_task)
 
             else:
@@ -592,7 +595,7 @@ def mark_stuck_tasks(
         tasks.mark_stuck(task_id=task.task_id, reason="no progress before timeout")
         tasks.recommend_retry(task_id=task.task_id, retry_count=task.retry_count)
         journal.append(task.task_id, "daemon", "stuck", "retry recommended after timeout")
-        if task.antigravity_session_id:
+        if task.executor_session_id or task.antigravity_session_id:
             _cleanup_local_cli_session(tasks, task)
         count += 1
     return count
@@ -601,7 +604,7 @@ def mark_stuck_tasks(
 def _cleanup_local_cli_session(tasks: TaskRepository, task) -> bool:
     from agpair.executors import get_executor, is_local_cli_backend
 
-    session_id = task.antigravity_session_id
+    session_id = task.executor_session_id or task.antigravity_session_id
     if not session_id or not is_local_cli_backend(task.executor_backend):
         return False
     exec_instance = get_executor(task.executor_backend)

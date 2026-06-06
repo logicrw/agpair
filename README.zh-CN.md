@@ -165,12 +165,13 @@ AGPair 不是语义控制器。规划、范围决策、review 和最终验证仍
 | --- | --- |
 | [新手教程](docs/getting-started-zh.md) | 最小安装和第一个任务 |
 | [命令参考](docs/usage.zh-CN.md) | 中文 CLI 参考 |
+| [Executor Lifecycle](docs/executor-lifecycle.md) | 新增、禁用、弃用或移除外部 executor |
 | [工作流 V2](docs/workflows.zh-CN.md) | 声明式多任务工作流编排 |
 | [Claude Code 集成](docs/claude-code-integration.zh-CN.md) | Claude Code 配置和路由规则 |
 | [Getting Started](docs/getting-started.en.md) | English quick guide |
 | [Command Reference](docs/usage.md) | English CLI reference |
 
-## Legacy Surface
+## 兼容性
 
 仓库仍保留 Antigravity 桌面端 companion extension 和旧 bridge 诊断，用于已有安装。新任务推荐路径是 `antigravity-cli` executor，不是 IDE bridge。
 

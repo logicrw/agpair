@@ -123,6 +123,7 @@ class WorkflowScheduler:
                 controller=controller,
                 requested_executor=node.executor_backend,
                 allow_self_executor=False,
+                require_available=True,
             )
             executor_id = policy_decision.selected_executor
         except ValueError as exc:
@@ -332,6 +333,7 @@ class WorkflowScheduler:
             decision = resolve_controller_policy(
                 controller=workflow.controller,
                 allow_self_executor=False,
+                require_available=True,
             )
         except ValueError:
             return None

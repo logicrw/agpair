@@ -11,7 +11,11 @@ from agpair.workflows.store import WorkflowRepository
 
 
 class FakeExecutor:
+    def __init__(self) -> None:
+        self.calls = []
+
     def dispatch(self, **kwargs):
+        self.calls.append(kwargs)
         return DispatchResult(session_id=f"session-{kwargs['task_id']}")
 
 
@@ -48,12 +52,14 @@ def make_manifest(repo_path: str):
 
 
 def patch_executor(monkeypatch):
-    monkeypatch.setattr("agpair.workflows.scheduler.get_executor", lambda *args, **kwargs: FakeExecutor())
+    fake = FakeExecutor()
+    monkeypatch.setattr("agpair.workflows.scheduler.get_executor", lambda *args, **kwargs: fake)
     monkeypatch.setattr("agpair.workflows.scheduler.is_local_cli_backend", lambda executor_id: True)
+    return fake
 
 
 def test_scheduler_dispatches_dependency_free_nodes(tmp_path: Path, monkeypatch) -> None:
-    patch_executor(monkeypatch)
+    fake = patch_executor(monkeypatch)
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
     paths = make_paths(tmp_path)
@@ -69,6 +75,7 @@ def test_scheduler_dispatches_dependency_free_nodes(tmp_path: Path, monkeypatch)
     task = TaskRepository(paths.db_path).get_task("WF-SCHED-scan")
     assert task is not None
     assert task.workflow_id == workflow_id
+    assert fake.calls[0]["authorization_profile"] == "local_readonly"
 
 
 def test_scheduler_does_not_dispatch_duplicate_child_after_restart(tmp_path: Path, monkeypatch) -> None:
@@ -136,7 +143,15 @@ def test_scheduler_marks_workflow_ready_after_child_and_gate(tmp_path: Path, mon
     tasks.mark_ready_for_review(
         task_id=task.task_id,
         terminal_source="test",
-        terminal_receipt_json=json.dumps({"status": "EVIDENCE_PACK", "payload": {"changed_files": []}}),
+        terminal_receipt_json=json.dumps(
+            {
+                "status": "EVIDENCE_PACK",
+                "payload": {
+                    "changed_files": ["docs/scan.md"],
+                    "scope_violations": [{"path": "../outside.txt"}],
+                },
+            }
+        ),
     )
 
     result = scheduler.tick(workflow_id, repo_path=str(repo_dir))
@@ -144,4 +159,8 @@ def test_scheduler_marks_workflow_ready_after_child_and_gate(tmp_path: Path, mon
     assert result["phase"] == "ready_for_review"
     workflow = workflows.require_workflow(workflow_id)
     assert workflow.evidence_path is not None
-    assert Path(workflow.evidence_path).exists()
+    evidence = json.loads(Path(workflow.evidence_path).read_text(encoding="utf-8"))
+    assert evidence["changed_files"] == ["docs/scan.md"]
+    assert evidence["scope_violations"] == [
+        {"node_id": "scan", "violation": {"path": "../outside.txt"}}
+    ]

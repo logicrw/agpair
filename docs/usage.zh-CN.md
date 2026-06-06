@@ -21,7 +21,8 @@
 export AGPAIR_HOME=/path/to/custom/root
 ```
 
-`agpair` 默认查找 `agent-bus`：
+本地 CLI executor 不需要旧桌面 bridge。`agent-bus` 只用于旧 companion /
+bridge 安装以及对应的 receipt ingestion 诊断：
 
 ```bash
 agent-bus
@@ -48,10 +49,11 @@ agpair doctor
 - 本地配置目录
 - DB 是否存在
 - `db_error`
-- `agent-bus` 是否可用
 - daemon 状态
 - 最新 receipt id
-- `desktop_reader_conflict`
+- 注册 executor 健康状态，包括 binary、启动、receipt 能力、生命周期状态和路由资格
+- 传入 repo path 时的 Codex / Claude hook 安装状态
+- 旧 companion bridge 诊断（仅旧安装路径需要）
 
 ### 针对具体 repo 的预检
 
@@ -61,18 +63,9 @@ agpair doctor --repo-path /absolute/path/to/repo
 
 会额外输出：
 
-- bridge marker 路径
-- bridge 端口
-- `/health` 是否可达
-- `sdk_initialized`
-- `ls_bridge_ready`
-- `monitor_running`
-- `workspace_paths` 是否命中目标 repo
-- `agent_bus_watch_running`
-- `agent_bus_delegation_enabled`
-- `receipt_watcher_running`
-- `repo_bridge_session_ready`
-- `repo_bridge_warning`
+如果目标 repo 仍使用旧 companion bridge，`doctor` 会额外显示 bridge marker /
+端口、`/health`、`ls_bridge_ready`、`workspace_paths`、`receipt_watcher_running`
+和 `repo_bridge_warning` 等诊断字段。
 
 ### 什么时候该跑 `doctor`
 
@@ -126,8 +119,9 @@ agpair daemon run --once --force
 
 注意：
 
-- `--force` 只会绕过预检告警
-- **不会**绕过真正的共享锁
+- local CLI executor 不竞争桌面 receipt。
+- `--force` 只影响旧 Antigravity companion bridge 的桌面 reader 预检。
+- `--force` 只会绕过预检告警，**不会**绕过真正的共享锁。
 
 ---
 
@@ -148,6 +142,8 @@ agpair task start \
   --authorization-profile local_mutating \
   --body "Goal: ..."
 ```
+
+`--repo-path` 应该指向具体项目目录。AGPair 默认拒绝文件系统根目录、用户 home 目录，以及用户 home 上层目录，因为外部 executor 可能扫到私人日志、缓存和无关项目。如果确实要这么做，显式传 `--allow-broad-repo-path`；该 override 会写入 task，并在 `task status` 中可见。
 
 新任务可用 executor id：
 
@@ -180,14 +176,28 @@ agpair task start \
 - `AGPAIR_ANTIGRAVITY_PRINT_TIMEOUT=30m0s`
 - `AGPAIR_GROK_CLI_BIN=/absolute/path/to/grok`
   旧别名：`AGPAIR_GROK_CLI`
+- `AGPAIR_GROK_OUTPUT_FORMAT=json|streaming-json`
+  默认：`json`
+- `AGPAIR_GROK_MAX_TURNS=24`
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
   旧别名：`AGPAIR_CLAUDE_CODE_CLI`
+- `AGPAIR_CLAUDE_CODE_BARE=1|0`
+  默认：`1`。外部 worker 隔离应保持开启；只有诊断时才设为 `0`。
+- `AGPAIR_CLAUDE_CODE_SETTINGS=/absolute/path/to/settings.json`
+  可选 Claude Code settings JSON 或路径。bare mode 需要 `apiKeyHelper` 时使用；
+  OAuth / keychain 登录在 bare mode 下会被刻意跳过。
 - `AGPAIR_CLAUDE_CODE_PERMISSION_MODE=<claude --permission-mode 支持的值>`
   默认：`bypassPermissions`
 - `AGPAIR_CODEX_BIN=/absolute/path/to/codex`
   旧别名：`AGPAIR_CODEX_CLI`
+- `AGPAIR_CODEX_IGNORE_USER_CONFIG=1|0`
+  默认：`1`。外部 worker 隔离应保持开启；只有诊断时才设为 `0`。
 - `AGPAIR_CODEX_APPROVAL_MODE=default|full_auto|bypass_all`
   默认：`bypass_all`
+
+这些开关都是 adapter-local 的诊断/兼容入口。所有 executor 的共享合同仍以
+registry profile 为准，测试会要求 profile 声明的非交互和隔离 flag 与 adapter
+默认命令保持一致。
 
 默认情况下，`task start` **会阻塞**直到任务进入终态。
 要立即返回：
@@ -208,17 +218,28 @@ agpair task start \
   --body "Goal: ..."
 ```
 
+### Completion policy
+
+不是所有任务都需要 commit。终态语义由 completion policy 决定：
+
+- `report`：需要捕获报告、stdout 报告输出，或携带报告证据的有效结构化 receipt。
+- `evidence`：需要可验证 evidence，例如 receipt payload、artifact、changed files 或测试输出。
+- `commit`：需要可验证 commit。
+- `auto`：根据授权 profile 和任务 brief 解析有效策略。
+
+`local_readonly` 以及明确写了 `Required changes: none`、`no changes`、`无`、
+`禁止写入` 的任务，应按 report/evidence 语义验收，不能因为没有 commit 就被阻塞。
+
 ### 任务元数据（编排提示）
 
 你可以为任务附加编排元数据，帮助主控器计划并行与隔离执行。
-**注意：** 这些字段当前**仅作为元数据**存在。它们会落盘保存并在 `status` 与 `inspect` 输出中可见，但 `agpair` daemon 目前**不会**在运行时强制执行它们（例如自动运行 setup 脚本）。
 
 - `depends_on`: 在此任务开始前必须完成的前置任务 ID 列表。
-- `isolated_worktree`: 布尔值，表示意图在一个独立的 git worktree 中执行此任务。
-- `worktree_boundary`: 预期任务运行的工作区根目录边界。
-- `setup_commands`: 执行前置脚本（例如创建 worktree 或启动依赖）。
-- `teardown_commands`: 执行后置脚本（例如清理 worktree）。
-- `env_vars`: 单任务环境变量隔离（例如 `PORT`, `AGPAIR_PORT_OFFSET`）。
+- `isolated_worktree`: 对本地 CLI executor，在 AGPair 能创建或解析 worktree 时，会从独立 git worktree 运行。
+- `worktree_boundary`: 任务或 worktree 的预期执行边界。
+- `setup_commands`: 持久化给主控看的前置提示；AGPair 不执行任意 setup 脚本。
+- `teardown_commands`: 持久化给主控看的后置提示；AGPair 不执行任意 teardown 脚本。
+- `env_vars`: 单任务环境提示；只有 executor 明确支持的环境变量会自动应用。
 - `spotlight_testing`: 布尔值，表示优先运行局部焦点测试而非全量测试的意图。
 
 **并发建议：** 永远在跨 worktree 间做并发，不能在同一个 worktree 内并发任务。
@@ -229,6 +250,7 @@ agpair task start \
 
 ```bash
 agpair task status TASK-001
+agpair task status TASK-001 --json
 ```
 
 会显示：
@@ -241,6 +263,11 @@ agpair task status TASK-001
 - `retry_count`
 - `retry_recommended`
 - `stuck_reason`
+
+`status --json` 还会暴露当前 attempt、executor id、实际 binary 名称、pid
+（如果可用）、stdout/stderr 路径、日志大小、最后输出时间、小段 tail
+excerpt、liveness state、effective completion policy 和精确 blocker metadata。
+完整 raw logs 默认留在磁盘上，只有显式请求才读取。
 
 ---
 
@@ -294,7 +321,7 @@ agpair claude hook subagent-start
 
 安全约束：
 
-- 遇到非 AGPair 管理的 `statusLine`，默认拒绝覆盖，除非显式 `--force`
+- 遇到非 AGPair 管理的 `statusLine`，默认保留原值并继续同步 AGPair hooks；只有显式 `--force` 才会替换它
 - hook 按 AGPair command identity 追加 / 去重，保留其他 Claude Code hook
 - `--uninstall` 只移除 AGPair 自己的条目，不碰无关配置
 
@@ -336,6 +363,8 @@ agpair task watch TASK-123 --json
 
 ```bash
 agpair task logs TASK-001
+agpair task logs TASK-001 --raw stdout
+agpair task logs TASK-001 --raw stderr
 ```
 
 日志会显示最近的：
@@ -345,7 +374,6 @@ agpair task logs TASK-001
 - ACK
 - EVIDENCE_PACK
 - BLOCKED
-- COMMITTED
 - COMMITTED
 - retry 事件
 
@@ -447,9 +475,32 @@ Workflow `ready_for_review` 表示 AGPair 已生成 evidence pack 等待主控�
 - `task wait` 和自动等待在 watchdog 标记后会提前退出（code 1），而不是盲等到硬超时
 - 只有到了硬超时，才会标成 `stuck`
 
+## 14. Executor 生命周期
+
+所有外部 executor 都是注册模块。新增、禁用、弃用或移除 executor，要走共享 profile
+contract，而不是在任务状态机里散落 provider 特判。详见
+[Executor Lifecycle](executor-lifecycle.md)。
+
+当前 active executor id 是 `antigravity-cli`、`grok-cli`、`claude-code` 和
+`codex`。`codex` 指 AGPair 管理的外部 Codex CLI worker，不是 Codex 原生
+subagent；`claude-code` 指 AGPair 管理的外部 Claude Code worker，不是 Claude
+Code 原生 subagent。
+
+## 15. 发布与隐私检查
+
+发布、提交 PR 或 push 前：
+
+- 跑目标测试和完整 unit/integration suite。
+- 跑 controller matrix 的真实 smoke，smoke report 只留本地。
+- 跑 `git diff --check`。
+- 检查 `git status --short --untracked-files=all`。
+- 不要提交 `.agpair/`、`~/.agpair`、raw executor logs、本地 receipts、session transcripts、个人 Codex/Claude 配置或生成的 hook debug 输出。
+- 从要提交的 docs 中清掉本机路径和私有 artifact 引用。
+- 手动检查 GitHub About / description / topics；这些仓库元数据不在 source diff 里，可能仍是旧措辞。
+
 ---
 
-## 14. 最推荐的命令顺序
+## 16. 最推荐的命令顺序
 
 对真实任务，建议顺序是：
 

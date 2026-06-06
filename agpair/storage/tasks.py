@@ -62,6 +62,7 @@ class TaskRepository:
         env_vars: str | None = None,
         worktree_boundary: str | None = None,
         spotlight_testing: bool = False,
+        broad_repo_path_override: bool = False,
         authorization_profile: str = "local_mutating",
         authorization_summary: str | None = None,
         completion_policy: str = "auto",
@@ -85,9 +86,9 @@ class TaskRepository:
                   last_receipt_id, stuck_reason, retry_recommended, last_activity_at, created_at, updated_at,
                   last_heartbeat_at, last_workspace_activity_at, client_idempotency_key, executor_backend,
                   depends_on, isolated_worktree, setup_commands, teardown_commands, env_vars, worktree_boundary,
-                  spotlight_testing, completion_policy, terminal_source, terminal_receipt_json, is_approved,
+                  spotlight_testing, broad_repo_path_override, completion_policy, terminal_source, terminal_receipt_json, is_approved,
                   authorization_profile, authorization_summary, workflow_id, workflow_node_id, parent_task_id, child_role
-                ) VALUES (?, ?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task_id,
@@ -105,6 +106,7 @@ class TaskRepository:
                     env_vars,
                     worktree_boundary,
                     1 if spotlight_testing else 0,
+                    1 if broad_repo_path_override else 0,
                     normalized_completion_policy,
                     normalized_authorization_profile,
                     normalized_authorization_summary,
@@ -739,6 +741,7 @@ class TaskRepository:
             env_vars=get("env_vars"),
             worktree_boundary=get("worktree_boundary"),
             spotlight_testing=bool(get("spotlight_testing", 0)),
+            broad_repo_path_override=bool(get("broad_repo_path_override", 0)),
             completion_policy=completion_policy,
             terminal_source=get("terminal_source"),
             terminal_receipt_json=get("terminal_receipt_json"),

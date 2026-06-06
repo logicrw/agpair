@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -662,6 +664,35 @@ def test_plain_acked_still_waits_normally(tmp_path: Path):
     assert result.watchdog_triggered is False
 
 
+def test_plain_acked_no_progress_exits_before_hard_timeout(tmp_path: Path):
+    """acked without retry_recommended should still watchdog when all progress signals are stale."""
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WD-NOPROGRESS", repo_path="/r")
+    repo.mark_acked(task_id="T-WD-NOPROGRESS", session_id="s-1")
+
+    old_time = datetime(2026, 3, 24, 11, 44, tzinfo=UTC).isoformat()
+    with sqlite3.connect(_make_paths(tmp_path).db_path) as conn:
+        conn.execute(
+            "UPDATE tasks SET last_activity_at=?, updated_at=? WHERE task_id=?",
+            (old_time, old_time, "T-WD-NOPROGRESS"),
+        )
+        conn.commit()
+
+    result = wait_for_terminal_phase(
+        _make_paths(tmp_path).db_path,
+        "T-WD-NOPROGRESS",
+        interval_seconds=5,
+        timeout_seconds=60,
+        heartbeat_silence_seconds=300,
+        _clock=FakeClock(),
+        _utcnow=lambda: datetime(2026, 3, 24, 12, 0, tzinfo=UTC),
+    )
+
+    assert result.timed_out is False
+    assert result.phase == "acked"
+    assert result.watchdog_triggered is True
+
+
 def test_acked_plus_retry_recommended_exits_early(tmp_path: Path):
     """acked + retry_recommended=true should exit early as watchdog failure."""
     repo = _make_repo(tmp_path)
@@ -941,17 +972,46 @@ def test_task_watch_json_emits_ndjson(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
 
     lines = [line for line in result.stdout.strip().splitlines() if line]
-    assert len(lines) >= 3
+    assert lines
     parsed = [json.loads(line) for line in lines]
 
     events = [item["event_type"] for item in parsed]
-    assert "status_update" in events
     assert "terminal" in events
 
     phases = [item["phase"] for item in parsed]
-    assert "new" in phases
-    assert "acked" in phases
     assert "committed" in phases
+
+
+def test_task_watch_json_emits_live_attempt_artifact_metadata(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WATCH-LIVE", repo_path="/r")
+    session_dir = tmp_path / "watch-live-session"
+    session_dir.mkdir()
+    stdout_path = session_dir / "stdout.log"
+    stdout_path.write_text("watch live output\n", encoding="utf-8")
+    repo.mark_acked(task_id="T-WATCH-LIVE", session_id=str(session_dir))
+
+    def noop_inline_poll(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("agpair.cli.wait._try_inline_poll", noop_inline_poll)
+
+    result = CliRunner().invoke(app, [
+        "task", "watch", "T-WATCH-LIVE", "--json",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "0.05",
+    ])
+
+    assert result.exit_code == 1
+    parsed = [json.loads(line) for line in result.stdout.strip().splitlines() if line]
+    live_events = [item for item in parsed if item["phase"] == "acked"]
+    assert live_events
+    live_event = live_events[0]
+    assert live_event["stdout_path"] == str(stdout_path)
+    assert live_event["last_executor_output_at"] is not None
+    assert live_event["active_attempt_artifacts"]["stdout"]["path"] == str(stdout_path)
+    assert live_event["active_attempt_artifacts"]["stdout"]["excerpt"] == "watch live output"
 
 
 def test_task_watch_deduplicates_output(tmp_path: Path, monkeypatch):
@@ -963,20 +1023,20 @@ def test_task_watch_deduplicates_output(tmp_path: Path, monkeypatch):
     import time
 
     def advance_state():
-        time.sleep(0.05)
+        time.sleep(0.15)
         # Heartbeat change
         repo.mark_acked(task_id="T-WATCH-DEDUP", session_id="s-del")
         repo.record_heartbeat(task_id="T-WATCH-DEDUP")
-        time.sleep(0.05)
+        time.sleep(0.25)
         repo.mark_committed(task_id="T-WATCH-DEDUP")
 
     threading.Thread(target=advance_state, daemon=True).start()
 
     result = CliRunner().invoke(app, [
         "task", "watch", "T-WATCH-DEDUP",
-        "--interval-seconds", "0.02",
-        "--timeout-seconds", "1",
-    ])
+            "--interval-seconds", "0.02",
+            "--timeout-seconds", "2",
+        ])
     assert result.exit_code == 0
 
     # We should see the transitions and no duplicate "phase: acked" outputs

@@ -1,5 +1,10 @@
 # External Agent First AGPair V1 Implementation Plan
 
+> Historical archive: this plan preserves implementation context from an earlier
+> phase. It is not the current behavior contract. Use `README.md`,
+> `docs/usage.md`, and `docs/executor-lifecycle.md` for current executor
+> routing and lifecycle rules.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Refactor AGPair so Codex and Claude Code can dispatch non-trivial work to cheap external CLI agents first, with dispatch-time authorization, structured blocked context, low-token waiting, and state-aware retry.
