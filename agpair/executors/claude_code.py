@@ -15,11 +15,40 @@ def _permission_args() -> list[str]:
     return ["--permission-mode", mode]
 
 
+def _auth_mode() -> str:
+    explicit = os.environ.get("AGPAIR_CLAUDE_CODE_AUTH_MODE", "").strip().lower()
+    if explicit in {"api", "bare"}:
+        return "api"
+    if explicit in {"oauth", "subscription"}:
+        return "oauth"
+    legacy_bare = os.environ.get("AGPAIR_CLAUDE_CODE_BARE")
+    if legacy_bare is not None and legacy_bare.strip().lower() not in {"0", "false", "no", "off"}:
+        return "api"
+    return "oauth"
+
+
+def _retry_env_args() -> list[str]:
+    retries = os.environ.get("AGPAIR_CLAUDE_CODE_MAX_RETRIES", "0").strip() or "0"
+    return ["env", f"CLAUDE_CODE_MAX_RETRIES={retries}"]
+
+
 def _bare_args() -> list[str]:
-    value = os.environ.get("AGPAIR_CLAUDE_CODE_BARE", "1").strip().lower()
-    if value in {"0", "false", "no", "off"}:
+    return ["--bare"] if _auth_mode() == "api" else []
+
+
+def _oauth_profile_args() -> list[str]:
+    if _auth_mode() != "oauth":
         return []
-    return ["--bare"]
+    profile = os.environ.get("AGPAIR_CLAUDE_CODE_OAUTH_PROFILE", "quiet").strip().lower()
+    if profile in {"natural", "full", "inherit"}:
+        return []
+    return [
+        "--strict-mcp-config",
+        "--mcp-config",
+        '{"mcpServers":{}}',
+        "--disable-slash-commands",
+        "--no-chrome",
+    ]
 
 
 def _settings_args() -> list[str]:
@@ -45,8 +74,10 @@ class ClaudeCodeExecutor(LocalCLIExecutor):
         temp_dir: pathlib.Path,
     ) -> list[str]:
         return [
+            *_retry_env_args(),
             self.bin_path,
             *_bare_args(),
+            *_oauth_profile_args(),
             *_settings_args(),
             *_permission_args(),
             "--no-session-persistence",

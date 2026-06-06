@@ -94,11 +94,21 @@ agpair claude config
 agpair claude config --install --scope project --repo-path /path/to/repo
 ```
 
-To let Codex use the external `claude-code` worker in isolated bare mode, provide worker auth explicitly. OAuth/keychain login is not read by `claude --bare`:
+To let Codex use the external `claude-code` worker, AGPair reuses the local Claude Code OAuth/subscription login by default. Verify that Claude Code is logged in:
+
+```bash
+claude auth status
+agpair doctor --fresh --repo-path /path/to/repo
+```
+
+`doctor --fresh` runs a tiny live auth probe; if it reports `Invalid Authentication`, refresh the local Claude Code login with `claude auth login`.
+
+Use API-key bare mode only when you explicitly want a separate worker credential:
 
 ```bash
 mkdir -p ~/.agpair
 agpair claude worker-settings > ~/.agpair/claude-worker-settings.json
+export AGPAIR_CLAUDE_CODE_AUTH_MODE=api
 export AGPAIR_CLAUDE_CODE_SETTINGS="$HOME/.agpair/claude-worker-settings.json"
 export ANTHROPIC_API_KEY="..."
 ```

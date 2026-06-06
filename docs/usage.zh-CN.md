@@ -183,11 +183,19 @@ agpair task start \
 - `AGPAIR_GROK_MAX_TURNS=24`
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
   旧别名：`AGPAIR_CLAUDE_CODE_CLI`
+- `AGPAIR_CLAUDE_CODE_AUTH_MODE=oauth|api`
+  默认：`oauth`。OAuth mode 会复用 `claude auth status` 显示的本机
+  Claude Code 订阅 / OAuth 登录，并且不会传 `--bare`。
+  `doctor --fresh` 和 dispatch preflight 还会跑一个极小 live auth probe，
+  让过期 OAuth token 在派发任务前失败。
+- `AGPAIR_CLAUDE_CODE_MAX_RETRIES=<integer>`
+  默认：`0`。AGPair 会给 worker 设置 `CLAUDE_CODE_MAX_RETRIES`，让无效
+  OAuth / API credential 快速失败，而不是静默重试。
 - `AGPAIR_CLAUDE_CODE_BARE=1|0`
-  默认：`1`。外部 worker 隔离应保持开启；只有诊断时才设为 `0`。
+  旧兼容开关。未设置 `AGPAIR_CLAUDE_CODE_AUTH_MODE` 时，设为 `1` 会选择
+  API / bare mode。
 - `AGPAIR_CLAUDE_CODE_SETTINGS=/absolute/path/to/settings.json`
-  可选 Claude Code settings JSON 或路径。bare mode 需要 `apiKeyHelper` 时使用；
-  OAuth / keychain 登录在 bare mode 下会被刻意跳过。
+  API / bare mode 下可选 Claude Code settings JSON 或路径。
   可用下面的命令生成安全模板：
   `agpair claude worker-settings > ~/.agpair/claude-worker-settings.json`
   然后把 `AGPAIR_CLAUDE_CODE_SETTINGS` 指向该文件，并让 helper 返回有效 API key，

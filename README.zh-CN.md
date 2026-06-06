@@ -94,11 +94,21 @@ agpair claude config
 agpair claude config --install --scope project --repo-path /path/to/repo
 ```
 
-要让 Codex 稳定调用外部 `claude-code` worker，需要给 bare 隔离模式显式配置 worker auth。`claude --bare` 不会读取 OAuth / keychain 登录：
+要让 Codex 调用外部 `claude-code` worker，AGPair 默认复用本机 Claude Code OAuth / 订阅登录。先确认 Claude Code 已登录：
+
+```bash
+claude auth status
+agpair doctor --fresh --repo-path /path/to/repo
+```
+
+`doctor --fresh` 会跑一个极小 live auth probe；如果报告 `Invalid Authentication`，用 `claude auth login` 刷新本机 Claude Code 登录。
+
+只有明确想给 worker 使用单独 API credential 时，才启用 API-key bare mode：
 
 ```bash
 mkdir -p ~/.agpair
 agpair claude worker-settings > ~/.agpair/claude-worker-settings.json
+export AGPAIR_CLAUDE_CODE_AUTH_MODE=api
 export AGPAIR_CLAUDE_CODE_SETTINGS="$HOME/.agpair/claude-worker-settings.json"
 export ANTHROPIC_API_KEY="..."
 ```

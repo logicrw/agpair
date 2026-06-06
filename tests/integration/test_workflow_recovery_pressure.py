@@ -143,6 +143,7 @@ def test_reroute_policy_failure_blocks_node_instead_of_spinning(tmp_path: Path, 
 
 
 def test_repeated_stuck_attempts_rotate_through_executor_policy_order(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_AUTH_MODE", "api")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-api-key")
     fake = FakeExecutor()
     patch_scheduler_executor(monkeypatch, fake)

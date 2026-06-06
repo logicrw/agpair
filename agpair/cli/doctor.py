@@ -249,6 +249,7 @@ def _build_executor_cli_health(*, run_launch_probe: bool = False) -> dict[str, d
             "recommended_for_controllers": item.get("recommended_for_controllers"),
             "isolation_profile": item.get("isolation_profile"),
             "launch_probe": item.get("launch_probe"),
+            "auth_mode": item.get("auth_mode"),
             "launch_clean": item.get("launch_clean"),
             "isolation_auth_satisfied": item.get("isolation_auth_satisfied"),
             "last_failure_type": item.get("last_failure_type"),

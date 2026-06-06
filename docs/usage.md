@@ -170,11 +170,19 @@ Local CLI approval modes can be adjusted with environment variables:
 - `AGPAIR_GROK_MAX_TURNS=24`
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
   Legacy alias: `AGPAIR_CLAUDE_CODE_CLI`
+- `AGPAIR_CLAUDE_CODE_AUTH_MODE=oauth|api`
+  Default: `oauth`. OAuth mode reuses the local Claude Code subscription/OAuth
+  login reported by `claude auth status` and does not pass `--bare`.
+  `doctor --fresh` and dispatch preflight also run a tiny live auth probe so
+  stale OAuth tokens fail before a delegated task is launched.
+- `AGPAIR_CLAUDE_CODE_MAX_RETRIES=<integer>`
+  Default: `0`. AGPair sets `CLAUDE_CODE_MAX_RETRIES` for worker launches so
+  invalid OAuth/API credentials fail quickly instead of silently retrying.
 - `AGPAIR_CLAUDE_CODE_BARE=1|0`
-  Default: `1`. Keep this on for external-worker isolation; set `0` only for diagnostics.
+  Legacy compatibility switch. Setting it to `1` selects API/bare mode when
+  `AGPAIR_CLAUDE_CODE_AUTH_MODE` is unset.
 - `AGPAIR_CLAUDE_CODE_SETTINGS=/absolute/path/to/settings.json`
-  Optional Claude Code settings JSON or path. Use this when bare mode needs an
-  `apiKeyHelper`; OAuth/keychain auth is intentionally not used in bare mode.
+  Optional Claude Code settings JSON or path for API/bare mode.
   Generate a safe template with:
   `agpair claude worker-settings > ~/.agpair/claude-worker-settings.json`
   then set `AGPAIR_CLAUDE_CODE_SETTINGS` to that path and make the helper return

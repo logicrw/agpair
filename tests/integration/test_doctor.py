@@ -85,7 +85,15 @@ def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch
     ):
         bin_path = tmp_path / "bin" / filename
         bin_path.parent.mkdir(parents=True, exist_ok=True)
-        bin_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        if filename == "claude":
+            bin_path.write_text(
+                '#!/bin/sh\nif [ "$1" = "auth" ] && [ "$2" = "status" ]; then '
+                'printf "{\\"loggedIn\\":true,\\"authMethod\\":\\"oauth_token\\"}\\n"; exit 0; fi\n'
+                'printf "{\\"type\\":\\"result\\",\\"subtype\\":\\"success\\",\\"is_error\\":false}\\n"\nexit 0\n',
+                encoding="utf-8",
+            )
+        else:
+            bin_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         bin_path.chmod(0o755)
         monkeypatch.setenv(env_var, str(bin_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-api-key")
@@ -110,6 +118,7 @@ def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch
     assert health["antigravity-cli"]["last_failure_type"] is None
     assert health["grok-cli"]["available"] is True
     assert health["claude-code"]["available"] is True
+    assert health["claude-code"]["auth_mode"] == "oauth"
     assert health["claude-code"]["isolation_auth_satisfied"] is True
     assert health["codex"]["available"] is True
     assert "codex" in health

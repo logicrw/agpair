@@ -144,7 +144,30 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
             "supports_turn_budget": "unknown",
             "supports_streaming_json": True,
             "default_output_mode": "json",
-            "noninteractive_flags": ["--bare", "--print", "--output-format", "--no-session-persistence"],
+            "default_auth_mode": "oauth",
+            "auth_modes": ["oauth", "api"],
+            "default_retry_env": {"CLAUDE_CODE_MAX_RETRIES": "0"},
+            "default_oauth_profile": "quiet",
+            "oauth_profile_env_var": "AGPAIR_CLAUDE_CODE_OAUTH_PROFILE",
+            "oauth_quiet_flags": [
+                "--strict-mcp-config",
+                "--mcp-config",
+                "--disable-slash-commands",
+                "--no-chrome",
+                "--print",
+                "--output-format",
+                "--no-session-persistence",
+            ],
+            "noninteractive_flags": [
+                "--strict-mcp-config",
+                "--mcp-config",
+                "--disable-slash-commands",
+                "--no-chrome",
+                "--print",
+                "--output-format",
+                "--no-session-persistence",
+            ],
+            "api_mode_flags": ["--bare", "--print", "--output-format", "--no-session-persistence"],
             "isolated_auth_env_vars": ["ANTHROPIC_API_KEY", "AGPAIR_CLAUDE_CODE_SETTINGS"],
             "isolation_disable_env_var": "AGPAIR_CLAUDE_CODE_BARE",
         },
@@ -239,6 +262,101 @@ def _env_flag_disabled(env_var: str | None) -> bool:
     return os.environ.get(env_var, "1").strip().lower() in _FALSE_ENV_VALUES
 
 
+def _claude_code_auth_mode() -> str:
+    explicit = os.environ.get("AGPAIR_CLAUDE_CODE_AUTH_MODE", "").strip().lower()
+    if explicit in {"api", "bare"}:
+        return "api"
+    if explicit in {"oauth", "subscription"}:
+        return "oauth"
+    legacy_bare = os.environ.get("AGPAIR_CLAUDE_CODE_BARE")
+    if legacy_bare is not None and legacy_bare.strip().lower() not in _FALSE_ENV_VALUES:
+        return "api"
+    return "oauth"
+
+
+def _claude_code_oauth_live_probe_error(binary_path: str) -> str | None:
+    env = os.environ.copy()
+    env["CLAUDE_CODE_MAX_RETRIES"] = os.environ.get("AGPAIR_CLAUDE_CODE_MAX_RETRIES", "0").strip() or "0"
+    cmd = [
+        binary_path,
+        "--strict-mcp-config",
+        "--mcp-config",
+        '{"mcpServers":{}}',
+        "--disable-slash-commands",
+        "--no-chrome",
+        "--permission-mode",
+        "default",
+        "--no-session-persistence",
+        "--output-format",
+        "json",
+        "--print",
+        "Return exactly: agpair-oauth-health-ok",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=20.0,
+            check=False,
+            env=env,
+        )
+    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as exc:
+        return f"Claude Code OAuth/subscription live auth check failed: {type(exc).__name__}: {exc}"
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    combined_output = f"{stdout}\n{stderr}"
+    if "Invalid Authentication" in combined_output or ("api_error_status" in combined_output and "401" in combined_output):
+        return "Claude Code OAuth/subscription live auth check failed: Invalid Authentication; run `claude auth login`"
+    if proc.returncode != 0:
+        detail = (stderr or stdout).splitlines()
+        return f"Claude Code OAuth/subscription live auth check failed: {detail[-1] if detail else proc.returncode}"
+    if not stdout:
+        return "Claude Code OAuth/subscription live auth check produced no output"
+    try:
+        payload = json.loads(stdout.splitlines()[-1])
+    except json.JSONDecodeError:
+        return None
+    if payload.get("api_error_status") == 401:
+        return "Claude Code OAuth/subscription live auth check failed: Invalid Authentication; run `claude auth login`"
+    if payload.get("is_error") is True:
+        summary = payload.get("result") or payload.get("error") or payload.get("subtype") or "unknown error"
+        return f"Claude Code OAuth/subscription live auth check failed: {summary}"
+    return None
+
+
+def _claude_code_oauth_error(binary_path: str | None, *, live_probe: bool = False) -> str | None:
+    if not binary_path:
+        return "Claude Code OAuth/subscription auth requires a claude binary"
+    try:
+        proc = subprocess.run(
+            [binary_path, "auth", "status"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as exc:
+        return f"Claude Code OAuth/subscription auth check failed: {type(exc).__name__}: {exc}"
+    if proc.returncode != 0:
+        excerpt = (proc.stderr or proc.stdout or "").strip().splitlines()
+        detail = excerpt[-1] if excerpt else f"claude auth status exited {proc.returncode}"
+        return f"Claude Code OAuth/subscription auth check failed: {detail}"
+    try:
+        status = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        return f"Claude Code OAuth/subscription auth check returned invalid JSON: {exc}"
+    if status.get("loggedIn") is True:
+        if live_probe:
+            return _claude_code_oauth_live_probe_error(binary_path)
+        return None
+    return "Claude Code OAuth/subscription auth is not logged in; run `claude auth login`"
+
+
 def _claude_code_settings_error(value: str) -> str | None:
     stripped = value.strip()
     if not stripped:
@@ -267,7 +385,12 @@ def _claude_code_settings_error(value: str) -> str | None:
     return None
 
 
-def _isolation_auth_error(spec: ExecutorSpec) -> str | None:
+def _isolation_auth_error(
+    spec: ExecutorSpec,
+    *,
+    binary_path: str | None = None,
+    live_probe: bool = False,
+) -> str | None:
     profile = spec.isolation_profile or {}
     required_env_vars = tuple(str(item) for item in profile.get("isolated_auth_env_vars") or ())
     if not required_env_vars:
@@ -276,6 +399,8 @@ def _isolation_auth_error(spec: ExecutorSpec) -> str | None:
     if _env_flag_disabled(str(disable_env_var) if disable_env_var else None):
         return None
     if spec.executor_id == "claude-code":
+        if _claude_code_auth_mode() == "oauth":
+            return _claude_code_oauth_error(binary_path, live_probe=live_probe)
         settings_error = _claude_code_settings_error(
             os.environ.get("AGPAIR_CLAUDE_CODE_SETTINGS", "")
         )
@@ -290,7 +415,7 @@ def _isolation_auth_error(spec: ExecutorSpec) -> str | None:
         setup_hint = (
             ". Run `agpair claude worker-settings > ~/.agpair/claude-worker-settings.json` "
             "and set AGPAIR_CLAUDE_CODE_SETTINGS to that file, or export ANTHROPIC_API_KEY. "
-            "OAuth/keychain login does not satisfy Claude Code --bare worker auth"
+            "Use AGPAIR_CLAUDE_CODE_AUTH_MODE=oauth to reuse Claude Code OAuth/subscription login"
         )
     return (
         f"executor {spec.executor_id} requires one of {required} for isolated external-worker auth"
@@ -312,7 +437,12 @@ def executor_health_snapshot(*, run_launch_probe: bool = False) -> dict[str, dic
         launch_error: str | None = None
         if run_launch_probe and binary:
             launch_clean, launch_error = _launch_probe(binary, spec)
-        isolation_auth_error = _isolation_auth_error(spec)
+        auth_mode = _claude_code_auth_mode() if executor_id == "claude-code" else None
+        isolation_auth_error = _isolation_auth_error(
+            spec,
+            binary_path=binary,
+            live_probe=run_launch_probe,
+        )
         last_failure_type = None
         if not lifecycle.allowed_for_new_tasks:
             last_failure_type = lifecycle.blocker_type
@@ -352,6 +482,7 @@ def executor_health_snapshot(*, run_launch_probe: bool = False) -> dict[str, dic
             "recommended_for_controllers": list(spec.recommended_for_controllers),
             "isolation_profile": spec.isolation_profile,
             "launch_probe": list(spec.launch_probe),
+            "auth_mode": auth_mode,
             "launch_clean": launch_clean,
             "isolation_auth_satisfied": isolation_auth_error is None,
             "last_failure_type": last_failure_type,

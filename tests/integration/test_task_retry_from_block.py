@@ -131,6 +131,8 @@ def test_retry_from_block_generates_context_and_updates_authorization(tmp_path: 
 def test_retry_from_block_with_executor_override_stores_supported_executor(tmp_path: Path, monkeypatch) -> None:
     paths = make_paths(tmp_path, monkeypatch)
     seed_blocked_task(paths)
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_AUTH_MODE", "api")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-api-key")
     fake_executor = FakeExecutor()
     monkeypatch.setattr("agpair.executors.get_executor", lambda backend_id, **kwargs: fake_executor)
 

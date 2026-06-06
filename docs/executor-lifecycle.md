@@ -18,14 +18,14 @@ Each active executor must define one profile entry with:
 - lifecycle status and replacement guidance
 
 The profile is executable documentation, not decorative metadata. If a profile
-declares noninteractive or isolation flags, the adapter command must emit those
-flags by default, and unit tests must prove that parity for every active
-executor. Provider-specific escape hatches may exist for diagnostics, but the
-safe isolated mode stays the default.
+declares noninteractive flags, auth modes, or isolation flags, the adapter
+command must emit the matching flags for the selected mode, and unit tests must
+prove that parity for every active executor. Provider-specific escape hatches
+may exist for diagnostics, but the profile must say which mode is the default.
 
-If isolated mode changes the executor's authentication source, declare the
-required auth environment or settings source in the profile. Health checks and
-dispatch preflight must then report `executor_auth_required` before launch
+If a mode changes the executor's authentication source, declare the required
+OAuth login, auth environment, or settings source in the profile. Health checks
+and dispatch preflight must then report `executor_auth_required` before launch
 instead of letting the process sit silently until a no-progress timeout.
 
 Current active executor ids are `antigravity-cli`, `grok-cli`, `claude-code`,

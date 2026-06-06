@@ -31,6 +31,14 @@ def _make_repo(tmp_path: Path) -> Path:
 def _fake_executor(path: Path) -> Path:
     path.write_text(
         """#!/bin/sh
+if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
+  if [ "${FAKE_CLAUDE_LOGGED_IN:-1}" = "0" ]; then
+    printf '{"loggedIn":false,"authMethod":null}\\n'
+  else
+    printf '{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}\\n'
+  fi
+  exit 0
+fi
 last=""
 output_file=""
 while [ "$#" -gt 0 ]; do
@@ -106,10 +114,9 @@ def _env(
         env["AGPAIR_GROK_CLI_BIN"] = str(_fake_executor(bin_dir / "grok"))
     env["AGPAIR_CLAUDE_CODE_BIN"] = str(_fake_executor(bin_dir / "claude"))
     if missing_claude_auth:
-        env.pop("ANTHROPIC_API_KEY", None)
-        env.pop("AGPAIR_CLAUDE_CODE_SETTINGS", None)
+        env["FAKE_CLAUDE_LOGGED_IN"] = "0"
     else:
-        env["ANTHROPIC_API_KEY"] = "test-anthropic-api-key"
+        env["FAKE_CLAUDE_LOGGED_IN"] = "1"
     env["AGPAIR_CODEX_BIN"] = str(_fake_executor(bin_dir / "codex"))
     return env
 
@@ -245,7 +252,7 @@ def test_smoke_harness_reports_missing_binary_without_dispatch(tmp_path: Path) -
     assert "AGPAIR_GROK_CLI_BIN" in result["reason"]
 
 
-def test_smoke_harness_reports_claude_bare_auth_without_dispatch(tmp_path: Path) -> None:
+def test_smoke_harness_reports_claude_oauth_auth_without_dispatch(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
 
     payload = _run_smoke(
@@ -261,8 +268,7 @@ def test_smoke_harness_reports_claude_bare_auth_without_dispatch(tmp_path: Path)
     result = payload["results"][0]
     assert result["attempted"] is False
     assert result["blocker_type"] == "executor_auth_required"
-    assert "ANTHROPIC_API_KEY" in result["reason"]
-    assert "AGPAIR_CLAUDE_CODE_SETTINGS" in result["reason"]
+    assert "claude auth login" in result["reason"]
 
 
 def test_smoke_harness_abandons_silent_executor_after_no_progress(tmp_path: Path) -> None:
