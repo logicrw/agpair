@@ -176,7 +176,7 @@ Executor launch environment：
 | `antigravity-cli` | `managed-natural` | inherit |
 | `grok-cli` | `managed-natural` | inherit |
 | `claude-code` | 认证健康时 `managed-natural` | inherit |
-| `codex` | `managed-isolated` | isolated |
+| `codex` | `managed-natural` | inherit |
 
 `managed-natural` 表示 AGPair 管任务状态、授权 profile、receipt/log 捕获、
 wait/watch、retry 和验收证据；外部 CLI 保留它正常启动时的 skills、MCP、memory、
@@ -219,8 +219,6 @@ plugins 和 provider 配置。如果外部 attempt 不够好，就自然模式�
   默认：`bypassPermissions`
 - `AGPAIR_CODEX_BIN=/absolute/path/to/codex`
   旧别名：`AGPAIR_CODEX_CLI`
-- `AGPAIR_CODEX_IGNORE_USER_CONFIG=1|0`
-  默认：`1`。外部 worker 隔离应保持开启；只有诊断时才设为 `0`。
 - `AGPAIR_CODEX_APPROVAL_MODE=default|full_auto|bypass_all`
   默认：`bypass_all`
 

@@ -79,7 +79,6 @@ def test_profile_noninteractive_flags_match_adapter_command(monkeypatch, tmp_pat
         "AGPAIR_GROK_MAX_TURNS",
         "AGPAIR_CLAUDE_CODE_PERMISSION_MODE",
         "AGPAIR_CODEX_APPROVAL_MODE",
-        "AGPAIR_CODEX_IGNORE_USER_CONFIG",
     ):
         monkeypatch.delenv(env_var, raising=False)
 
@@ -104,9 +103,10 @@ def test_executor_environment_defaults_match_cross_controller_routing_policy() -
     assert EXECUTOR_SPECS["antigravity-cli"].default_environment_mode == "managed-natural"
     assert EXECUTOR_SPECS["grok-cli"].default_environment_mode == "managed-natural"
     assert EXECUTOR_SPECS["claude-code"].default_environment_mode == "managed-natural"
-    assert EXECUTOR_SPECS["codex"].default_environment_mode == "managed-isolated"
-    assert EXECUTOR_SPECS["codex"].default_skill_policy == "isolated"
-    assert EXECUTOR_SPECS["codex"].default_mcp_policy == "isolated"
+    assert EXECUTOR_SPECS["codex"].default_environment_mode == "managed-natural"
+    for spec in EXECUTOR_SPECS.values():
+        assert spec.default_skill_policy == "inherit"
+        assert spec.default_mcp_policy == "inherit"
 
 
 def test_controller_suppression_is_profile_driven_for_codex_and_claude_code() -> None:

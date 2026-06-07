@@ -27,7 +27,7 @@ Do not route new work to Gemini. Legacy `gemini_cli` tasks may be inspected or c
 
 Use Claude Code native subagents only when AGPair is unavailable, unsuitable for the task, or an external result is not good enough. Native subagents are fallback, review, or narrow helper lanes, not the default execution lane.
 
-Default executor environments are `managed-natural` for `antigravity-cli`, `grok-cli`, and healthy cross-controller workers: AGPair manages state and evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config. Restricted or isolated modes are explicit fallback/diagnostic modes.
+Default executor environments are `managed-natural` for all active external CLI executors: AGPair manages state and evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config.
 
 ## Dispatch
 

@@ -7,7 +7,6 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from agpair.executors.claude_auth import (
-    FALSE_ENV_VALUES,
     claude_code_settings_error,
     claude_oauth_error,
     explicit_claude_auth_mode,
@@ -26,13 +25,11 @@ LEGACY_EXECUTOR_ALIASES = {
     "codex_cli": "codex",
 }
 REJECTED_EXECUTOR_IDS = {"gemini", "gemini-cli", "gemini_cli"}
-_FALSE_ENV_VALUES = FALSE_ENV_VALUES
 ENVIRONMENT_MODES = {
     "managed-natural",
-    "managed-isolated",
 }
-SKILL_POLICIES = {"inherit", "isolated"}
-MCP_POLICIES = {"inherit", "isolated"}
+SKILL_POLICIES = {"inherit"}
+MCP_POLICIES = {"inherit"}
 
 
 @dataclass(frozen=True)
@@ -205,24 +202,22 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
         display_name="Codex CLI worker",
         controller_suppression=("codex",),
         receipt_capable="prompt_contract",
-        default_environment_mode="managed-isolated",
-        default_skill_policy="isolated",
-        default_mcp_policy="isolated",
+        default_environment_mode="managed-natural",
+        default_skill_policy="inherit",
+        default_mcp_policy="inherit",
         isolation_profile={
-            "supports_isolated_config_home": True,
+            "supports_isolated_config_home": False,
             "supports_turn_budget": "unknown",
             "supports_streaming_json": True,
             "default_output_mode": "json",
             "noninteractive_flags": [
                 "exec",
-                "--ignore-user-config",
-                "--ignore-rules",
                 "--ephemeral",
                 "--json",
                 "-C",
             ],
             "isolated_auth_env_vars": [],
-            "isolation_disable_env_var": "AGPAIR_CODEX_IGNORE_USER_CONFIG",
+            "isolation_disable_env_var": None,
         },
     ),
 }
@@ -251,8 +246,6 @@ def supported_environment_modes(executor_id: str | None) -> tuple[str, ...]:
 def _policies_for_environment_mode(spec: ExecutorSpec, environment_mode: str) -> tuple[str, str]:
     if environment_mode == spec.default_environment_mode:
         return spec.default_skill_policy, spec.default_mcp_policy
-    if environment_mode == "managed-isolated":
-        return "isolated", "isolated"
     return spec.default_skill_policy, spec.default_mcp_policy
 
 
@@ -329,12 +322,6 @@ def _launch_probe(binary_path: str, spec: ExecutorSpec, *, timeout_seconds: floa
     return False, excerpt[-1] if excerpt else f"launch probe exited {proc.returncode}"
 
 
-def _env_flag_disabled(env_var: str | None) -> bool:
-    if not env_var:
-        return False
-    return os.environ.get(env_var, "1").strip().lower() in _FALSE_ENV_VALUES
-
-
 def _claude_code_auth_mode() -> str:
     return explicit_claude_auth_mode() or "auto"
 
@@ -362,8 +349,6 @@ def _isolation_auth_error(
     if not required_env_vars:
         return None
     disable_env_var = profile.get("isolation_disable_env_var")
-    if _env_flag_disabled(str(disable_env_var) if disable_env_var else None):
-        return None
     if spec.executor_id == "claude-code":
         return resolve_claude_auth(binary_path, live_probe=live_probe).error
     if any(os.environ.get(env_var, "").strip() for env_var in required_env_vars):

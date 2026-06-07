@@ -30,14 +30,13 @@ back to the controller's native subagents:
 - `antigravity-cli`: `managed-natural`, skills/MCP inherit.
 - `grok-cli`: `managed-natural`, skills/MCP inherit.
 - `claude-code`: `managed-natural`, skills/MCP inherit when auth is healthy.
-- `codex`: `managed-isolated`, skills/MCP isolated because it is primarily the
-  external Codex worker for Claude Code controllers.
+- `codex`: `managed-natural`, skills/MCP inherit.
 
 Do not introduce a new capability-bundle system just to add an executor. AGPair
 records launch mode and owns evidence capture; the external CLI owns its normal
 skills, MCP, provider config, and model behavior in `managed-natural` mode.
 
-If a mode changes the executor's authentication source, declare the required
+If an executor changes its authentication source, declare the required
 OAuth login, auth environment, or settings source in the profile. Health checks
 and dispatch preflight must then report `executor_auth_required` before launch
 instead of letting the process sit silently until a no-progress timeout.

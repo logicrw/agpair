@@ -24,9 +24,7 @@ Operationally, `codex` is the external Codex CLI worker for Claude Code controll
 
 Gemini is not used for new work. Legacy `gemini_cli` records can still be inspected or cleaned up.
 
-Default executor environments are managed-natural for `antigravity-cli`, `grok-cli`, and healthy `claude-code`: AGPair manages task boundaries, receipts, logs, status, retry, and verification evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config.
-
-The external `codex` worker remains managed-isolated by default because it is mainly for Claude Code controllers, not for Codex self-delegation.
+Default executor environments are managed-natural for every active external CLI executor: AGPair manages task boundaries, receipts, logs, status, retry, and verification evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config. Controller suppression handles self-executor avoidance; executor launch configuration is not special-cased.
 
 ## Quick Start
 

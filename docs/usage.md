@@ -163,7 +163,7 @@ Executor launch environments:
 | `antigravity-cli` | `managed-natural` | inherit |
 | `grok-cli` | `managed-natural` | inherit |
 | `claude-code` | `managed-natural` when auth is healthy | inherit |
-| `codex` | `managed-isolated` | isolated |
+| `codex` | `managed-natural` | inherit |
 
 `managed-natural` means AGPair manages task state, authorization profile,
 receipt/log capture, wait/watch, retry, and verification evidence while the
@@ -209,14 +209,12 @@ Local CLI approval modes can be adjusted with environment variables:
   Default: `bypassPermissions`
 - `AGPAIR_CODEX_BIN=/absolute/path/to/codex`
   Legacy alias: `AGPAIR_CODEX_CLI`
-- `AGPAIR_CODEX_IGNORE_USER_CONFIG=1|0`
-  Default: `1`. Keep this on for external-worker isolation; set `0` only for diagnostics.
 - `AGPAIR_CODEX_APPROVAL_MODE=default|full_auto|bypass_all`
   Default: `bypass_all`
 
 These knobs are adapter-local escape hatches. The registry profile remains the
 shared contract for every executor, and tests require declared noninteractive
-and isolation flags to match each adapter's default command.
+flags to match each adapter's default command.
 
 Note: all executors use fresh sessions for retries.
 

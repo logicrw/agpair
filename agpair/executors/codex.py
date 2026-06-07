@@ -15,13 +15,6 @@ def _approval_args() -> list[str]:
     return ["--dangerously-bypass-approvals-and-sandbox"]
 
 
-def _config_isolation_args() -> list[str]:
-    value = os.environ.get("AGPAIR_CODEX_IGNORE_USER_CONFIG", "1").strip().lower()
-    if value in {"0", "false", "no", "off"}:
-        return []
-    return ["--ignore-user-config", "--ignore-rules"]
-
-
 class CodexExecutor(LocalCLIExecutor):
     def __init__(self, codex_bin: str | None = None) -> None:
         super().__init__(
@@ -36,7 +29,6 @@ class CodexExecutor(LocalCLIExecutor):
             self.bin_path,
             "exec",
             *_approval_args(),
-            *_config_isolation_args(),
             "--ephemeral",
             "--json",
             "--skip-git-repo-check",

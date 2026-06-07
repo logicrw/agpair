@@ -24,13 +24,10 @@ AGPair 是给 Codex 和 Claude Code 使用的 external-agent-first 控制面。
 
 新任务不再使用 Gemini。历史 `gemini_cli` 记录仍可检查或清理。
 
-默认 executor 环境是：`antigravity-cli`、`grok-cli` 和认证健康的
-`claude-code` 使用 `managed-natural`。AGPair 负责任务边界、receipt、日志、
-status、retry 和验收证据；外部 CLI 继续使用它正常启动时的 skills、MCP、
-memory、plugins 和 provider 配置。
-
-外部 `codex` worker 默认仍是 `managed-isolated`，因为它主要给 Claude Code
-主控使用，不是给 Codex 自己做 self-delegation。
+所有 active 外部 CLI executor 默认都使用 `managed-natural`。AGPair 负责任务边界、
+receipt、日志、status、retry 和验收证据；外部 CLI 继续使用它正常启动时的
+skills、MCP、memory、plugins 和 provider 配置。自调用规避由 controller
+suppression 处理，不通过 executor launch 配置特殊化。
 
 ## 快速开始
 

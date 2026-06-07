@@ -1907,9 +1907,9 @@ def test_task_start_isolated_worktree_persists_boundary(tmp_path: Path, monkeypa
                 worktree_boundary=expected_boundary,
                 authorization_profile="local_mutating",
                 authorization_summary="Allowed actions: inspect and edit repository-local files, run focused tests, and prepare commits when requested. Denied actions: destructive cleanup, credential changes, production deploys, or broad external network access.",
-                environment_mode="managed-isolated",
-                skill_policy="isolated",
-                mcp_policy="isolated",
+                environment_mode="managed-natural",
+                skill_policy="inherit",
+                mcp_policy="inherit",
             )
 
         status_result = runner.invoke(app, ["task", "status", "TASK-ISO-DB", "--json"])
@@ -2088,9 +2088,9 @@ def test_task_retry_preserves_isolated_worktree_metadata_for_local_cli(tmp_path:
                 "worktree_boundary": execution_repo_path,
                 "authorization_profile": "local_mutating",
                 "authorization_summary": "Allowed actions: inspect and edit repository-local files, run focused tests, and prepare commits when requested. Denied actions: destructive cleanup, credential changes, production deploys, or broad external network access.",
-                "environment_mode": "managed-isolated",
-                "skill_policy": "isolated",
-                "mcp_policy": "isolated",
+                "environment_mode": "managed-natural",
+                "skill_policy": "inherit",
+                "mcp_policy": "inherit",
             }
         ]
 
