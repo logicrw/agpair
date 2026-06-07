@@ -49,8 +49,6 @@ CREATE TABLE IF NOT EXISTS task_attempts (
   environment_mode_source TEXT NOT NULL DEFAULT 'executor_default',
   skill_policy TEXT NOT NULL DEFAULT 'inherit',
   mcp_policy TEXT NOT NULL DEFAULT 'inherit',
-  fallback_environment_mode TEXT,
-  fallback_reason TEXT,
   executor_session_id TEXT,
   phase TEXT NOT NULL DEFAULT 'new',
   terminal_receipt_json TEXT,

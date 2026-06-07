@@ -109,8 +109,6 @@ class TaskAttemptRecord:
     environment_mode_source: str
     skill_policy: str
     mcp_policy: str
-    fallback_environment_mode: str | None
-    fallback_reason: str | None
     executor_session_id: str | None
     phase: str
     terminal_receipt_json: str | None

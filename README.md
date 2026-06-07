@@ -24,12 +24,7 @@ Operationally, `codex` is the external Codex CLI worker for Claude Code controll
 
 Gemini is not used for new work. Legacy `gemini_cli` records can still be inspected or cleaned up.
 
-Default executor environments are managed-natural for `antigravity-cli`, `grok-cli`, and healthy `claude-code`: AGPair manages task boundaries, receipts, logs, status, retry, and verification evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config. Restricted or isolated modes are explicit fallback/diagnostic modes:
-
-```bash
-agpair task start ... --environment-mode managed-restricted
-agpair task retry TASK-123 --from-block --environment-mode isolated-bare
-```
+Default executor environments are managed-natural for `antigravity-cli`, `grok-cli`, and healthy `claude-code`: AGPair manages task boundaries, receipts, logs, status, retry, and verification evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config.
 
 The external `codex` worker remains managed-isolated by default because it is mainly for Claude Code controllers, not for Codex self-delegation.
 
@@ -83,13 +78,7 @@ agpair task retry TASK-123 \
   --authorization-profile local_mutating
 ```
 
-Retry can also switch launch environment when the previous attempt shows environment noise or no progress:
-
-```bash
-agpair task retry TASK-123 \
-  --from-block \
-  --environment-mode managed-restricted
-```
+If a retry is not the right recovery path, switch to another external executor or let the controller use its native subagents as the fallback/review lane.
 
 ## Controller Setup
 
@@ -128,7 +117,7 @@ agpair doctor --fresh --repo-path /path/to/repo
 Code login with `claude auth login`; if CC Switch fails, update the current
 Claude provider inside CC Switch.
 
-Use API-key bare mode only when you explicitly want a separate worker credential
+Use API-key worker mode only when you explicitly want a separate worker credential
 outside OAuth and CC Switch:
 
 ```bash

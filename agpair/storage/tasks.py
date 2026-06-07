@@ -92,8 +92,6 @@ class TaskRepository:
         environment_mode_source: str | None = None,
         skill_policy: str | None = None,
         mcp_policy: str | None = None,
-        fallback_environment_mode: str | None = None,
-        fallback_reason: str | None = None,
         workflow_id: str | None = None,
         workflow_node_id: str | None = None,
         parent_task_id: str | None = None,
@@ -112,12 +110,6 @@ class TaskRepository:
         )
         selected_skill_policy = skill_policy or environment.skill_policy
         selected_mcp_policy = mcp_policy or environment.mcp_policy
-        selected_fallback_environment_mode = (
-            fallback_environment_mode
-            if fallback_environment_mode is not None
-            else environment.fallback_environment_mode
-        )
-        selected_fallback_reason = fallback_reason if fallback_reason is not None else environment.fallback_reason
         with connect(self.db_path) as conn:
             conn.execute(
                 """
@@ -162,10 +154,9 @@ class TaskRepository:
                   task_id, attempt_no, executor_backend, authorization_profile,
                   requested_completion_policy, effective_policy_json,
                   environment_mode, environment_mode_source, skill_policy, mcp_policy,
-                  fallback_environment_mode, fallback_reason, executor_session_id,
-                  phase, terminal_receipt_json, terminal_source, started_at, finished_at,
+                  executor_session_id, phase, terminal_receipt_json, terminal_source, started_at, finished_at,
                   created_at, updated_at
-                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
+                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
                 """,
                 (
                     task_id,
@@ -177,8 +168,6 @@ class TaskRepository:
                     environment.environment_mode_source,
                     selected_skill_policy,
                     selected_mcp_policy,
-                    selected_fallback_environment_mode,
-                    selected_fallback_reason,
                     now,
                     now,
                     now,
@@ -475,8 +464,6 @@ class TaskRepository:
         environment_mode_source: str | None = None,
         skill_policy: str | None = None,
         mcp_policy: str | None = None,
-        fallback_environment_mode: str | None = None,
-        fallback_reason: str | None = None,
     ) -> TaskRecord:
         task = self.get_task(task_id)
         if task is None:
@@ -499,12 +486,6 @@ class TaskRepository:
         )
         selected_skill_policy = skill_policy or environment.skill_policy
         selected_mcp_policy = mcp_policy or environment.mcp_policy
-        selected_fallback_environment_mode = (
-            fallback_environment_mode
-            if fallback_environment_mode is not None
-            else environment.fallback_environment_mode
-        )
-        selected_fallback_reason = fallback_reason if fallback_reason is not None else environment.fallback_reason
         with connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
@@ -550,10 +531,9 @@ class TaskRepository:
                   task_id, attempt_no, executor_backend, authorization_profile,
                   requested_completion_policy, effective_policy_json,
                   environment_mode, environment_mode_source, skill_policy, mcp_policy,
-                  fallback_environment_mode, fallback_reason, executor_session_id,
-                  phase, terminal_receipt_json, terminal_source, started_at, finished_at,
+                  executor_session_id, phase, terminal_receipt_json, terminal_source, started_at, finished_at,
                   created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
                 """,
                 (
                     task_id,
@@ -566,8 +546,6 @@ class TaskRepository:
                     environment.environment_mode_source,
                     selected_skill_policy,
                     selected_mcp_policy,
-                    selected_fallback_environment_mode,
-                    selected_fallback_reason,
                     now,
                     now,
                     now,
@@ -849,8 +827,6 @@ class TaskRepository:
             environment_mode_source=get("environment_mode_source", "executor_default"),
             skill_policy=get("skill_policy", "inherit"),
             mcp_policy=get("mcp_policy", "inherit"),
-            fallback_environment_mode=get("fallback_environment_mode"),
-            fallback_reason=get("fallback_reason"),
             executor_session_id=row["executor_session_id"],
             phase=row["phase"],
             terminal_receipt_json=row["terminal_receipt_json"],

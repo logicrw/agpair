@@ -224,8 +224,6 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "environment_mode_source": "TEXT NOT NULL DEFAULT 'executor_default'",
         "skill_policy": "TEXT NOT NULL DEFAULT 'inherit'",
         "mcp_policy": "TEXT NOT NULL DEFAULT 'inherit'",
-        "fallback_environment_mode": "TEXT",
-        "fallback_reason": "TEXT",
     }
     for column, ddl in attempt_defaults.items():
         if column not in attempt_cols:

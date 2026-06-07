@@ -73,8 +73,8 @@ def test_claude_code_command_is_print_json_and_managed_natural_by_default() -> N
     assert "--no-chrome" not in cmd
 
 
-def test_claude_code_oauth_profile_can_be_natural(monkeypatch) -> None:
-    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_OAUTH_PROFILE", "natural")
+def test_claude_code_ignores_removed_oauth_profile_restriction(monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_OAUTH_PROFILE", "quiet")
     executor = ClaudeCodeExecutor(claude_bin="fake-claude")
 
     cmd = executor._build_claude_cmd(
@@ -85,37 +85,14 @@ def test_claude_code_oauth_profile_can_be_natural(monkeypatch) -> None:
 
     assert "--bare" not in cmd
     assert "--strict-mcp-config" not in cmd
+    assert "--mcp-config" not in cmd
     assert "--disable-slash-commands" not in cmd
+    assert "--no-chrome" not in cmd
     assert cmd[:5] == ["env", "CLAUDE_CODE_MAX_RETRIES=0", "fake-claude", "--permission-mode", "bypassPermissions"]
-
-
-def test_claude_code_legacy_bare_mode_can_be_explicitly_enabled(monkeypatch) -> None:
-    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_ENVIRONMENT_MODE", "isolated-bare")
-    executor = ClaudeCodeExecutor(claude_bin="fake-claude")
-
-    cmd = executor._build_claude_cmd(
-        "Goal: inspect the repo",
-        "/tmp/repo",
-        pathlib.Path("/tmp/agpair"),
-    )
-
-    assert cmd[:9] == [
-        "env",
-        "CLAUDE_CODE_MAX_RETRIES=0",
-        "fake-claude",
-        "--bare",
-        "--strict-mcp-config",
-        "--mcp-config",
-        '{"mcpServers":{}}',
-        "--disable-slash-commands",
-        "--no-chrome",
-    ]
-    assert "--permission-mode" in cmd
 
 
 def test_claude_code_settings_file_is_passed_to_api_worker(monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_CLAUDE_CODE_AUTH_MODE", "api")
-    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_ENVIRONMENT_MODE", "isolated-bare")
     monkeypatch.setenv("AGPAIR_CLAUDE_CODE_SETTINGS", "/tmp/claude-settings.json")
     executor = ClaudeCodeExecutor(claude_bin="fake-claude")
 
@@ -125,17 +102,10 @@ def test_claude_code_settings_file_is_passed_to_api_worker(monkeypatch) -> None:
         pathlib.Path("/tmp/agpair"),
     )
 
-    assert cmd[:9] == [
-        "env",
-        "CLAUDE_CODE_MAX_RETRIES=0",
-        "fake-claude",
-        "--bare",
-        "--strict-mcp-config",
-        "--mcp-config",
-        '{"mcpServers":{}}',
-        "--disable-slash-commands",
-        "--no-chrome",
-    ]
+    assert cmd[:3] == ["env", "CLAUDE_CODE_MAX_RETRIES=0", "fake-claude"]
+    assert "--bare" not in cmd
+    assert "--strict-mcp-config" not in cmd
+    assert "--mcp-config" not in cmd
     assert "--settings" in cmd
     assert cmd[cmd.index("--settings") + 1] == "/tmp/claude-settings.json"
 

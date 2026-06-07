@@ -24,19 +24,6 @@ def _max_turn_args() -> list[str]:
     return ["--max-turns", value]
 
 
-def _environment_mode() -> str:
-    value = os.environ.get("AGPAIR_GROK_ENVIRONMENT_MODE", "managed-natural").strip() or "managed-natural"
-    if value not in {"managed-natural", "managed-restricted"}:
-        raise ValueError("Unsupported AGPAIR_GROK_ENVIRONMENT_MODE; use managed-natural or managed-restricted")
-    return value
-
-
-def _restricted_args() -> list[str]:
-    if _environment_mode() != "managed-restricted":
-        return []
-    return ["--no-memory", "--no-subagents", "--disable-web-search"]
-
-
 class GrokCLIExecutor(LocalCLIExecutor):
     def __init__(self, grok_bin: str | None = None) -> None:
         super().__init__(
@@ -60,7 +47,6 @@ class GrokCLIExecutor(LocalCLIExecutor):
             _output_format(),
             "--always-approve",
             *_max_turn_args(),
-            *_restricted_args(),
             "--single",
             body,
         ]

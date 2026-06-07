@@ -158,23 +158,19 @@ This keeps cross-controller workers explicit: `codex` is for Claude Code control
 
 Executor launch environments:
 
-| Executor | Default mode | Skills/MCP | Explicit fallback |
-| --- | --- | --- | --- |
-| `antigravity-cli` | `managed-natural` | inherit | tighten receipt instructions/parser before changing mode |
-| `grok-cli` | `managed-natural` | inherit | `managed-restricted` |
-| `claude-code` | `managed-natural` when auth is healthy | inherit | `isolated-bare` |
-| `codex` | `managed-isolated` | isolated | explicit diagnostic only |
+| Executor | Default mode | Skills/MCP |
+| --- | --- | --- |
+| `antigravity-cli` | `managed-natural` | inherit |
+| `grok-cli` | `managed-natural` | inherit |
+| `claude-code` | `managed-natural` when auth is healthy | inherit |
+| `codex` | `managed-isolated` | isolated |
 
 `managed-natural` means AGPair manages task state, authorization profile,
 receipt/log capture, wait/watch, retry, and verification evidence while the
 external CLI keeps its normal skills, MCP, memory, plugins, and provider
-configuration. Use `--environment-mode` only for explicit diagnostics or an
-evidence-backed retry:
-
-```bash
-agpair task start ... --environment-mode managed-restricted
-agpair task retry TASK_ID --from-block --environment-mode managed-restricted
-```
+configuration. If an external attempt is not useful, retry naturally, switch to
+another external executor, or let the controller use its native subagents as the
+fallback/review lane.
 
 Local CLI approval modes can be adjusted with environment variables:
 
@@ -188,21 +184,13 @@ Local CLI approval modes can be adjusted with environment variables:
 - `AGPAIR_GROK_OUTPUT_FORMAT=json|streaming-json`
   Default: `json`
 - `AGPAIR_GROK_MAX_TURNS=24`
-- `AGPAIR_GROK_ENVIRONMENT_MODE=managed-natural|managed-restricted`
-  Default: `managed-natural`. Restricted mode adds
-  `--no-memory --no-subagents --disable-web-search` and should be used only as
-  an explicit fallback or diagnostic mode.
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
   Legacy alias: `AGPAIR_CLAUDE_CODE_CLI`
-- `AGPAIR_CLAUDE_CODE_ENVIRONMENT_MODE=managed-natural|isolated-bare|diagnostic-natural`
-  Default: `managed-natural`. `isolated-bare` is an explicit fallback /
-  diagnostic mode that uses `--bare` and disables MCP/slash/chrome surfaces.
 - `AGPAIR_CLAUDE_CODE_AUTH_MODE=auto|oauth|ccswitch|api`
   Default: `auto`. Auto mode first uses a valid local Claude Code
   subscription/OAuth login, then falls back to the current Claude provider in
   CC Switch. Force `oauth` to disable provider fallback, `ccswitch` to use the
-  CC Switch provider directly, or `api` for a separate bare-mode worker
-  credential.
+  CC Switch provider directly, or `api` for a separate worker credential.
 - `AGPAIR_CC_SWITCH_HOME=/absolute/path/to/.cc-switch`
   Optional. Defaults to `~/.cc-switch`. AGPair reads CC Switch's current
   Claude provider settings and injects them as worker process environment
@@ -211,11 +199,8 @@ Local CLI approval modes can be adjusted with environment variables:
 - `AGPAIR_CLAUDE_CODE_MAX_RETRIES=<integer>`
   Default: `0`. AGPair sets `CLAUDE_CODE_MAX_RETRIES` for worker launches so
   invalid OAuth/API credentials fail quickly instead of silently retrying.
-- `AGPAIR_CLAUDE_CODE_BARE=1|0`
-  Legacy compatibility switch. Setting it to `1` selects API/bare mode when
-  `AGPAIR_CLAUDE_CODE_AUTH_MODE` is unset.
 - `AGPAIR_CLAUDE_CODE_SETTINGS=/absolute/path/to/settings.json`
-  Optional Claude Code settings JSON or path for API/bare mode.
+  Optional Claude Code settings JSON or path for API mode.
   Generate a safe template with:
   `agpair claude worker-settings > ~/.agpair/claude-worker-settings.json`
   then set `AGPAIR_CLAUDE_CODE_SETTINGS` to that path and make the helper return

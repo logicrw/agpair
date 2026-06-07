@@ -27,12 +27,7 @@ AGPair 是给 Codex 和 Claude Code 使用的 external-agent-first 控制面。
 默认 executor 环境是：`antigravity-cli`、`grok-cli` 和认证健康的
 `claude-code` 使用 `managed-natural`。AGPair 负责任务边界、receipt、日志、
 status、retry 和验收证据；外部 CLI 继续使用它正常启动时的 skills、MCP、
-memory、plugins 和 provider 配置。限制/隔离模式只用于显式 fallback 或诊断：
-
-```bash
-agpair task start ... --environment-mode managed-restricted
-agpair task retry TASK-123 --from-block --environment-mode isolated-bare
-```
+memory、plugins 和 provider 配置。
 
 外部 `codex` worker 默认仍是 `managed-isolated`，因为它主要给 Claude Code
 主控使用，不是给 Codex 自己做 self-delegation。
@@ -87,14 +82,7 @@ agpair task retry TASK-123 \
   --authorization-profile local_mutating
 ```
 
-如果上一轮证据显示 executor 环境噪音、插件/MCP 卡住或 no-progress，也可以在 retry
-时切换 launch environment：
-
-```bash
-agpair task retry TASK-123 \
-  --from-block \
-  --environment-mode managed-restricted
-```
+如果 retry 不是合适的恢复路径，就换另一个外部 executor，或者让主控回到自己的原生 subagent fallback / review lane。
 
 ## 主控配置
 
@@ -132,7 +120,7 @@ Claude Code 登录；如果 CC Switch 失败，就在 CC Switch 里更新当前 
 provider。
 
 只有明确想绕过 OAuth 和 CC Switch、给 worker 使用单独 API credential 时，才启用
-API-key bare mode：
+API-key worker mode：
 
 ```bash
 mkdir -p ~/.agpair

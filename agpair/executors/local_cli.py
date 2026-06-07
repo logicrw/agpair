@@ -482,22 +482,7 @@ class LocalCLIExecutor(ExecutorAdapter):
             authorization_profile=authorization_profile,
             authorization_summary=authorization_summary,
         )
-        mode_env_vars = {
-            "grok-cli": "AGPAIR_GROK_ENVIRONMENT_MODE",
-            "claude-code": "AGPAIR_CLAUDE_CODE_ENVIRONMENT_MODE",
-        }
-        mode_env_var = mode_env_vars.get(self._backend_id)
-        previous_mode_env = os.environ.get(mode_env_var) if mode_env_var else None
-        if mode_env_var and environment_mode:
-            os.environ[mode_env_var] = environment_mode
-        try:
-            cli_cmd = self._build_cmd(contracted_body, execution_repo_path, temp_dir)
-        finally:
-            if mode_env_var and environment_mode:
-                if previous_mode_env is None:
-                    os.environ.pop(mode_env_var, None)
-                else:
-                    os.environ[mode_env_var] = previous_mode_env
+        cli_cmd = self._build_cmd(contracted_body, execution_repo_path, temp_dir)
         env_overrides = {}
         if self._build_env:
             env_overrides = self._build_env(
@@ -505,8 +490,6 @@ class LocalCLIExecutor(ExecutorAdapter):
                 execution_repo_path,
                 temp_dir,
             )
-        if mode_env_var and environment_mode:
-            env_overrides[mode_env_var] = environment_mode
 
         cmd_json = temp_dir / "cmd.json"
         runner_script = temp_dir / "runner.py"

@@ -29,13 +29,10 @@ REJECTED_EXECUTOR_IDS = {"gemini", "gemini-cli", "gemini_cli"}
 _FALSE_ENV_VALUES = FALSE_ENV_VALUES
 ENVIRONMENT_MODES = {
     "managed-natural",
-    "managed-restricted",
     "managed-isolated",
-    "isolated-bare",
-    "diagnostic-natural",
 }
-SKILL_POLICIES = {"inherit", "restricted", "isolated"}
-MCP_POLICIES = {"inherit", "restricted", "isolated"}
+SKILL_POLICIES = {"inherit", "isolated"}
+MCP_POLICIES = {"inherit", "isolated"}
 
 
 @dataclass(frozen=True)
@@ -60,7 +57,6 @@ class ExecutorSpec:
     default_environment_mode: str = "managed-natural"
     default_skill_policy: str = "inherit"
     default_mcp_policy: str = "inherit"
-    fallback_environment_modes: tuple[str, ...] = ()
     isolation_profile: dict[str, Any] = field(default_factory=dict)
     launch_probe: tuple[str, ...] = ("--help",)
 
@@ -96,8 +92,6 @@ class ExecutorEnvironmentMetadata:
     environment_mode_source: str
     skill_policy: str
     mcp_policy: str
-    fallback_environment_mode: str | None = None
-    fallback_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -144,7 +138,6 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
         default_environment_mode="managed-natural",
         default_skill_policy="inherit",
         default_mcp_policy="inherit",
-        fallback_environment_modes=("managed-restricted",),
         isolation_profile={
             "supports_isolated_config_home": "limited",
             "supports_turn_budget": True,
@@ -157,7 +150,6 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
                 "--always-approve",
                 "--max-turns",
             ],
-            "restricted_flags": ["--no-memory", "--no-subagents", "--disable-web-search"],
             "isolated_auth_env_vars": [],
             "isolation_disable_env_var": None,
         },
@@ -178,9 +170,8 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
         default_environment_mode="managed-natural",
         default_skill_policy="inherit",
         default_mcp_policy="inherit",
-        fallback_environment_modes=("isolated-bare",),
         isolation_profile={
-            "supports_isolated_config_home": "bare",
+            "supports_isolated_config_home": False,
             "supports_turn_budget": "unknown",
             "supports_streaming_json": True,
             "default_output_mode": "json",
@@ -188,29 +179,17 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
             "auth_modes": ["auto", "oauth", "ccswitch", "api"],
             "default_retry_env": {"CLAUDE_CODE_MAX_RETRIES": "0"},
             "default_oauth_profile": "natural",
-            "oauth_profile_env_var": "AGPAIR_CLAUDE_CODE_OAUTH_PROFILE",
-            "isolated_bare_flags": [
-                "--bare",
-                "--strict-mcp-config",
-                "--mcp-config",
-                "--disable-slash-commands",
-                "--no-chrome",
-                "--print",
-                "--output-format",
-                "--no-session-persistence",
-            ],
             "noninteractive_flags": [
                 "--print",
                 "--output-format",
                 "--no-session-persistence",
             ],
-            "api_mode_flags": ["--bare", "--print", "--output-format", "--no-session-persistence"],
             "isolated_auth_env_vars": [
                 "ANTHROPIC_API_KEY",
                 "AGPAIR_CLAUDE_CODE_SETTINGS",
                 "AGPAIR_CC_SWITCH_HOME",
             ],
-            "isolation_disable_env_var": "AGPAIR_CLAUDE_CODE_BARE",
+            "isolation_disable_env_var": None,
         },
     ),
     "codex": ExecutorSpec(
@@ -266,32 +245,20 @@ def supported_environment_modes(executor_id: str | None) -> tuple[str, ...]:
     normalized = normalize_executor_id(executor_id or "antigravity-cli")
     assert normalized is not None
     spec = EXECUTOR_SPECS[normalized]
-    modes = (spec.default_environment_mode, *spec.fallback_environment_modes)
-    return tuple(dict.fromkeys(modes))
+    return (spec.default_environment_mode,)
 
 
 def _policies_for_environment_mode(spec: ExecutorSpec, environment_mode: str) -> tuple[str, str]:
     if environment_mode == spec.default_environment_mode:
         return spec.default_skill_policy, spec.default_mcp_policy
-    if environment_mode == "managed-restricted":
-        return "restricted", "restricted"
-    if environment_mode in {"managed-isolated", "isolated-bare"}:
+    if environment_mode == "managed-isolated":
         return "isolated", "isolated"
-    if environment_mode == "diagnostic-natural":
-        return "inherit", "inherit"
     return spec.default_skill_policy, spec.default_mcp_policy
 
 
 def _environment_mode_from_env(executor_id: str) -> str | None:
-    env_vars = {
-        "grok-cli": "AGPAIR_GROK_ENVIRONMENT_MODE",
-        "claude-code": "AGPAIR_CLAUDE_CODE_ENVIRONMENT_MODE",
-    }
-    env_var = env_vars.get(executor_id)
-    if env_var is None:
-        return None
-    value = os.environ.get(env_var, "").strip()
-    return value or None
+    del executor_id
+    return None
 
 
 def resolve_environment_metadata(
@@ -316,14 +283,11 @@ def resolve_environment_metadata(
         allowed = ", ".join(supported)
         raise ValueError(f"{normalized} does not support environment mode {selected}; supported modes: {allowed}")
     skill_policy, mcp_policy = _policies_for_environment_mode(spec, selected)
-    fallback = spec.fallback_environment_modes[0] if spec.fallback_environment_modes and selected == spec.default_environment_mode else None
     return ExecutorEnvironmentMetadata(
         environment_mode=selected,
         environment_mode_source=source or ("task_start_override" if requested else "executor_env_var" if env_requested else "executor_default"),
         skill_policy=skill_policy,
         mcp_policy=mcp_policy,
-        fallback_environment_mode=fallback,
-        fallback_reason=None,
     )
 
 

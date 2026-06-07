@@ -85,11 +85,7 @@ agpair task retry TASK-123 \
 
 `--from-block` carries the original brief, blocked reason, terminal receipt, journal tail, git status, diff/commits, and the new authorization profile into a fresh attempt.
 
-If the previous attempt shows environment noise, tool loops, or no progress, switch environment mode on retry:
-
-```bash
-agpair task retry TASK-123 --from-block --environment-mode managed-restricted
-```
+If an external attempt fails or is low quality, retry naturally, switch to another external executor, or use Claude Code native subagents as fallback/review.
 
 ## Review Gate
 

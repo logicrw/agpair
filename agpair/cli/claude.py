@@ -394,10 +394,10 @@ def worker_settings(
     api_key_helper: str = typer.Option(
         "printenv ANTHROPIC_API_KEY",
         "--api-key-helper",
-        help="Command Claude Code API/bare mode should run to obtain an API key.",
+        help="Command Claude Code API worker mode should run to obtain an API key.",
     ),
 ) -> None:
-    """Emit a minimal Claude Code settings template for API/bare worker mode."""
+    """Emit a minimal Claude Code settings template for API worker mode."""
     _emit_json(
         {
             "apiKeyHelper": api_key_helper,

@@ -177,7 +177,6 @@ def test_isolated_auth_requirement_marks_executor_unavailable(monkeypatch, tmp_p
     monkeypatch.setenv("AGPAIR_CLAUDE_CODE_BIN", str(fake_binary))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("AGPAIR_CLAUDE_CODE_SETTINGS", raising=False)
-    monkeypatch.delenv("AGPAIR_CLAUDE_CODE_BARE", raising=False)
     monkeypatch.delenv("AGPAIR_CLAUDE_CODE_AUTH_MODE", raising=False)
     monkeypatch.setenv("AGPAIR_CC_SWITCH_HOME", str(tmp_path / ".missing-cc-switch"))
 
@@ -214,7 +213,6 @@ def test_claude_oauth_subscription_auth_satisfies_default_worker(monkeypatch, tm
     monkeypatch.setenv("AGPAIR_CLAUDE_CODE_BIN", str(fake_binary))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("AGPAIR_CLAUDE_CODE_SETTINGS", raising=False)
-    monkeypatch.delenv("AGPAIR_CLAUDE_CODE_BARE", raising=False)
     monkeypatch.delenv("AGPAIR_CLAUDE_CODE_AUTH_MODE", raising=False)
 
     health = executor_health_snapshot()["claude-code"]
@@ -316,7 +314,6 @@ def test_claude_missing_worker_settings_file_marks_executor_unavailable(monkeypa
     monkeypatch.setenv("AGPAIR_CLAUDE_CODE_AUTH_MODE", "api")
     monkeypatch.setenv("AGPAIR_CLAUDE_CODE_SETTINGS", str(tmp_path / "missing.json"))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.delenv("AGPAIR_CLAUDE_CODE_BARE", raising=False)
 
     health = executor_health_snapshot()["claude-code"]
 
@@ -336,7 +333,6 @@ def test_claude_default_worker_settings_requires_api_key(monkeypatch, tmp_path: 
     monkeypatch.setenv("AGPAIR_CLAUDE_CODE_AUTH_MODE", "api")
     monkeypatch.setenv("AGPAIR_CLAUDE_CODE_SETTINGS", str(settings_path))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("AGPAIR_CLAUDE_CODE_BARE", raising=False)
 
     health = executor_health_snapshot()["claude-code"]
 

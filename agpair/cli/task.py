@@ -439,14 +439,6 @@ def _environment_payload_from_current_attempt(paths: AppPaths, task_id: str, exe
             "environment_mode_source": attempt.environment_mode_source,
             "skill_policy": attempt.skill_policy,
             "mcp_policy": attempt.mcp_policy,
-            "fallback_environment_mode": attempt.fallback_environment_mode,
-            "fallback_reason": attempt.fallback_reason,
-            "fallback_recommended": bool(attempt.fallback_reason),
-            "retry_command": (
-                f"agpair task retry {task_id} --from-block --environment-mode {attempt.fallback_environment_mode}"
-                if attempt.fallback_environment_mode
-                else None
-            ),
         }
     environment = resolve_environment_metadata(executor_backend)
     return {
@@ -454,14 +446,6 @@ def _environment_payload_from_current_attempt(paths: AppPaths, task_id: str, exe
         "environment_mode_source": environment.environment_mode_source,
         "skill_policy": environment.skill_policy,
         "mcp_policy": environment.mcp_policy,
-        "fallback_environment_mode": environment.fallback_environment_mode,
-        "fallback_reason": environment.fallback_reason,
-        "fallback_recommended": bool(environment.fallback_reason),
-        "retry_command": (
-            f"agpair task retry {task_id} --from-block --environment-mode {environment.fallback_environment_mode}"
-            if environment.fallback_environment_mode
-            else None
-        ),
     }
 
 
@@ -753,7 +737,6 @@ def start_task(
     executor: str | None = typer.Option(None, "--executor", help=f"Executor backend to run the task ({', '.join(supported_executor_ids())})."),
     controller: str = typer.Option("generic", "--controller", help="Controller id for executor-suppression policy."),
     completion_policy: str = typer.Option("auto", "--completion-policy", help="Completion policy: auto, evidence, report, or commit."),
-    environment_mode: str | None = typer.Option(None, "--environment-mode", help="Executor launch environment mode override."),
     allow_self_executor: bool = typer.Option(False, "--allow-self-executor", help="Permit controller to delegate to the same external CLI."),
     authorization_profile: str = typer.Option("local_mutating", "--authorization-profile", help="Dispatch-time authorization profile."),
     depends_on: str | None = typer.Option(None, "--depends-on", help="JSON array of task IDs this task depends on."),
@@ -823,11 +806,7 @@ def start_task(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     try:
-        environment = resolve_environment_metadata(
-            selected_executor,
-            environment_mode=environment_mode,
-            source="task_start_override" if environment_mode else None,
-        )
+        environment = resolve_environment_metadata(selected_executor)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
@@ -905,8 +884,6 @@ def start_task(
             environment_mode_source=environment.environment_mode_source,
             skill_policy=environment.skill_policy,
             mcp_policy=environment.mcp_policy,
-            fallback_environment_mode=environment.fallback_environment_mode,
-            fallback_reason=environment.fallback_reason,
         )
     except sqlite3.IntegrityError:
         if not idempotency_key:
@@ -962,11 +939,11 @@ def start_task(
             repo_path=resolved_repo_path,
             isolated_worktree=isolated_worktree,
             worktree_boundary=resolved_worktree_boundary,
-            authorization_profile=normalized_authorization_profile,
-            authorization_summary=normalized_authorization_summary,
-            environment_mode=environment.environment_mode,
-            skill_policy=environment.skill_policy,
-            mcp_policy=environment.mcp_policy,
+                authorization_profile=normalized_authorization_profile,
+                authorization_summary=normalized_authorization_summary,
+                environment_mode=environment.environment_mode,
+                skill_policy=environment.skill_policy,
+                mcp_policy=environment.mcp_policy,
         )
     except (subprocess.SubprocessError, FileNotFoundError, BusSendError, WorktreeProvisionError, ValueError) as exc:
         reason = f"dispatch failed: {exc}"
@@ -1043,9 +1020,6 @@ def task_status(
     typer.echo(f"environment_mode_source: {payload['environment_mode_source']}")
     typer.echo(f"skill_policy: {payload['skill_policy']}")
     typer.echo(f"mcp_policy: {payload['mcp_policy']}")
-    typer.echo(f"fallback_environment_mode: {payload['fallback_environment_mode']}")
-    typer.echo(f"fallback_reason: {payload['fallback_reason']}")
-    typer.echo(f"fallback_recommended: {payload['fallback_recommended']}")
     typer.echo(f"supported_backends: {json.dumps(payload['supported_backends'])}")
     typer.echo(f"phase: {payload['phase']}")
     typer.echo(f"phase_detail: {payload['phase_detail']}")
@@ -1587,10 +1561,6 @@ def watch_task(
                     "environment_mode_source": payload.get("environment_mode_source"),
                     "skill_policy": payload.get("skill_policy"),
                     "mcp_policy": payload.get("mcp_policy"),
-                    "fallback_environment_mode": payload.get("fallback_environment_mode"),
-                    "fallback_reason": payload.get("fallback_reason"),
-                    "fallback_recommended": payload.get("fallback_recommended"),
-                    "retry_command": payload.get("retry_command"),
                     "executor_output_excerpt": payload.get("executor_output_excerpt"),
                     "active_attempt_artifacts": payload.get("active_attempt_artifacts"),
                     "last_executor_output_at": payload.get("last_executor_output_at"),
@@ -1788,7 +1758,6 @@ def retry_task(
     from_block: bool = typer.Option(False, "--from-block", help="Build a new attempt from structured blocked context."),
     authorization_profile: str | None = typer.Option(None, "--authorization-profile", help="Authorization profile for the new attempt."),
     completion_policy: str | None = typer.Option(None, "--completion-policy", help="Completion policy for the new attempt."),
-    environment_mode: str | None = typer.Option(None, "--environment-mode", help="Executor launch environment mode for the new attempt."),
     controller: str = typer.Option("generic", "--controller", help="Controller id for executor-suppression policy."),
     executor: str | None = typer.Option(None, "--executor", help=f"Executor backend for the new attempt ({', '.join(supported_executor_ids())})."),
     allow_self_executor: bool = typer.Option(False, "--allow-self-executor", help="Permit controller to delegate to the same external CLI."),
@@ -1833,11 +1802,7 @@ def retry_task(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     try:
-        next_environment = resolve_environment_metadata(
-            selected_executor,
-            environment_mode=environment_mode,
-            source="retry_override" if environment_mode else None,
-        )
+        next_environment = resolve_environment_metadata(selected_executor)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     if from_block:
@@ -1917,8 +1882,6 @@ def retry_task(
             environment_mode_source=next_environment.environment_mode_source,
             skill_policy=next_environment.skill_policy,
             mcp_policy=next_environment.mcp_policy,
-            fallback_environment_mode=next_environment.fallback_environment_mode,
-            fallback_reason=next_environment.fallback_reason,
         )
         if dispatch_result.execution_repo_path:
             tasks.set_execution_repo_path(
@@ -1952,8 +1915,6 @@ def retry_task(
             environment_mode_source=next_environment.environment_mode_source,
             skill_policy=next_environment.skill_policy,
             mcp_policy=next_environment.mcp_policy,
-            fallback_environment_mode=next_environment.fallback_environment_mode,
-            fallback_reason=next_environment.fallback_reason,
         )
         journal.append(updated.task_id, "cli", "retried", f"id={message_id} attempt={updated.attempt_no}")
     typer.echo(task.task_id)

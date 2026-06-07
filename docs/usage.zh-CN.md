@@ -171,22 +171,17 @@ agpair task start \
 
 Executor launch environment：
 
-| Executor | 默认 mode | Skills/MCP | 显式 fallback |
-| --- | --- | --- | --- |
-| `antigravity-cli` | `managed-natural` | inherit | 优先加强 receipt 指令/解析，不默认换环境 |
-| `grok-cli` | `managed-natural` | inherit | `managed-restricted` |
-| `claude-code` | 认证健康时 `managed-natural` | inherit | `isolated-bare` |
-| `codex` | `managed-isolated` | isolated | 仅显式诊断使用 |
+| Executor | 默认 mode | Skills/MCP |
+| --- | --- | --- |
+| `antigravity-cli` | `managed-natural` | inherit |
+| `grok-cli` | `managed-natural` | inherit |
+| `claude-code` | 认证健康时 `managed-natural` | inherit |
+| `codex` | `managed-isolated` | isolated |
 
 `managed-natural` 表示 AGPair 管任务状态、授权 profile、receipt/log 捕获、
 wait/watch、retry 和验收证据；外部 CLI 保留它正常启动时的 skills、MCP、memory、
-plugins 和 provider 配置。只有显式诊断或上一轮证据证明环境导致失败时，才使用
-`--environment-mode`：
-
-```bash
-agpair task start ... --environment-mode managed-restricted
-agpair task retry TASK_ID --from-block --environment-mode managed-restricted
-```
+plugins 和 provider 配置。如果外部 attempt 不够好，就自然模式重试、换另一个
+外部 executor，或者让主控回到自己的原生 subagent fallback / review lane。
 
 本地 CLI 的 approval 模式可以通过环境变量调整：
 
@@ -200,19 +195,13 @@ agpair task retry TASK_ID --from-block --environment-mode managed-restricted
 - `AGPAIR_GROK_OUTPUT_FORMAT=json|streaming-json`
   默认：`json`
 - `AGPAIR_GROK_MAX_TURNS=24`
-- `AGPAIR_GROK_ENVIRONMENT_MODE=managed-natural|managed-restricted`
-  默认：`managed-natural`。Restricted mode 会增加
-  `--no-memory --no-subagents --disable-web-search`，只用于显式 fallback 或诊断。
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
   旧别名：`AGPAIR_CLAUDE_CODE_CLI`
-- `AGPAIR_CLAUDE_CODE_ENVIRONMENT_MODE=managed-natural|isolated-bare|diagnostic-natural`
-  默认：`managed-natural`。`isolated-bare` 是显式 fallback / 诊断模式，会使用
-  `--bare` 并关闭 MCP/slash/chrome surface。
 - `AGPAIR_CLAUDE_CODE_AUTH_MODE=auto|oauth|ccswitch|api`
   默认：`auto`。Auto mode 会先使用有效的本机 Claude Code 订阅 / OAuth 登录；
   如果没有登录或 live probe 失败，就回退到 CC Switch 当前选中的 Claude
   provider。设为 `oauth` 可禁用 provider 回退，设为 `ccswitch` 可直接使用 CC
-  Switch provider，设为 `api` 则使用单独 bare-mode worker credential。
+  Switch provider，设为 `api` 则使用单独 worker credential。
 - `AGPAIR_CC_SWITCH_HOME=/absolute/path/to/.cc-switch`
   可选，默认 `~/.cc-switch`。AGPair 读取 CC Switch 当前 Claude provider 的
   settings，并把它们作为 worker 进程 env 注入；provider secret 不会写进 AGPair
@@ -220,11 +209,8 @@ agpair task retry TASK_ID --from-block --environment-mode managed-restricted
 - `AGPAIR_CLAUDE_CODE_MAX_RETRIES=<integer>`
   默认：`0`。AGPair 会给 worker 设置 `CLAUDE_CODE_MAX_RETRIES`，让无效
   OAuth / API credential 快速失败，而不是静默重试。
-- `AGPAIR_CLAUDE_CODE_BARE=1|0`
-  旧兼容开关。未设置 `AGPAIR_CLAUDE_CODE_AUTH_MODE` 时，设为 `1` 会选择
-  API / bare mode。
 - `AGPAIR_CLAUDE_CODE_SETTINGS=/absolute/path/to/settings.json`
-  API / bare mode 下可选 Claude Code settings JSON 或路径。
+  API mode 下可选 Claude Code settings JSON 或路径。
   可用下面的命令生成安全模板：
   `agpair claude worker-settings > ~/.agpair/claude-worker-settings.json`
   然后把 `AGPAIR_CLAUDE_CODE_SETTINGS` 指向该文件，并让 helper 返回有效 API key，

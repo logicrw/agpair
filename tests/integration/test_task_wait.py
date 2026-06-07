@@ -1021,8 +1021,6 @@ def test_task_watch_json_emits_environment_metadata(tmp_path: Path, monkeypatch)
         task_id="T-WATCH-ENV",
         repo_path="/r",
         executor_backend="grok-cli",
-        environment_mode="managed-restricted",
-        environment_mode_source="task_start_override",
     )
 
     result = CliRunner().invoke(app, [
@@ -1035,11 +1033,11 @@ def test_task_watch_json_emits_environment_metadata(tmp_path: Path, monkeypatch)
     parsed = [json.loads(line) for line in result.stdout.strip().splitlines() if line]
     assert parsed
     event = parsed[0]
-    assert event["environment_mode"] == "managed-restricted"
-    assert event["environment_mode_source"] == "task_start_override"
-    assert event["skill_policy"] == "restricted"
-    assert event["mcp_policy"] == "restricted"
-    assert event["payload"]["environment_mode"] == "managed-restricted"
+    assert event["environment_mode"] == "managed-natural"
+    assert event["environment_mode_source"] == "executor_default"
+    assert event["skill_policy"] == "inherit"
+    assert event["mcp_policy"] == "inherit"
+    assert event["payload"]["environment_mode"] == "managed-natural"
 
 
 def test_task_watch_deduplicates_output(tmp_path: Path, monkeypatch):

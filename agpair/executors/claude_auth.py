@@ -29,15 +29,12 @@ class ClaudeAuthResolution:
 
 def explicit_claude_auth_mode() -> str | None:
     explicit = os.environ.get("AGPAIR_CLAUDE_CODE_AUTH_MODE", "").strip().lower()
-    if explicit in {"api", "bare"}:
+    if explicit == "api":
         return "api"
     if explicit in {"oauth", "subscription"}:
         return "oauth"
     if explicit in {"ccswitch", "provider", "cc-switch"}:
         return "ccswitch"
-    legacy_bare = os.environ.get("AGPAIR_CLAUDE_CODE_BARE")
-    if legacy_bare is not None and legacy_bare.strip().lower() not in FALSE_ENV_VALUES:
-        return "api"
     return None
 
 

@@ -19,19 +19,17 @@ Each active executor must define one profile entry with:
 - lifecycle status and replacement guidance
 
 The profile is executable documentation, not decorative metadata. If a profile
-declares noninteractive flags, auth modes, or isolation flags, the adapter
-command must emit the matching flags for the selected mode, and unit tests must
-prove that parity for every active executor. Provider-specific escape hatches
-may exist for diagnostics, but the profile must say which mode is the default.
+declares noninteractive flags or auth modes, the adapter command must emit the
+matching flags for the default mode, and unit tests must prove that parity for
+every active executor.
 
-Default modes should keep executors natural unless there is executor-specific
-evidence to isolate them:
+Default modes keep executors natural. Failed attempts should recover by retrying
+the same natural executor, switching to another external executor, or handing
+back to the controller's native subagents:
 
 - `antigravity-cli`: `managed-natural`, skills/MCP inherit.
-- `grok-cli`: `managed-natural`, skills/MCP inherit; `managed-restricted` is
-  an explicit fallback.
-- `claude-code`: `managed-natural`, skills/MCP inherit when auth is healthy;
-  `isolated-bare` is an explicit fallback.
+- `grok-cli`: `managed-natural`, skills/MCP inherit.
+- `claude-code`: `managed-natural`, skills/MCP inherit when auth is healthy.
 - `codex`: `managed-isolated`, skills/MCP isolated because it is primarily the
   external Codex worker for Claude Code controllers.
 

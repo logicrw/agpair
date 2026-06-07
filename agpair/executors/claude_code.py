@@ -5,7 +5,6 @@ import pathlib
 
 from agpair.executors.claude_auth import (
     ClaudeAuthResolution,
-    FALSE_ENV_VALUES,
     ccswitch_env_overrides,
     claude_retry_env,
     explicit_claude_auth_mode,
@@ -27,48 +26,6 @@ def _permission_args() -> list[str]:
 def _retry_env_args() -> list[str]:
     retries = claude_retry_env()["CLAUDE_CODE_MAX_RETRIES"]
     return ["env", f"CLAUDE_CODE_MAX_RETRIES={retries}"]
-
-
-def _environment_mode() -> str:
-    value = os.environ.get("AGPAIR_CLAUDE_CODE_ENVIRONMENT_MODE", "").strip().lower()
-    if not value:
-        legacy_bare = os.environ.get("AGPAIR_CLAUDE_CODE_BARE", "").strip().lower()
-        value = "isolated-bare" if legacy_bare and legacy_bare not in FALSE_ENV_VALUES else "managed-natural"
-    if value not in {"managed-natural", "isolated-bare", "diagnostic-natural"}:
-        raise ValueError(
-            "Unsupported AGPAIR_CLAUDE_CODE_ENVIRONMENT_MODE; use managed-natural, isolated-bare, or diagnostic-natural"
-        )
-    return value
-
-
-def _bare_args() -> list[str]:
-    if _environment_mode() != "isolated-bare":
-        return []
-    return [
-        "--bare",
-        "--strict-mcp-config",
-        "--mcp-config",
-        '{"mcpServers":{}}',
-        "--disable-slash-commands",
-        "--no-chrome",
-    ]
-
-
-def _oauth_profile_args(auth_mode: str) -> list[str]:
-    if _environment_mode() != "managed-natural":
-        return []
-    if auth_mode != "oauth":
-        return []
-    profile = os.environ.get("AGPAIR_CLAUDE_CODE_OAUTH_PROFILE", "natural").strip().lower()
-    if profile in {"natural", "full", "inherit"}:
-        return []
-    return [
-        "--strict-mcp-config",
-        "--mcp-config",
-        '{"mcpServers":{}}',
-        "--disable-slash-commands",
-        "--no-chrome",
-    ]
 
 
 def _settings_args() -> list[str]:
@@ -108,13 +65,9 @@ class ClaudeCodeExecutor(LocalCLIExecutor):
         temp_dir: pathlib.Path,
     ) -> list[str]:
         del repo_path, temp_dir
-        resolution = self._resolve_auth()
-        auth_mode = resolution.mode if resolution.error is None else "oauth"
         return [
             *_retry_env_args(),
             self.bin_path,
-            *_bare_args(),
-            *_oauth_profile_args(auth_mode),
             *_settings_args(),
             *_permission_args(),
             "--no-session-persistence",
