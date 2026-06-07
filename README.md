@@ -24,6 +24,15 @@ Operationally, `codex` is the external Codex CLI worker for Claude Code controll
 
 Gemini is not used for new work. Legacy `gemini_cli` records can still be inspected or cleaned up.
 
+Default executor environments are managed-natural for `antigravity-cli`, `grok-cli`, and healthy `claude-code`: AGPair manages task boundaries, receipts, logs, status, retry, and verification evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config. Restricted or isolated modes are explicit fallback/diagnostic modes:
+
+```bash
+agpair task start ... --environment-mode managed-restricted
+agpair task retry TASK-123 --from-block --environment-mode isolated-bare
+```
+
+The external `codex` worker remains managed-isolated by default because it is mainly for Claude Code controllers, not for Codex self-delegation.
+
 ## Quick Start
 
 ```bash
@@ -72,6 +81,14 @@ If an executor returns `blocked(approval_required)`, retry with structured block
 agpair task retry TASK-123 \
   --from-block \
   --authorization-profile local_mutating
+```
+
+Retry can also switch launch environment when the previous attempt shows environment noise or no progress:
+
+```bash
+agpair task retry TASK-123 \
+  --from-block \
+  --environment-mode managed-restricted
 ```
 
 ## Controller Setup

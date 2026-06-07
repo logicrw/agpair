@@ -4,6 +4,7 @@ __pycache__/
 .DS_Store
 .supervisor/
 .agpair/
+tests/fixtures/external_executor_smoke/*.txt
 .omc/
 .venv/
 

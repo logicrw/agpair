@@ -15,7 +15,7 @@ def test_grok_cli_executor_uses_env_binary(monkeypatch) -> None:
     assert executor.safety_metadata.requires_human_interaction is False
 
 
-def test_grok_cli_command_is_repo_scoped_and_noninteractive() -> None:
+def test_grok_cli_command_is_repo_scoped_and_managed_natural_by_default() -> None:
     executor = GrokCLIExecutor(grok_bin="fake-grok")
 
     cmd = executor._build_grok_cmd(
@@ -33,12 +33,23 @@ def test_grok_cli_command_is_repo_scoped_and_noninteractive() -> None:
         "--always-approve",
         "--max-turns",
         "24",
-        "--no-memory",
-        "--no-subagents",
-        "--disable-web-search",
         "--single",
         "Goal: edit the repo",
     ]
+    assert "--no-memory" not in cmd
+    assert "--no-subagents" not in cmd
+    assert "--disable-web-search" not in cmd
+
+
+def test_grok_cli_restricted_mode_disables_memory_subagents_and_web(monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_GROK_ENVIRONMENT_MODE", "managed-restricted")
+    executor = GrokCLIExecutor(grok_bin="fake-grok")
+
+    cmd = executor._build_grok_cmd("Goal: inspect", "/tmp/repo", pathlib.Path("/tmp/agpair"))
+
+    assert "--no-memory" in cmd
+    assert "--no-subagents" in cmd
+    assert "--disable-web-search" in cmd
 
 
 def test_grok_cli_command_allows_json_fallback_and_custom_turn_budget(monkeypatch) -> None:
@@ -74,3 +85,15 @@ def test_grok_cli_rejects_invalid_turn_budget(monkeypatch) -> None:
         assert "AGPAIR_GROK_MAX_TURNS" in str(exc)
     else:
         raise AssertionError("unsupported Grok turn budget should be rejected")
+
+
+def test_grok_cli_rejects_unsupported_environment_mode(monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_GROK_ENVIRONMENT_MODE", "isolated-bare")
+    executor = GrokCLIExecutor(grok_bin="fake-grok")
+
+    try:
+        executor._build_grok_cmd("Goal: inspect", "/tmp/repo", pathlib.Path("/tmp/agpair"))
+    except ValueError as exc:
+        assert "AGPAIR_GROK_ENVIRONMENT_MODE" in str(exc)
+    else:
+        raise AssertionError("unsupported Grok environment mode should be rejected")

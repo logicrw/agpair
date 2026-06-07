@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import signal
 import sqlite3
 import subprocess
 from dataclasses import dataclass
@@ -207,6 +208,65 @@ def _json_result_error(stdout: str, label: str, auth_hint: str) -> str | None:
     return None
 
 
+def _live_probe_timeout() -> float:
+    raw = os.environ.get("AGPAIR_CLAUDE_CODE_LIVE_PROBE_TIMEOUT_SECONDS", "").strip()
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            value = 8.0
+        if value > 0:
+            return value
+    return 8.0
+
+
+def _run_probe(
+    binary_path: str,
+    args: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    timeout_seconds: float,
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        [binary_path, *args],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+        return subprocess.CompletedProcess(
+            [binary_path, *args],
+            process.returncode,
+            stdout,
+            stderr,
+        )
+    except subprocess.TimeoutExpired as exc:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except OSError:
+            process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                process.kill()
+            stdout, stderr = process.communicate()
+        message = f"command timed out after {timeout_seconds:g}s"
+        stderr = (stderr or "") + ("\n" if stderr else "") + message
+        raise subprocess.TimeoutExpired(
+            exc.cmd,
+            timeout_seconds,
+            output=stdout,
+            stderr=stderr,
+        ) from exc
+
+
 def _live_probe_error(
     binary_path: str,
     *,
@@ -214,23 +274,15 @@ def _live_probe_error(
     auth_hint: str,
     args: list[str],
     env_overrides: dict[str, str] | None = None,
-    timeout_seconds: float = 20.0,
+    timeout_seconds: float | None = None,
 ) -> str | None:
+    timeout = _live_probe_timeout() if timeout_seconds is None else timeout_seconds
     env = os.environ.copy()
     env.update(claude_retry_env())
     if env_overrides:
         env.update(env_overrides)
     try:
-        proc = subprocess.run(
-            [binary_path, *args],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-            env=env,
-        )
+        proc = _run_probe(binary_path, args, env=env, timeout_seconds=timeout)
     except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as exc:
         return f"{label} live auth check failed: {type(exc).__name__}: {exc}"
     stdout = (proc.stdout or "").strip()
@@ -249,15 +301,7 @@ def claude_oauth_error(binary_path: str | None, *, live_probe: bool = False) -> 
     if not binary_path:
         return "Claude Code OAuth/subscription auth requires a claude binary"
     try:
-        proc = subprocess.run(
-            [binary_path, "auth", "status"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=5.0,
-            check=False,
-        )
+        proc = _run_probe(binary_path, ["auth", "status"], timeout_seconds=5.0)
     except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as exc:
         return f"Claude Code OAuth/subscription auth check failed: {type(exc).__name__}: {exc}"
     if proc.returncode != 0:

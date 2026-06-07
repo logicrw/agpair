@@ -11,6 +11,8 @@ Claude Code is the controller and verifier. AGPair is the durable external-agent
 
 Use AGPair before Claude Code native subagents for non-trivial implementation, refactor, test-fix, research, review, or multi-file work.
 
+Actively outsource low-value, repetitive, time-consuming, or easily verifiable work through AGPair: repo scans, alternative reviews, focused test-fix attempts, multi-file mechanical edits, smoke checks, and implementation slices with clear acceptance criteria.
+
 Prefer executors in this order:
 
 1. `antigravity-cli` for default external implementation work.
@@ -24,6 +26,8 @@ Do not request the AGPair-managed external `claude-code` executor by default; Cl
 Do not route new work to Gemini. Legacy `gemini_cli` tasks may be inspected or cleaned up, but not used for new `task start` or retry dispatch.
 
 Use Claude Code native subagents only when AGPair is unavailable, unsuitable for the task, or an external result is not good enough. Native subagents are fallback, review, or narrow helper lanes, not the default execution lane.
+
+Default executor environments are `managed-natural` for `antigravity-cli`, `grok-cli`, and healthy cross-controller workers: AGPair manages state and evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config. Restricted or isolated modes are explicit fallback/diagnostic modes.
 
 ## Dispatch
 
@@ -80,6 +84,12 @@ agpair task retry TASK-123 \
 ```
 
 `--from-block` carries the original brief, blocked reason, terminal receipt, journal tail, git status, diff/commits, and the new authorization profile into a fresh attempt.
+
+If the previous attempt shows environment noise, tool loops, or no progress, switch environment mode on retry:
+
+```bash
+agpair task retry TASK-123 --from-block --environment-mode managed-restricted
+```
 
 ## Review Gate
 

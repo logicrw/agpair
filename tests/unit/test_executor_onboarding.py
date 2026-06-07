@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 from agpair.executors import get_executor
-from agpair.executors.policy import EXECUTOR_SPECS, executor_health_snapshot, resolve_controller_policy
+from agpair.executors.policy import (
+    ENVIRONMENT_MODES,
+    EXECUTOR_SPECS,
+    MCP_POLICIES,
+    SKILL_POLICIES,
+    executor_health_snapshot,
+    resolve_controller_policy,
+)
 from agpair.executors.registry import executor_profile, registered_executor_ids
 
 
@@ -18,6 +25,10 @@ def test_every_registered_executor_has_required_profile_fields() -> None:
         "supported_completion_policies",
         "receipt_capable",
         "controller_suppression",
+        "default_environment_mode",
+        "default_skill_policy",
+        "default_mcp_policy",
+        "fallback_environment_modes",
         "isolation_profile",
         "lifecycle_status",
         "replacement_executor",
@@ -55,6 +66,10 @@ def test_every_registered_executor_has_required_profile_fields() -> None:
         assert profile["lifecycle_status"] == "active"
         assert profile["receipt_capable"]
         assert "auto" in profile["supported_completion_policies"]
+        assert profile["default_environment_mode"] in ENVIRONMENT_MODES
+        assert profile["default_skill_policy"] in SKILL_POLICIES
+        assert profile["default_mcp_policy"] in MCP_POLICIES
+        assert set(profile["fallback_environment_modes"]) <= ENVIRONMENT_MODES
 
 
 def test_profile_noninteractive_flags_match_adapter_command(monkeypatch, tmp_path) -> None:
@@ -86,6 +101,30 @@ def test_profile_noninteractive_flags_match_adapter_command(monkeypatch, tmp_pat
 
         for flag in spec.isolation_profile["noninteractive_flags"]:
             assert flag in cmd, f"{executor_id} profile flag {flag!r} missing from adapter command"
+
+
+def test_executor_environment_defaults_match_cross_controller_routing_policy() -> None:
+    assert EXECUTOR_SPECS["antigravity-cli"].default_environment_mode == "managed-natural"
+    assert EXECUTOR_SPECS["grok-cli"].default_environment_mode == "managed-natural"
+    assert EXECUTOR_SPECS["grok-cli"].fallback_environment_modes == ("managed-restricted",)
+    assert EXECUTOR_SPECS["claude-code"].default_environment_mode == "managed-natural"
+    assert EXECUTOR_SPECS["claude-code"].fallback_environment_modes == ("isolated-bare",)
+    assert EXECUTOR_SPECS["codex"].default_environment_mode == "managed-isolated"
+    assert EXECUTOR_SPECS["codex"].default_skill_policy == "isolated"
+    assert EXECUTOR_SPECS["codex"].default_mcp_policy == "isolated"
+
+
+def test_executor_environment_env_override_is_recorded(monkeypatch) -> None:
+    from agpair.executors.policy import resolve_environment_metadata
+
+    monkeypatch.setenv("AGPAIR_GROK_ENVIRONMENT_MODE", "managed-restricted")
+
+    metadata = resolve_environment_metadata("grok-cli")
+
+    assert metadata.environment_mode == "managed-restricted"
+    assert metadata.environment_mode_source == "executor_env_var"
+    assert metadata.skill_policy == "restricted"
+    assert metadata.mcp_policy == "restricted"
 
 
 def test_controller_suppression_is_profile_driven_for_codex_and_claude_code() -> None:

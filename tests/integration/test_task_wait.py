@@ -1014,6 +1014,34 @@ def test_task_watch_json_emits_live_attempt_artifact_metadata(tmp_path: Path, mo
     assert live_event["active_attempt_artifacts"]["stdout"]["excerpt"] == "watch live output"
 
 
+def test_task_watch_json_emits_environment_metadata(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(
+        task_id="T-WATCH-ENV",
+        repo_path="/r",
+        executor_backend="grok-cli",
+        environment_mode="managed-restricted",
+        environment_mode_source="task_start_override",
+    )
+
+    result = CliRunner().invoke(app, [
+        "task", "watch", "T-WATCH-ENV", "--json",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "0.05",
+    ])
+
+    assert result.exit_code == 1
+    parsed = [json.loads(line) for line in result.stdout.strip().splitlines() if line]
+    assert parsed
+    event = parsed[0]
+    assert event["environment_mode"] == "managed-restricted"
+    assert event["environment_mode_source"] == "task_start_override"
+    assert event["skill_policy"] == "restricted"
+    assert event["mcp_policy"] == "restricted"
+    assert event["payload"]["environment_mode"] == "managed-restricted"
+
+
 def test_task_watch_deduplicates_output(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = _make_repo(tmp_path)

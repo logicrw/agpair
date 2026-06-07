@@ -13,6 +13,7 @@ Each active executor must define one profile entry with:
 - default authorization profile and safety metadata
 - supported completion policies and receipt capability
 - noninteractive command shape owned by the adapter
+- default environment mode, skill policy, MCP policy, fallback environment modes
 - isolation profile and health probe metadata
 - controller suppression rules
 - lifecycle status and replacement guidance
@@ -22,6 +23,21 @@ declares noninteractive flags, auth modes, or isolation flags, the adapter
 command must emit the matching flags for the selected mode, and unit tests must
 prove that parity for every active executor. Provider-specific escape hatches
 may exist for diagnostics, but the profile must say which mode is the default.
+
+Default modes should keep executors natural unless there is executor-specific
+evidence to isolate them:
+
+- `antigravity-cli`: `managed-natural`, skills/MCP inherit.
+- `grok-cli`: `managed-natural`, skills/MCP inherit; `managed-restricted` is
+  an explicit fallback.
+- `claude-code`: `managed-natural`, skills/MCP inherit when auth is healthy;
+  `isolated-bare` is an explicit fallback.
+- `codex`: `managed-isolated`, skills/MCP isolated because it is primarily the
+  external Codex worker for Claude Code controllers.
+
+Do not introduce a new capability-bundle system just to add an executor. AGPair
+records launch mode and owns evidence capture; the external CLI owns its normal
+skills, MCP, provider config, and model behavior in `managed-natural` mode.
 
 If a mode changes the executor's authentication source, declare the required
 OAuth login, auth environment, or settings source in the profile. Health checks
@@ -37,7 +53,7 @@ is different from Claude Code native subagents.
 
 1. Add one adapter file or thin `LocalCLIExecutor` subclass.
 2. Add one `ExecutorSpec` profile entry.
-3. Add command, binary/env, isolation, safety, routing, health, and lifecycle
+3. Add command, binary/env, environment mode, isolation, safety, routing, health, and lifecycle
    tests.
 4. Make `doctor --fresh` report the executor through the same schema as all
    others.
@@ -57,6 +73,11 @@ Minimum verification for a new active executor:
 - unit tests for command construction with a fake binary;
 - unit tests proving declared profile isolation and noninteractive flags match
   the adapter's default command;
+- unit tests proving default `managed-natural` commands do not disable skills,
+  memory, subagents, web, plugins, or MCP unless that executor's default mode is
+  explicitly isolated;
+- unit tests proving explicit fallback modes add only their documented
+  restrictions;
 - unit tests proving isolated auth requirements produce a pre-dispatch blocker
   when the required env/settings source is absent;
 - doctor test proving binary and launch probes surface through the common schema;

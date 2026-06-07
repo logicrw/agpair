@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
+import subprocess
 import sqlite3
+import time
 
 import pytest
 
+from agpair.executors.claude_auth import _run_probe
 from agpair.executors import get_executor, is_local_cli_backend
 from agpair.executors.policy import EXECUTOR_SPECS, executor_health_snapshot, resolve_controller_policy
 from agpair.executors.registry import active_executor_ids, executor_start_blocker
@@ -39,6 +43,43 @@ def _write_ccswitch_provider(home: Path) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def _process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_claude_probe_timeout_kills_child_process_group(tmp_path: Path) -> None:
+    pid_file = tmp_path / "child.pid"
+    fake_binary = tmp_path / "claude"
+    fake_binary.write_text(
+        f"""#!/usr/bin/env python3
+import pathlib
+import subprocess
+import time
+
+child = subprocess.Popen(["sleep", "30"])
+pathlib.Path({str(pid_file)!r}).write_text(str(child.pid), encoding="utf-8")
+time.sleep(30)
+""",
+        encoding="utf-8",
+    )
+    fake_binary.chmod(0o755)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_probe(str(fake_binary), ["--print", "probe"], timeout_seconds=1.0)
+
+    child_pid = int(pid_file.read_text(encoding="utf-8").strip())
+    for _ in range(20):
+        if not _process_exists(child_pid):
+            break
+        time.sleep(0.05)
+
+    assert not _process_exists(child_pid)
 
 
 @pytest.mark.parametrize("status", ["disabled", "deprecated", "removed"])

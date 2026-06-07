@@ -47,6 +47,9 @@ class ExecutorAdapter(typing.Protocol):
         worktree_boundary: str | None = None,
         authorization_profile: str = "local_mutating",
         authorization_summary: str | None = None,
+        environment_mode: str | None = None,
+        skill_policy: str | None = None,
+        mcp_policy: str | None = None,
     ) -> DispatchResult:
         """
         Dispatch a task payload to the underlying executor.

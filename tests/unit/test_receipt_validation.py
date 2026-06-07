@@ -164,6 +164,36 @@ def test_parse_receipt_from_codex_jsonl_item_text() -> None:
     assert parsed.payload["changed_files"] == ["tests/fixtures/external_executor_smoke/codex.txt"]
 
 
+def test_parse_receipt_extracts_mixed_text_then_multiline_json() -> None:
+    raw = """
+I inspected the repository and found no issues.
+
+Final receipt:
+{
+  "schema_version": "1",
+  "task_id": "TASK-AGY-MIXED",
+  "attempt_no": 1,
+  "review_round": 0,
+  "status": "ready_for_review",
+  "summary": "Review complete",
+  "payload": {
+    "changed_files": [],
+    "validation_not_run": "read-only review",
+    "scope_violations": [],
+    "raw_log_path": "stdout.log",
+    "receipt_path": "receipt.json",
+    "report": "No issues found"
+  }
+}
+"""
+
+    parsed = parse_structured_terminal_receipt(raw, expected_task_id="TASK-AGY-MIXED")
+
+    assert parsed is not None
+    assert parsed.status == "EVIDENCE_PACK"
+    assert parsed.payload["report"] == "No issues found"
+
+
 def test_parse_receipt_normalizes_ready_for_review_status_alias() -> None:
     receipt = {
         "schema_version": "1",

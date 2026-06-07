@@ -30,16 +30,33 @@ def _run(cmd: list[str], *, cwd: str | Path | None = None, timeout: float | None
     env = os.environ.copy()
     existing_pythonpath = env.get("PYTHONPATH")
     env["PYTHONPATH"] = str(PROJECT_ROOT) + (os.pathsep + existing_pythonpath if existing_pythonpath else "")
-    return subprocess.run(
+    process = subprocess.Popen(
         cmd,
         cwd=str(cwd) if cwd is not None else None,
         env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=timeout,
-        check=False,
+        start_new_session=True,
     )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except OSError:
+            process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                process.kill()
+            stdout, stderr = process.communicate()
+        timeout_msg = f"command timed out after {timeout:g}s: {' '.join(cmd)}" if timeout is not None else "command timed out"
+        return subprocess.CompletedProcess(cmd, 124, stdout or "", (stderr or "") + ("\n" if stderr else "") + timeout_msg)
 
 
 def _parse_json_output(text: str) -> dict[str, Any] | None:
@@ -453,7 +470,7 @@ def _executor_result(
                 "executor_id": executor_id,
                 "task_id": task_id,
                 "outcome": "blocked",
-                "blocker_type": "task_start_failed",
+                "blocker_type": "task_start_timeout" if start.returncode == 124 else "task_start_failed",
                 "reason": (start.stderr or start.stdout).strip(),
                 "attempted": True,
                 "worktree_path": str(worktree_path),

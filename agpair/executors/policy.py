@@ -27,6 +27,15 @@ LEGACY_EXECUTOR_ALIASES = {
 }
 REJECTED_EXECUTOR_IDS = {"gemini", "gemini-cli", "gemini_cli"}
 _FALSE_ENV_VALUES = FALSE_ENV_VALUES
+ENVIRONMENT_MODES = {
+    "managed-natural",
+    "managed-restricted",
+    "managed-isolated",
+    "isolated-bare",
+    "diagnostic-natural",
+}
+SKILL_POLICIES = {"inherit", "restricted", "isolated"}
+MCP_POLICIES = {"inherit", "restricted", "isolated"}
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,10 @@ class ExecutorSpec:
     receipt_capable: str = "prompt_contract"
     controller_suppression: tuple[str, ...] = ()
     recommended_for_controllers: tuple[str, ...] = ("generic", "codex", "claude-code")
+    default_environment_mode: str = "managed-natural"
+    default_skill_policy: str = "inherit"
+    default_mcp_policy: str = "inherit"
+    fallback_environment_modes: tuple[str, ...] = ()
     isolation_profile: dict[str, Any] = field(default_factory=dict)
     launch_probe: tuple[str, ...] = ("--help",)
 
@@ -77,6 +90,19 @@ class ExecutorPolicyDecision:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class ExecutorEnvironmentMetadata:
+    environment_mode: str
+    environment_mode_source: str
+    skill_policy: str
+    mcp_policy: str
+    fallback_environment_mode: str | None = None
+    fallback_reason: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
     "antigravity-cli": ExecutorSpec(
         executor_id="antigravity-cli",
@@ -90,6 +116,9 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
         is_concurrency_safe=False,
         display_name="Antigravity CLI",
         receipt_capable="prompt_contract",
+        default_environment_mode="managed-natural",
+        default_skill_policy="inherit",
+        default_mcp_policy="inherit",
         isolation_profile={
             "supports_isolated_config_home": False,
             "supports_turn_budget": "no",
@@ -112,6 +141,10 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
         is_concurrency_safe=False,
         display_name="Grok CLI",
         receipt_capable="prompt_contract",
+        default_environment_mode="managed-natural",
+        default_skill_policy="inherit",
+        default_mcp_policy="inherit",
+        fallback_environment_modes=("managed-restricted",),
         isolation_profile={
             "supports_isolated_config_home": "limited",
             "supports_turn_budget": True,
@@ -123,10 +156,8 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
                 "--output-format",
                 "--always-approve",
                 "--max-turns",
-                "--no-memory",
-                "--no-subagents",
-                "--disable-web-search",
             ],
+            "restricted_flags": ["--no-memory", "--no-subagents", "--disable-web-search"],
             "isolated_auth_env_vars": [],
             "isolation_disable_env_var": None,
         },
@@ -144,6 +175,10 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
         display_name="Claude Code CLI",
         controller_suppression=("claude", "claude-code", "claude_code"),
         receipt_capable="prompt_contract",
+        default_environment_mode="managed-natural",
+        default_skill_policy="inherit",
+        default_mcp_policy="inherit",
+        fallback_environment_modes=("isolated-bare",),
         isolation_profile={
             "supports_isolated_config_home": "bare",
             "supports_turn_budget": "unknown",
@@ -152,9 +187,10 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
             "default_auth_mode": "auto",
             "auth_modes": ["auto", "oauth", "ccswitch", "api"],
             "default_retry_env": {"CLAUDE_CODE_MAX_RETRIES": "0"},
-            "default_oauth_profile": "quiet",
+            "default_oauth_profile": "natural",
             "oauth_profile_env_var": "AGPAIR_CLAUDE_CODE_OAUTH_PROFILE",
-            "oauth_quiet_flags": [
+            "isolated_bare_flags": [
+                "--bare",
                 "--strict-mcp-config",
                 "--mcp-config",
                 "--disable-slash-commands",
@@ -164,10 +200,6 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
                 "--no-session-persistence",
             ],
             "noninteractive_flags": [
-                "--strict-mcp-config",
-                "--mcp-config",
-                "--disable-slash-commands",
-                "--no-chrome",
                 "--print",
                 "--output-format",
                 "--no-session-persistence",
@@ -194,6 +226,9 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
         display_name="Codex CLI worker",
         controller_suppression=("codex",),
         receipt_capable="prompt_contract",
+        default_environment_mode="managed-isolated",
+        default_skill_policy="isolated",
+        default_mcp_policy="isolated",
         isolation_profile={
             "supports_isolated_config_home": True,
             "supports_turn_budget": "unknown",
@@ -225,6 +260,71 @@ def normalize_executor_id(value: str | None) -> str | None:
         allowed = ", ".join(CANONICAL_EXECUTOR_IDS)
         raise ValueError(f"executor must be one of: {allowed}")
     return normalized
+
+
+def supported_environment_modes(executor_id: str | None) -> tuple[str, ...]:
+    normalized = normalize_executor_id(executor_id or "antigravity-cli")
+    assert normalized is not None
+    spec = EXECUTOR_SPECS[normalized]
+    modes = (spec.default_environment_mode, *spec.fallback_environment_modes)
+    return tuple(dict.fromkeys(modes))
+
+
+def _policies_for_environment_mode(spec: ExecutorSpec, environment_mode: str) -> tuple[str, str]:
+    if environment_mode == spec.default_environment_mode:
+        return spec.default_skill_policy, spec.default_mcp_policy
+    if environment_mode == "managed-restricted":
+        return "restricted", "restricted"
+    if environment_mode in {"managed-isolated", "isolated-bare"}:
+        return "isolated", "isolated"
+    if environment_mode == "diagnostic-natural":
+        return "inherit", "inherit"
+    return spec.default_skill_policy, spec.default_mcp_policy
+
+
+def _environment_mode_from_env(executor_id: str) -> str | None:
+    env_vars = {
+        "grok-cli": "AGPAIR_GROK_ENVIRONMENT_MODE",
+        "claude-code": "AGPAIR_CLAUDE_CODE_ENVIRONMENT_MODE",
+    }
+    env_var = env_vars.get(executor_id)
+    if env_var is None:
+        return None
+    value = os.environ.get(env_var, "").strip()
+    return value or None
+
+
+def resolve_environment_metadata(
+    executor_id: str | None,
+    *,
+    environment_mode: str | None = None,
+    source: str | None = None,
+) -> ExecutorEnvironmentMetadata:
+    normalized = normalize_executor_id(executor_id or "antigravity-cli")
+    assert normalized is not None
+    spec = EXECUTOR_SPECS[normalized]
+    requested = environment_mode.strip() if isinstance(environment_mode, str) and environment_mode.strip() else None
+    env_requested = None if requested else _environment_mode_from_env(normalized)
+    selected = requested or spec.default_environment_mode
+    if env_requested:
+        selected = env_requested
+    if selected not in ENVIRONMENT_MODES:
+        allowed = ", ".join(sorted(ENVIRONMENT_MODES))
+        raise ValueError(f"environment mode must be one of: {allowed}")
+    supported = supported_environment_modes(normalized)
+    if selected not in supported:
+        allowed = ", ".join(supported)
+        raise ValueError(f"{normalized} does not support environment mode {selected}; supported modes: {allowed}")
+    skill_policy, mcp_policy = _policies_for_environment_mode(spec, selected)
+    fallback = spec.fallback_environment_modes[0] if spec.fallback_environment_modes and selected == spec.default_environment_mode else None
+    return ExecutorEnvironmentMetadata(
+        environment_mode=selected,
+        environment_mode_source=source or ("task_start_override" if requested else "executor_env_var" if env_requested else "executor_default"),
+        skill_policy=skill_policy,
+        mcp_policy=mcp_policy,
+        fallback_environment_mode=fallback,
+        fallback_reason=None,
+    )
 
 
 def executor_binary_path(executor_id: str) -> str | None:

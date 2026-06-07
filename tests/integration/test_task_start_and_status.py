@@ -1536,6 +1536,20 @@ def test_task_accept_rejects_non_terminal_task(tmp_path: Path, monkeypatch) -> N
     assert tasks.get_task("TASK-ACKED").is_approved is False
 
 
+def test_task_abandon_new_local_cli_task_without_session(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    tasks = make_task_repo(tmp_path)
+    tasks.create_task(task_id="TASK-ABANDON-NEW", repo_path="/tmp/repo", executor_backend="claude-code")
+
+    result = CliRunner().invoke(
+        app,
+        ["task", "abandon", "TASK-ABANDON-NEW", "--reason", "smoke cleanup", "--force"],
+    )
+
+    assert result.exit_code == 0
+    assert tasks.get_task("TASK-ABANDON-NEW").phase == "abandoned"
+
+
 def test_task_start_rejects_missing_sections(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     runner = CliRunner()
@@ -1604,6 +1618,90 @@ def test_task_status_uses_stored_attempt_controller_for_effective_policy(tmp_pat
     assert status.exit_code == 0
     payload = json.loads(status.stdout)
     assert payload["effective_task_policy"]["controller"] == "codex"
+
+
+def test_task_start_stores_environment_mode_override(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    fake_grok = tmp_path / "fake-grok"
+    fake_grok.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_grok.chmod(0o755)
+    monkeypatch.setenv("AGPAIR_GROK_CLI_BIN", str(fake_grok))
+    repo_path = make_repo_dir(tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--executor",
+            "grok-cli",
+            "--environment-mode",
+            "managed-restricted",
+            "--completion-policy",
+            "report",
+            "--authorization-profile",
+            "local_readonly",
+            "--body",
+            "Goal: A\nScope: B\nRequired changes: none\nExit criteria: report",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 0
+    task_id = result.stdout.strip().splitlines()[-1]
+    attempt = TaskRepository(AppPaths.default().db_path).current_attempt(task_id)
+    assert attempt is not None
+    assert attempt.environment_mode == "managed-restricted"
+    assert attempt.environment_mode_source == "task_start_override"
+    assert attempt.skill_policy == "restricted"
+    assert attempt.mcp_policy == "restricted"
+
+    status = runner.invoke(app, ["task", "status", task_id, "--json"])
+
+    assert status.exit_code == 0
+    payload = json.loads(status.stdout)
+    assert payload["environment_mode"] == "managed-restricted"
+    assert payload["environment_mode_source"] == "task_start_override"
+    assert payload["skill_policy"] == "restricted"
+    assert payload["mcp_policy"] == "restricted"
+
+
+def test_task_start_rejects_unsupported_environment_mode_for_executor(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    fake_grok = tmp_path / "fake-grok"
+    fake_grok.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_grok.chmod(0o755)
+    monkeypatch.setenv("AGPAIR_GROK_CLI_BIN", str(fake_grok))
+    repo_path = make_repo_dir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--executor",
+            "grok-cli",
+            "--environment-mode",
+            "isolated-bare",
+            "--body",
+            "Goal: A\nScope: B\nRequired changes: none\nExit criteria: report",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "grok-cli does not support environment mode isolated-bare" in result.output
 
 
 
@@ -1891,10 +1989,13 @@ def test_task_start_isolated_worktree_persists_boundary(tmp_path: Path, monkeypa
             body="Goal: test isolated\nScope: test\nRequired changes: test\nExit criteria: test",
             repo_path=str(repo_path.resolve()),
             isolated_worktree=True,
-            worktree_boundary=expected_boundary,
-            authorization_profile="local_mutating",
-            authorization_summary="Allowed actions: inspect and edit repository-local files, run focused tests, and prepare commits when requested. Denied actions: destructive cleanup, credential changes, production deploys, or broad external network access.",
-        )
+                worktree_boundary=expected_boundary,
+                authorization_profile="local_mutating",
+                authorization_summary="Allowed actions: inspect and edit repository-local files, run focused tests, and prepare commits when requested. Denied actions: destructive cleanup, credential changes, production deploys, or broad external network access.",
+                environment_mode="managed-isolated",
+                skill_policy="isolated",
+                mcp_policy="isolated",
+            )
 
         status_result = runner.invoke(app, ["task", "status", "TASK-ISO-DB", "--json"])
         payload = json.loads(status_result.stdout)
@@ -2069,11 +2170,14 @@ def test_task_retry_preserves_isolated_worktree_metadata_for_local_cli(tmp_path:
             "body": "Fresh retry requested for TASK-RETRY-ISO attempt 2",
             "repo_path": str(repo_path),
             "isolated_worktree": True,
-            "worktree_boundary": execution_repo_path,
-            "authorization_profile": "local_mutating",
-            "authorization_summary": "Allowed actions: inspect and edit repository-local files, run focused tests, and prepare commits when requested. Denied actions: destructive cleanup, credential changes, production deploys, or broad external network access.",
-        }
-    ]
+                "worktree_boundary": execution_repo_path,
+                "authorization_profile": "local_mutating",
+                "authorization_summary": "Allowed actions: inspect and edit repository-local files, run focused tests, and prepare commits when requested. Denied actions: destructive cleanup, credential changes, production deploys, or broad external network access.",
+                "environment_mode": "managed-isolated",
+                "skill_policy": "isolated",
+                "mcp_policy": "isolated",
+            }
+        ]
 
     updated = repo.get_task("TASK-RETRY-ISO")
     assert updated is not None

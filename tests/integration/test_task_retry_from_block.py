@@ -128,6 +128,40 @@ def test_retry_from_block_generates_context_and_updates_authorization(tmp_path: 
     assert task.authorization_profile == "local_mutating"
 
 
+def test_retry_from_block_can_change_environment_mode(tmp_path: Path, monkeypatch) -> None:
+    paths = make_paths(tmp_path, monkeypatch)
+    seed_blocked_task(paths, executor_backend="grok-cli")
+    fake_executor = FakeExecutor()
+    monkeypatch.setattr("agpair.executors.get_executor", lambda backend_id, **kwargs: fake_executor)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "retry",
+            "TASK-RETRY-BLOCK",
+            "--from-block",
+            "--environment-mode",
+            "managed-restricted",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert fake_executor.calls
+    retry_body = fake_executor.calls[0]["body"]
+    assert '"previous_environment_mode": "managed-natural"' in retry_body
+    assert '"new_environment_mode": "managed-restricted"' in retry_body
+
+    attempt = TaskRepository(paths.db_path).current_attempt("TASK-RETRY-BLOCK")
+    assert attempt is not None
+    assert attempt.attempt_no == 2
+    assert attempt.environment_mode == "managed-restricted"
+    assert attempt.environment_mode_source == "retry_override"
+    assert attempt.skill_policy == "restricted"
+    assert attempt.mcp_policy == "restricted"
+
+
 def test_retry_from_block_with_executor_override_stores_supported_executor(tmp_path: Path, monkeypatch) -> None:
     paths = make_paths(tmp_path, monkeypatch)
     seed_blocked_task(paths)

@@ -169,6 +169,25 @@ agpair task start \
 
 这意味着跨主控 worker 分工是显式的：`codex` 给 Claude Code 主控使用，`claude-code` 给 Codex 主控使用；各自主控的原生 subagent 只作为自己的 fallback / review lane。
 
+Executor launch environment：
+
+| Executor | 默认 mode | Skills/MCP | 显式 fallback |
+| --- | --- | --- | --- |
+| `antigravity-cli` | `managed-natural` | inherit | 优先加强 receipt 指令/解析，不默认换环境 |
+| `grok-cli` | `managed-natural` | inherit | `managed-restricted` |
+| `claude-code` | 认证健康时 `managed-natural` | inherit | `isolated-bare` |
+| `codex` | `managed-isolated` | isolated | 仅显式诊断使用 |
+
+`managed-natural` 表示 AGPair 管任务状态、授权 profile、receipt/log 捕获、
+wait/watch、retry 和验收证据；外部 CLI 保留它正常启动时的 skills、MCP、memory、
+plugins 和 provider 配置。只有显式诊断或上一轮证据证明环境导致失败时，才使用
+`--environment-mode`：
+
+```bash
+agpair task start ... --environment-mode managed-restricted
+agpair task retry TASK_ID --from-block --environment-mode managed-restricted
+```
+
 本地 CLI 的 approval 模式可以通过环境变量调整：
 
 - `AGPAIR_ANTIGRAVITY_CLI_BIN=/absolute/path/to/agy`
@@ -181,8 +200,14 @@ agpair task start \
 - `AGPAIR_GROK_OUTPUT_FORMAT=json|streaming-json`
   默认：`json`
 - `AGPAIR_GROK_MAX_TURNS=24`
+- `AGPAIR_GROK_ENVIRONMENT_MODE=managed-natural|managed-restricted`
+  默认：`managed-natural`。Restricted mode 会增加
+  `--no-memory --no-subagents --disable-web-search`，只用于显式 fallback 或诊断。
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
   旧别名：`AGPAIR_CLAUDE_CODE_CLI`
+- `AGPAIR_CLAUDE_CODE_ENVIRONMENT_MODE=managed-natural|isolated-bare|diagnostic-natural`
+  默认：`managed-natural`。`isolated-bare` 是显式 fallback / 诊断模式，会使用
+  `--bare` 并关闭 MCP/slash/chrome surface。
 - `AGPAIR_CLAUDE_CODE_AUTH_MODE=auto|oauth|ccswitch|api`
   默认：`auto`。Auto mode 会先使用有效的本机 Claude Code 订阅 / OAuth 登录；
   如果没有登录或 live probe 失败，就回退到 CC Switch 当前选中的 Claude

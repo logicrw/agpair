@@ -5,6 +5,7 @@ from pathlib import Path
 
 from agpair.artifacts import sha256_file
 from agpair.completion import normalize_completion_policy
+from agpair.executors.policy import resolve_environment_metadata
 from agpair.models import (
     TaskArtifactRecord,
     TaskAttemptRecord,
@@ -34,6 +35,26 @@ _VALID_TRANSITIONS: dict[str, set[str] | None] = {
     "abandoned": None,
     "new": None,
 }
+
+
+def _resolve_attempt_environment_metadata(
+    executor_backend: str | None,
+    *,
+    environment_mode: str | None,
+    environment_mode_source: str | None,
+):
+    try:
+        return resolve_environment_metadata(
+            executor_backend,
+            environment_mode=environment_mode,
+            source=environment_mode_source,
+        )
+    except ValueError:
+        return resolve_environment_metadata(
+            "antigravity-cli",
+            environment_mode=None,
+            source=environment_mode_source or "executor_default",
+        )
 
 
 def _check_transition(task: TaskRecord, target_phase: str) -> None:
@@ -67,6 +88,12 @@ class TaskRepository:
         authorization_summary: str | None = None,
         completion_policy: str = "auto",
         effective_policy_json: str | None = None,
+        environment_mode: str | None = None,
+        environment_mode_source: str | None = None,
+        skill_policy: str | None = None,
+        mcp_policy: str | None = None,
+        fallback_environment_mode: str | None = None,
+        fallback_reason: str | None = None,
         workflow_id: str | None = None,
         workflow_node_id: str | None = None,
         parent_task_id: str | None = None,
@@ -78,6 +105,19 @@ class TaskRepository:
         normalized_authorization_summary = authorization_summary or default_authorization_summary(
             normalized_authorization_profile
         )
+        environment = _resolve_attempt_environment_metadata(
+            executor_backend,
+            environment_mode=environment_mode,
+            environment_mode_source=environment_mode_source,
+        )
+        selected_skill_policy = skill_policy or environment.skill_policy
+        selected_mcp_policy = mcp_policy or environment.mcp_policy
+        selected_fallback_environment_mode = (
+            fallback_environment_mode
+            if fallback_environment_mode is not None
+            else environment.fallback_environment_mode
+        )
+        selected_fallback_reason = fallback_reason if fallback_reason is not None else environment.fallback_reason
         with connect(self.db_path) as conn:
             conn.execute(
                 """
@@ -120,10 +160,12 @@ class TaskRepository:
                 """
                 INSERT INTO task_attempts (
                   task_id, attempt_no, executor_backend, authorization_profile,
-                  requested_completion_policy, effective_policy_json, executor_session_id,
+                  requested_completion_policy, effective_policy_json,
+                  environment_mode, environment_mode_source, skill_policy, mcp_policy,
+                  fallback_environment_mode, fallback_reason, executor_session_id,
                   phase, terminal_receipt_json, terminal_source, started_at, finished_at,
                   created_at, updated_at
-                ) VALUES (?, 1, ?, ?, ?, ?, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
+                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
                 """,
                 (
                     task_id,
@@ -131,6 +173,12 @@ class TaskRepository:
                     normalized_authorization_profile,
                     normalized_completion_policy,
                     effective_policy_json,
+                    environment.environment_mode,
+                    environment.environment_mode_source,
+                    selected_skill_policy,
+                    selected_mcp_policy,
+                    selected_fallback_environment_mode,
+                    selected_fallback_reason,
                     now,
                     now,
                     now,
@@ -423,6 +471,12 @@ class TaskRepository:
         authorization_summary: str | None = None,
         completion_policy: str | None = None,
         effective_policy_json: str | None = None,
+        environment_mode: str | None = None,
+        environment_mode_source: str | None = None,
+        skill_policy: str | None = None,
+        mcp_policy: str | None = None,
+        fallback_environment_mode: str | None = None,
+        fallback_reason: str | None = None,
     ) -> TaskRecord:
         task = self.get_task(task_id)
         if task is None:
@@ -438,6 +492,19 @@ class TaskRepository:
             next_authorization_profile
         )
         next_completion_policy = normalize_completion_policy(completion_policy or task.completion_policy)
+        environment = _resolve_attempt_environment_metadata(
+            next_executor_backend,
+            environment_mode=environment_mode,
+            environment_mode_source=environment_mode_source,
+        )
+        selected_skill_policy = skill_policy or environment.skill_policy
+        selected_mcp_policy = mcp_policy or environment.mcp_policy
+        selected_fallback_environment_mode = (
+            fallback_environment_mode
+            if fallback_environment_mode is not None
+            else environment.fallback_environment_mode
+        )
+        selected_fallback_reason = fallback_reason if fallback_reason is not None else environment.fallback_reason
         with connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
@@ -481,10 +548,12 @@ class TaskRepository:
                 """
                 INSERT INTO task_attempts (
                   task_id, attempt_no, executor_backend, authorization_profile,
-                  requested_completion_policy, effective_policy_json, executor_session_id,
+                  requested_completion_policy, effective_policy_json,
+                  environment_mode, environment_mode_source, skill_policy, mcp_policy,
+                  fallback_environment_mode, fallback_reason, executor_session_id,
                   phase, terminal_receipt_json, terminal_source, started_at, finished_at,
                   created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
                 """,
                 (
                     task_id,
@@ -493,6 +562,12 @@ class TaskRepository:
                     next_authorization_profile,
                     next_completion_policy,
                     effective_policy_json,
+                    environment.environment_mode,
+                    environment.environment_mode_source,
+                    selected_skill_policy,
+                    selected_mcp_policy,
+                    selected_fallback_environment_mode,
+                    selected_fallback_reason,
                     now,
                     now,
                     now,
@@ -757,13 +832,25 @@ class TaskRepository:
 
     @staticmethod
     def _attempt_from_row(row) -> TaskAttemptRecord:
+        def get(name: str, default=None):
+            try:
+                return row[name]
+            except (IndexError, KeyError):
+                return default
+
         return TaskAttemptRecord(
             task_id=row["task_id"],
             attempt_no=row["attempt_no"],
             executor_backend=row["executor_backend"],
             authorization_profile=row["authorization_profile"],
             requested_completion_policy=row["requested_completion_policy"],
-            effective_policy_json=row["effective_policy_json"],
+            effective_policy_json=get("effective_policy_json"),
+            environment_mode=get("environment_mode", "managed-natural"),
+            environment_mode_source=get("environment_mode_source", "executor_default"),
+            skill_policy=get("skill_policy", "inherit"),
+            mcp_policy=get("mcp_policy", "inherit"),
+            fallback_environment_mode=get("fallback_environment_mode"),
+            fallback_reason=get("fallback_reason"),
             executor_session_id=row["executor_session_id"],
             phase=row["phase"],
             terminal_receipt_json=row["terminal_receipt_json"],

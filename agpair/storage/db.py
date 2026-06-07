@@ -218,6 +218,19 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         );
     """)
     conn.commit()
+    attempt_cols = {row[1] for row in conn.execute("PRAGMA table_info(task_attempts)").fetchall()}
+    attempt_defaults = {
+        "environment_mode": "TEXT NOT NULL DEFAULT 'managed-natural'",
+        "environment_mode_source": "TEXT NOT NULL DEFAULT 'executor_default'",
+        "skill_policy": "TEXT NOT NULL DEFAULT 'inherit'",
+        "mcp_policy": "TEXT NOT NULL DEFAULT 'inherit'",
+        "fallback_environment_mode": "TEXT",
+        "fallback_reason": "TEXT",
+    }
+    for column, ddl in attempt_defaults.items():
+        if column not in attempt_cols:
+            conn.execute(f"ALTER TABLE task_attempts ADD COLUMN {column} {ddl}")
+    conn.commit()
 
     # Migration 17: add V2 workflow columns to databases that already had early workflow tables.
     tables = {row[0] for row in conn.execute(

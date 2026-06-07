@@ -173,6 +173,57 @@ def _parse_direct_receipt(
     )
 
 
+def _balanced_json_object_candidates(body: str) -> list[str]:
+    candidates: list[str] = []
+    in_string = False
+    escape = False
+    start: int | None = None
+    depth = 0
+    for index, char in enumerate(body):
+        if start is None:
+            if char == "{":
+                start = index
+                depth = 1
+                in_string = False
+                escape = False
+            continue
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                candidates.append(body[start : index + 1])
+                start = None
+    return candidates
+
+
+def _receipt_from_json_candidates(
+    candidates: list[str],
+    *,
+    expected_status: str | None = None,
+    expected_task_id: str | None = None,
+) -> StructuredTerminalReceipt | None:
+    for candidate in reversed(candidates):
+        parsed = _parse_direct_receipt(
+            candidate,
+            expected_status=expected_status,
+            expected_task_id=expected_task_id,
+        )
+        if parsed is not None:
+            return parsed
+    return None
+
+
 def _wrapped_text_candidates(value: Any) -> list[str]:
     candidates: list[str] = []
     if isinstance(value, str):
@@ -211,6 +262,13 @@ def parse_structured_terminal_receipt(
     )
     if direct is not None:
         return direct
+    raw_candidate = _receipt_from_json_candidates(
+        _balanced_json_object_candidates(body),
+        expected_status=expected_status,
+        expected_task_id=expected_task_id,
+    )
+    if raw_candidate is not None:
+        return raw_candidate
     try:
         parsed = json.loads(body)
     except json.JSONDecodeError:

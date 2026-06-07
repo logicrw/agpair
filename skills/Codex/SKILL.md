@@ -7,7 +7,9 @@ description: "Use when Codex should delegate non-trivial coding, refactor, test-
 
 Default: external AGPair executor first for non-trivial work. Codex remains the controller and verifier.
 
-Use direct Codex edits for tiny local fixes, sensitive judgment-heavy work, or when AGPair is unavailable. Use Codex native subagents as fallback/review resources, not the default worker pool.
+Actively outsource low-value, repetitive, time-consuming, or easily verifiable work through AGPair: repo scans, alternative reviews, focused test-fix attempts, multi-file mechanical edits, smoke checks, and implementation slices with clear acceptance criteria.
+
+Use direct Codex edits for tiny local fixes, sensitive judgment-heavy work, or when AGPair is unavailable. Use Codex native subagents only after external executors are unavailable, unsuitable, or not good enough, or for narrow controller-side review/helper work.
 
 ## Normal Task
 
@@ -20,6 +22,8 @@ agpair task start \
 ```
 
 `task start` waits by default. After completion, inspect status, diff, receipt, raw logs, and required evidence before reporting success.
+
+Default executor environments are `managed-natural` for `antigravity-cli`, `grok-cli`, and healthy `claude-code`: AGPair manages state and evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config. Use `--environment-mode managed-restricted` or `--environment-mode isolated-bare` only for explicit diagnostics or evidence-backed retries.
 
 ## Parallel Or Async
 
@@ -48,6 +52,12 @@ agpair task retry TASK-123 --from-block --authorization-profile local_mutating
 ```
 
 `blocked(approval_required)` is terminal in V1. Retry starts a new attempt with structured blocked context and a dispatch-time authorization profile.
+
+If the previous attempt shows environment noise, tool loops, or no progress, switch environment mode on retry:
+
+```bash
+agpair task retry TASK-123 --from-block --environment-mode managed-restricted
+```
 
 ## Executor Order
 
