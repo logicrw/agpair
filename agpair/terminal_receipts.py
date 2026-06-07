@@ -35,6 +35,11 @@ _STATUS_ALIASES = {
     "ready_for_review": "EVIDENCE_PACK",
     "report": "EVIDENCE_PACK",
     "report_only": "EVIDENCE_PACK",
+    "success": "EVIDENCE_PACK",
+    "succeeded": "EVIDENCE_PACK",
+    "complete": "EVIDENCE_PACK",
+    "completed": "EVIDENCE_PACK",
+    "done": "EVIDENCE_PACK",
     "blocked": "BLOCKED",
     "block": "BLOCKED",
     "failed": "BLOCKED",
@@ -99,7 +104,8 @@ def validate_structured_receipt_dict(
 ) -> StructuredTerminalReceipt | None:
     if not isinstance(parsed, dict):
         return None
-    if parsed.get("schema_version") != "1":
+    schema_version = str(parsed.get("schema_version", "")).strip()
+    if schema_version not in {"1", "1.0"}:
         return None
 
     status = _normalize_status(parsed.get("status"))

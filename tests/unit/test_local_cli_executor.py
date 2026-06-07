@@ -150,6 +150,40 @@ def test_structured_receipt_from_logs_parses_pretty_wrapped_text(tmp_path):
     assert parsed.payload["changed_files"] == ["tests/fixtures/external_executor_smoke/grok-cli.txt"]
 
 
+def test_structured_receipt_from_logs_parses_claude_result_envelope(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    receipt = {
+        "schema_version": "1.0",
+        "task_id": "TASK-CLAUDE-RESULT",
+        "attempt_no": 1,
+        "review_round": 1,
+        "status": "success",
+        "summary": "Claude worker completed through CC Switch",
+        "payload": {
+            "claimed_state": "ready_for_review",
+            "changed_files": [],
+            "validation_not_run": "read-only smoke",
+            "scope_violations": [],
+            "report": "Smoke check passed",
+            "raw_log_path": "stdout.log",
+            "receipt_path": "receipt.json",
+        },
+    }
+    envelope = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": "中文结论：Smoke check passed.\n\n" + json.dumps(receipt, ensure_ascii=False),
+    }
+    (tmp_path / "stdout.log").write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
+
+    parsed = executor._structured_receipt_from_logs(tmp_path, "TASK-CLAUDE-RESULT")
+
+    assert parsed is not None
+    assert parsed.status == "EVIDENCE_PACK"
+    assert parsed.payload["report"] == "Smoke check passed"
+
+
 def test_poll_persists_final_summary_to_state_json(tmp_path):
     executor = DummyLocalCLIExecutor()
     (tmp_path / "rc.txt").write_text("0", encoding="utf-8")
