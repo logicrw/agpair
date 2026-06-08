@@ -42,17 +42,13 @@ Missing non-default executor binaries are warnings. They do not prevent AGPair f
 Codex:
 
 ```bash
-mkdir -p ~/.codex/skills/agpair
-cp "$PWD/skills/Codex/SKILL.md" ~/.codex/skills/agpair/SKILL.md
-agpair codex config --install --scope project --repo-path /path/to/repo
+agpair codex config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
 Claude Code:
 
 ```bash
-mkdir -p ~/.claude/skills/agpair
-cp "$PWD/skills/Claude/SKILL.md" ~/.claude/skills/agpair/SKILL.md
-agpair claude config --install --scope project --repo-path /path/to/repo
+agpair claude config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
 Hooks fail open if AGPair is unavailable. They are routing hints and completion guardrails, not a replacement for controller verification.

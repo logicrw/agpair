@@ -82,6 +82,78 @@ def test_codex_config_install_dry_run_prints_diff_without_writing(tmp_path: Path
     assert not (repo_path / ".codex" / "hooks.json").exists()
 
 
+def test_codex_config_sync_skill_dry_run_and_install(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    init_git_repo(repo_path)
+
+    dry_run = CliRunner().invoke(
+        app,
+        [
+            "codex",
+            "config",
+            "--install",
+            "--scope",
+            "project",
+            "--repo-path",
+            str(repo_path),
+            "--sync-skill",
+            "--dry-run",
+        ],
+    )
+
+    skill_path = repo_path / ".codex" / "skills" / "agpair" / "SKILL.md"
+    assert dry_run.exit_code == 0
+    assert str(skill_path) in dry_run.stdout
+    assert "agpair-codex" in dry_run.stdout
+    assert not skill_path.exists()
+
+    installed = CliRunner().invoke(
+        app,
+        [
+            "codex",
+            "config",
+            "--install",
+            "--scope",
+            "project",
+            "--repo-path",
+            str(repo_path),
+            "--sync-skill",
+        ],
+    )
+
+    assert installed.exit_code == 0
+    assert skill_path.exists()
+    assert "agpair-codex" in skill_path.read_text(encoding="utf-8")
+
+
+def test_codex_config_sync_skill_refuses_non_agpair_skill(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    init_git_repo(repo_path)
+    skill_path = repo_path / ".codex" / "skills" / "agpair" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("---\nname: custom\n---\n# Custom\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "codex",
+            "config",
+            "--install",
+            "--scope",
+            "project",
+            "--repo-path",
+            str(repo_path),
+            "--sync-skill",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Refusing to manage non-AGPair skill" in result.stderr
+    assert "name: custom" in skill_path.read_text(encoding="utf-8")
+
+
 def test_codex_hooks_fail_open_when_state_is_unreadable(monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", "/path/that/does/not/exist")
 

@@ -15,6 +15,7 @@ from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
 from agpair.targets import resolve_repo_path
 from agpair.terminal_receipts import parse_structured_terminal_receipt
+from agpair.cli.skill_sync import bundled_skill_path, plan_skill_sync
 
 app = typer.Typer(no_args_is_help=True)
 hook_app = typer.Typer(no_args_is_help=True)
@@ -210,6 +211,7 @@ def config(
     install: bool = typer.Option(False, "--install", help="Install AGPair-managed Codex hooks."),
     uninstall: bool = typer.Option(False, "--uninstall", help="Remove AGPair-managed Codex hooks."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print a unified diff instead of writing changes."),
+    sync_skill: bool = typer.Option(False, "--sync-skill", help="Also sync the AGPair Codex skill into the selected scope."),
     scope: str = typer.Option("project", "--scope", help="project or user"),
     repo_path: str | None = typer.Option(None, "--repo-path"),
 ) -> None:
@@ -227,11 +229,27 @@ def config(
     before = _render_settings(current) if current else ""
     updated = _uninstall_managed_config(current) if uninstall else _merge_managed_config(current)
     after = _render_settings(updated) if updated else ""
+    skill_plan = None
+    if sync_skill:
+        try:
+            skill_plan = plan_skill_sync(
+                source_path=bundled_skill_path("Codex"),
+                target_path=path.parent / "skills" / "agpair" / "SKILL.md",
+                uninstall=uninstall,
+            )
+        except RuntimeError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1)
     if dry_run:
         _emit_diff(path, before, after)
+        if skill_plan is not None:
+            typer.echo(skill_plan.diff(), nl=False)
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(after, encoding="utf-8")
+    if skill_plan is not None:
+        skill_plan.apply()
+        typer.echo(str(skill_plan.target_path))
     typer.echo(str(path))
 
 

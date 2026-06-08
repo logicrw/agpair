@@ -13,7 +13,7 @@ Each active executor must define one profile entry with:
 - default authorization profile and safety metadata
 - supported completion policies and receipt capability
 - noninteractive command shape owned by the adapter
-- default environment mode, skill policy, MCP policy, fallback environment modes
+- default environment mode, skill policy, and MCP policy
 - isolation profile and health probe metadata
 - controller suppression rules
 - lifecycle status and replacement guidance
@@ -70,16 +70,14 @@ Minimum verification for a new active executor:
 - unit tests for command construction with a fake binary;
 - unit tests proving declared profile isolation and noninteractive flags match
   the adapter's default command;
-- unit tests proving default `managed-natural` commands do not disable skills,
-  memory, subagents, web, plugins, or MCP unless that executor's default mode is
-  explicitly isolated;
-- unit tests proving explicit fallback modes add only their documented
-  restrictions;
+- unit tests proving default `managed-natural` commands and health probes do
+  not disable skills, memory, subagents, web, plugins, or MCP;
 - unit tests proving isolated auth requirements produce a pre-dispatch blocker
   when the required env/settings source is absent;
 - doctor test proving binary and launch probes surface through the common schema;
 - task dispatch test proving completion policies are honored;
-- smoke harness entry proving the executor can run in a disposable worktree;
+- smoke harness entry proving the executor can produce an adoptable result in a
+  disposable worktree;
 - docs/skills update naming the executor only in the shared routing order.
 
 ## Offboarding
@@ -127,8 +125,8 @@ use:
 - Claude Code controller: `antigravity-cli`, `grok-cli`, `codex`.
 
 Diagnostic all-registered smoke may include self executors with an explicit
-allow-self flag. It should report every active executor as `success`, `skipped`,
-or a precise blocker such as `executor_unavailable`,
+allow-self flag. It should report every active executor as `adoptable_result`,
+`skipped`, or a precise blocker such as `executor_unavailable`,
 `executor_quota_exhausted`, `no_progress_timeout`, or
 `report_output_missing`.
 

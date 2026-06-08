@@ -41,6 +41,48 @@ def _is_fresh(iso_timestamp: str | None, cutoff: datetime) -> bool:
         return False
 
 
+_BOOTSTRAP_STDERR_NOISE_MARKERS = (
+    "plugin discovered",
+    "plugin manifest",
+    "skill name mismatch",
+    "agent definition parse failure",
+    "mcp-debugger",
+    "broken pipe",
+    "session registry sync",
+    "grep timed out",
+)
+
+
+def _stderr_has_useful_signal(path: Path) -> bool:
+    """Return True when stderr contains more than bootstrap/plugin noise."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")[-16384:]
+    except OSError:
+        return False
+    lines = [line.strip().lower() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+    for line in lines:
+        if not any(marker in line for marker in _BOOTSTRAP_STDERR_NOISE_MARKERS):
+            return True
+    return False
+
+
+REPORT_ONLY_NO_PROGRESS_SECONDS: float = 180.0
+
+
+def effective_no_progress_seconds(
+    task: TaskRecord,
+    configured_seconds: float = DEFAULT_FRESHNESS_SECONDS,
+) -> float:
+    """Return the no-progress freshness window for this task shape."""
+    completion_policy = str(getattr(task, "completion_policy", "") or "").lower()
+    authorization_profile = str(getattr(task, "authorization_profile", "") or "").lower()
+    if completion_policy == "report" or authorization_profile == "local_readonly":
+        return min(configured_seconds, REPORT_ONLY_NO_PROGRESS_SECONDS)
+    return configured_seconds
+
+
 def _latest_output_timestamp(task: TaskRecord) -> str | None:
     session_id = getattr(task, "executor_session_id", None) or getattr(task, "antigravity_session_id", None)
     if not session_id:
@@ -54,6 +96,8 @@ def _latest_output_timestamp(task: TaskRecord) -> str | None:
         except OSError:
             continue
         if not path.is_file() or stat.st_size <= 0:
+            continue
+        if filename == "stderr.log" and not _stderr_has_useful_signal(path):
             continue
         modified = datetime.fromtimestamp(stat.st_mtime, UTC)
         if latest is None or modified > latest:

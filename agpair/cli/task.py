@@ -40,7 +40,7 @@ from agpair.models import (
     authorization_profile_summary,
     validate_authorization_profile,
 )
-from agpair.runtime_liveness import LivenessState, classify_liveness, is_task_live
+from agpair.runtime_liveness import LivenessState, classify_liveness, effective_no_progress_seconds, is_task_live
 from agpair.terminal_receipts import (
     blocked_failure_context_from_receipt,
     committed_result_from_receipt,
@@ -465,7 +465,12 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         )
     )
 
-    liveness = classify_liveness(task) if task.phase == "acked" else None
+    no_progress_threshold_seconds = effective_no_progress_seconds(task)
+    liveness = (
+        classify_liveness(task, freshness_seconds=no_progress_threshold_seconds)
+        if task.phase == "acked"
+        else None
+    )
     waiters = WaiterRepository(paths.db_path)
     waiter = waiters.get_active_waiter(task.task_id)
     terminal_receipt = _latest_terminal_receipt(paths, task.task_id, task.terminal_receipt_json) if task.phase in TERMINAL_PHASES else None
@@ -528,6 +533,7 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "authorization_profile": task.authorization_profile,
         "authorization_summary": task.authorization_summary,
         "retry_recommended": task.retry_recommended,
+        "no_progress_threshold_seconds": no_progress_threshold_seconds,
         "stuck_reason": task.stuck_reason,
         "last_heartbeat_at": task.last_heartbeat_at,
         "last_workspace_activity_at": last_workspace_activity_at,
@@ -701,6 +707,21 @@ _INTERVAL_OPTION = typer.Option(DEFAULT_INTERVAL_SECONDS, "--interval-seconds", 
 _TIMEOUT_OPTION = typer.Option(DEFAULT_TIMEOUT_SECONDS, "--timeout-seconds", help="Maximum seconds to wait before timing out.")
 _JSON_OPTION = typer.Option(False, "--json", help="Emit machine-readable JSON.")
 
+_MINIMUM_TASK_BODY_TEMPLATE = """Minimum task body template:
+
+Goal:
+Describe the concrete outcome.
+
+Scope:
+Name the files, directories, or evidence boundaries.
+
+Required changes:
+For report-only tasks, write: None. This is report-only. Do not edit files.
+
+Exit criteria:
+Describe the report, diff, tests, or receipt needed for controller verification.
+"""
+
 
 # ---------------------------------------------------------------------------
 # task start
@@ -721,7 +742,11 @@ def _validate_task_body(body: str) -> None:
     required_sections = ["goal", "scope", "required changes", "exit criteria"]
     missing = [s for s in required_sections if s not in lower_body]
     if missing:
-        typer.echo(f"Refused: task body is missing key structural sections: {', '.join(missing)}", err=True)
+        typer.echo(
+            f"Refused: task body is missing key structural sections: {', '.join(missing)}\n\n"
+            f"{_MINIMUM_TASK_BODY_TEMPLATE}",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
 
@@ -1032,6 +1057,7 @@ def task_status(
     typer.echo(f"attempt_no: {payload['attempt_no']}")
     typer.echo(f"retry_count: {payload['retry_count']}")
     typer.echo(f"retry_recommended: {payload['retry_recommended']}")
+    typer.echo(f"no_progress_threshold_seconds: {payload['no_progress_threshold_seconds']}")
     typer.echo(f"stuck_reason: {payload['stuck_reason']}")
     typer.echo(f"last_heartbeat_at: {payload['last_heartbeat_at']}")
     typer.echo(f"last_workspace_activity_at: {payload['last_workspace_activity_at']}")
@@ -1564,6 +1590,7 @@ def watch_task(
                     "executor_output_excerpt": payload.get("executor_output_excerpt"),
                     "active_attempt_artifacts": payload.get("active_attempt_artifacts"),
                     "last_executor_output_at": payload.get("last_executor_output_at"),
+                    "no_progress_threshold_seconds": payload.get("no_progress_threshold_seconds"),
                     "payload": payload,
                 }, ensure_ascii=False))
             else:

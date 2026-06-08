@@ -4,18 +4,11 @@ AGPair 面向 Claude Code 的定位很简单：Claude Code 是主控和验收者
 
 ## 推荐安装
 
-### Skill
-
-```bash
-mkdir -p ~/.claude/skills/agpair
-cp /absolute/path/to/agpair/skills/Claude/SKILL.md ~/.claude/skills/agpair/SKILL.md
-```
-
-### Hooks 和 Status Line
+### Hooks、Status Line 和 Skill
 
 ```bash
 agpair claude config
-agpair claude config --install --scope project --repo-path "$REPO"
+agpair claude config --install --scope project --repo-path "$REPO" --sync-skill
 ```
 
 `agpair claude config` 管理这些 Claude Code 配置：

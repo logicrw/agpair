@@ -45,6 +45,55 @@ def seed_task(tmp_path: Path, task_id: str = "TASK-1", completion_policy: str = 
     return paths
 
 
+def test_finalize_report_policy_blocks_summary_only_receipt_without_report(tmp_path: Path) -> None:
+    from agpair.task_terminal import finalize_executor_receipt
+    from agpair.transport import messages
+
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    repo = TaskRepository(paths.db_path)
+    repo.create_task(
+        task_id="TASK-REPORT-FINALIZE",
+        repo_path=str(tmp_path / "repo"),
+        authorization_profile="local_readonly",
+        completion_policy="report",
+    )
+    task = repo.get_task("TASK-REPORT-FINALIZE")
+    assert task is not None
+
+    decision = finalize_executor_receipt(
+        state_root=paths.root,
+        tasks=repo,
+        journal=JournalRepository(paths.db_path),
+        task=task,
+        raw_receipt={
+            "schema_version": "1",
+            "task_id": "TASK-REPORT-FINALIZE",
+            "attempt_no": 1,
+            "review_round": 0,
+            "status": messages.EVIDENCE_PACK,
+            "summary": "Only a status summary, not a report.",
+            "payload": {
+                "changed_files": [],
+                "scope_violations": [],
+                "validation_not_run": "test receipt",
+                "exit_code": 0,
+            },
+        },
+        source="test",
+        message_id="msg-report-finalize",
+    )
+
+    assert decision.ok is False
+    assert decision.blocker_type == "report_output_missing"
+    task_after = repo.get_task("TASK-REPORT-FINALIZE")
+    assert task_after is not None
+    assert task_after.phase == "blocked"
+    receipt = json.loads(task_after.terminal_receipt_json or "{}")
+    assert receipt["payload"]["blocker_type"] == "report_output_missing"
+    assert "commit" not in receipt["summary"].lower()
+
+
 def test_direct_commit_policy_rejects_evidence_pack(tmp_path: Path) -> None:
     from agpair.daemon.loop import run_once
 

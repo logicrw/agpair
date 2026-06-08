@@ -693,6 +693,40 @@ def test_plain_acked_no_progress_exits_before_hard_timeout(tmp_path: Path):
     assert result.watchdog_triggered is True
 
 
+def test_report_only_task_uses_shorter_no_progress_window(tmp_path: Path):
+    """Report-only/local_readonly tasks should not wait for the generic 300s silence window."""
+    repo = _make_repo(tmp_path)
+    repo.create_task(
+        task_id="T-WD-REPORT-NOPROGRESS",
+        repo_path="/r",
+        authorization_profile="local_readonly",
+        completion_policy="report",
+    )
+    repo.mark_acked(task_id="T-WD-REPORT-NOPROGRESS", session_id="s-report")
+
+    started_at = datetime(2026, 3, 24, 11, 56, tzinfo=UTC).isoformat()
+    with sqlite3.connect(_make_paths(tmp_path).db_path) as conn:
+        conn.execute(
+            "UPDATE tasks SET last_activity_at=?, updated_at=? WHERE task_id=?",
+            (started_at, started_at, "T-WD-REPORT-NOPROGRESS"),
+        )
+        conn.commit()
+
+    result = wait_for_terminal_phase(
+        _make_paths(tmp_path).db_path,
+        "T-WD-REPORT-NOPROGRESS",
+        interval_seconds=5,
+        timeout_seconds=600,
+        heartbeat_silence_seconds=300,
+        _clock=FakeClock(),
+        _utcnow=lambda: datetime(2026, 3, 24, 12, 0, tzinfo=UTC),
+    )
+
+    assert result.timed_out is False
+    assert result.phase == "acked"
+    assert result.watchdog_triggered is True
+
+
 def test_acked_plus_retry_recommended_exits_early(tmp_path: Path):
     """acked + retry_recommended=true should exit early as watchdog failure."""
     repo = _make_repo(tmp_path)

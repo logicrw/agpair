@@ -412,6 +412,28 @@ def test_task_status_json_returns_structured_payload(tmp_path: Path, monkeypatch
     assert payload["liveness_state"] in {"active_via_heartbeat", "silent", "active_via_workspace"}
 
 
+def test_task_status_json_includes_effective_no_progress_threshold(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(
+        task_id="TASK-REPORT-THRESHOLD",
+        repo_path="/tmp/repo",
+        authorization_profile="local_readonly",
+        completion_policy="report",
+    )
+    repo.mark_acked(task_id="TASK-REPORT-THRESHOLD", session_id="session-report-threshold")
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-REPORT-THRESHOLD", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["no_progress_threshold_seconds"] == 180.0
+
+    human = CliRunner().invoke(app, ["task", "status", "TASK-REPORT-THRESHOLD"])
+    assert human.exit_code == 0
+    assert "no_progress_threshold_seconds: 180.0" in human.stdout
+
+
 def test_task_status_json_and_human_include_live_attempt_artifact_metadata(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = make_task_repo(tmp_path)
@@ -1557,6 +1579,10 @@ def test_task_start_rejects_missing_sections(tmp_path: Path, monkeypatch) -> Non
     assert result.exit_code == 1
     assert "Refused" in result.stderr
     assert "exit criteria" in result.stderr
+    assert "Minimum task body template:" in result.stderr
+    assert "Required changes:" in result.stderr
+    assert "None. This is report-only. Do not edit files." in result.stderr
+    assert "Exit criteria:" in result.stderr
 
 
 def test_task_start_rejects_placeholder(tmp_path: Path, monkeypatch) -> None:

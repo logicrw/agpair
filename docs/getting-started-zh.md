@@ -42,17 +42,13 @@ agpair doctor --repo-path /path/to/repo
 Codex：
 
 ```bash
-mkdir -p ~/.codex/skills/agpair
-cp "$PWD/skills/Codex/SKILL.md" ~/.codex/skills/agpair/SKILL.md
-agpair codex config --install --scope project --repo-path /path/to/repo
+agpair codex config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
 Claude Code：
 
 ```bash
-mkdir -p ~/.claude/skills/agpair
-cp "$PWD/skills/Claude/SKILL.md" ~/.claude/skills/agpair/SKILL.md
-agpair claude config --install --scope project --repo-path /path/to/repo
+agpair claude config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
 AGPair 不可用时 hook 会 fail open。它们只是路由提示和结束护栏，不能替代主控验收。

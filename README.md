@@ -83,19 +83,15 @@ If a retry is not the right recovery path, switch to another external executor o
 Codex:
 
 ```bash
-mkdir -p ~/.codex/skills/agpair
-cp "$PWD/skills/Codex/SKILL.md" ~/.codex/skills/agpair/SKILL.md
 agpair codex config
-agpair codex config --install --scope project --repo-path /path/to/repo
+agpair codex config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
 Claude Code:
 
 ```bash
-mkdir -p ~/.claude/skills/agpair
-cp "$PWD/skills/Claude/SKILL.md" ~/.claude/skills/agpair/SKILL.md
 agpair claude config
-agpair claude config --install --scope project --repo-path /path/to/repo
+agpair claude config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
 To let Codex use the external `claude-code` worker, AGPair uses Claude auth
@@ -141,7 +137,7 @@ V1 does not pause a running executor for live approval. Out-of-scope work should
 
 ## Review Gate
 
-`ready_for_review`, `evidence_ready`, and `committed` are not automatic success. The controller must inspect the AGPair status, git diff/commit evidence, receipts, raw log paths when needed, and run the relevant verification before reporting completion.
+`ready_for_review`, `evidence_ready`, and `committed` are not automatic success. The controller must inspect the AGPair status, git diff/commit evidence, receipts, raw log paths when needed, and run the relevant verification before reporting completion. Real executor smoke also requires `all_success=true` and `adoptable_result=true` for each attempted executor; dispatch or phase success alone is not enough.
 
 After the controller accepts the evidence, mark the task accepted so Stop hooks do not keep blocking on the same receipt:
 

@@ -83,17 +83,18 @@ def is_watchdog_triggered(
     """Return True if an acked task has no fresh liveness signals."""
     from datetime import UTC, datetime
 
-    from agpair.runtime_liveness import LivenessState, classify_liveness
+    from agpair.runtime_liveness import LivenessState, classify_liveness, effective_no_progress_seconds
 
     if task is None or task.phase != "acked":
         return False
 
     utcnow_fn = _utcnow or (lambda: datetime.now(UTC))
     now_dt = utcnow_fn()  # type: ignore[operator]
+    effective_silence_seconds = effective_no_progress_seconds(task, heartbeat_silence_seconds)
     liveness = classify_liveness(
         task,
         now=now_dt,
-        freshness_seconds=heartbeat_silence_seconds,
+        freshness_seconds=effective_silence_seconds,
     )
     if liveness != LivenessState.silent:
         return False
@@ -107,7 +108,7 @@ def is_watchdog_triggered(
             dt = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
         except (ValueError, TypeError):
             continue
-        if (now_dt - dt).total_seconds() < heartbeat_silence_seconds:
+        if (now_dt - dt).total_seconds() < effective_silence_seconds:
             return False
     return True
 

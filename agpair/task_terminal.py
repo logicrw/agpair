@@ -20,7 +20,11 @@ from agpair.completion import (
 )
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
-from agpair.terminal_receipts import validate_structured_receipt_dict, validate_terminal_receipt_payload
+from agpair.terminal_receipts import (
+    parse_structured_terminal_receipt,
+    validate_structured_receipt_dict,
+    validate_terminal_receipt_payload,
+)
 from agpair.transport import messages
 
 
@@ -59,8 +63,10 @@ def finalize_executor_receipt(
             stderr_candidate.write_text("", encoding="utf-8")
         stderr_path = str(stderr_candidate)
 
-    output_excerpt = read_excerpt(stdout_path, max_chars=2000) or read_excerpt(stderr_path, max_chars=2000)
-    report_text = _report_text_from_receipt_or_output(receipt, output_excerpt)
+    stdout_excerpt = read_excerpt(stdout_path, max_chars=2000)
+    stderr_excerpt = read_excerpt(stderr_path, max_chars=2000)
+    output_excerpt = stdout_excerpt or stderr_excerpt
+    report_text = _report_text_from_receipt_or_output(receipt, stdout_excerpt)
     report_path = write_text(attempt_dir / "report.md", report_text) if report_text else None
 
     payload["raw_log_path"] = stdout_path
@@ -200,14 +206,28 @@ def _report_text_from_receipt_or_output(receipt: Mapping[str, Any], output_excer
     payload = receipt.get("payload") if isinstance(receipt.get("payload"), Mapping) else {}
     report = payload.get("report") if isinstance(payload, Mapping) else None
     summary = receipt.get("summary")
+    stdout_report = _stdout_report_text(output_excerpt)
     sections: list[str] = []
-    if isinstance(summary, str) and summary.strip():
+    if (isinstance(report, str) and report.strip() or stdout_report) and isinstance(summary, str) and summary.strip():
         sections.append("# Executor Report\n\n" + summary.strip())
     if isinstance(report, str) and report.strip():
         sections.append(report.strip())
-    if output_excerpt:
-        sections.append("## Executor Output Excerpt\n\n```text\n" + output_excerpt.strip() + "\n```")
+    if stdout_report:
+        sections.append("## Executor Stdout Report\n\n```text\n" + stdout_report + "\n```")
     return "\n\n".join(sections) if sections else None
+
+
+def _stdout_report_text(output_excerpt: str | None) -> str | None:
+    text = (output_excerpt or "").strip()
+    if not text:
+        return None
+    if parse_structured_terminal_receipt(text) is not None and text.startswith("{"):
+        return None
+    lines = text.splitlines()
+    while lines and parse_structured_terminal_receipt(lines[-1].strip()) is not None:
+        lines.pop()
+    report = "\n".join(lines).strip()
+    return report or None
 
 
 def _int_value(value: Any) -> int | None:

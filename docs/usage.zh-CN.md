@@ -209,6 +209,10 @@ plugins 和 provider 配置。如果外部 attempt 不够好，就自然模式�
 - `AGPAIR_CLAUDE_CODE_MAX_RETRIES=<integer>`
   默认：`0`。AGPair 会给 worker 设置 `CLAUDE_CODE_MAX_RETRIES`，让无效
   OAuth / API credential 快速失败，而不是静默重试。
+  `agpair doctor --fresh` 的 live auth probe 也使用同一个 managed-natural
+  Claude Code surface；不会使用 bare mode，也不会禁用 skills/MCP。health JSON
+  会为这条路径报告 `auth_satisfied`、`auth_probe_environment_mode`、
+  `auth_probe_skill_policy` 和 `auth_probe_mcp_policy`。
 - `AGPAIR_CLAUDE_CODE_SETTINGS=/absolute/path/to/settings.json`
   API mode 下可选 Claude Code settings JSON 或路径。
   可用下面的命令生成安全模板：
@@ -344,6 +348,7 @@ agpair claude hook subagent-start
 - `--scope project|user`：选择当前 repo 下的 `.claude/settings.json` 或 `~/.claude/settings.json`；默认 `project`
 - `--dry-run`：只打印 unified diff，不写盘
 - `--uninstall`：只移除 AGPair 自己管理的条目
+- `--sync-skill`：同时管理 `.claude/skills/agpair/SKILL.md` 或 `~/.claude/skills/agpair/SKILL.md`
 - `--force`：显式覆盖非 AGPair 管理的 `statusLine`
 
 安全约束：
@@ -351,6 +356,7 @@ agpair claude hook subagent-start
 - 遇到非 AGPair 管理的 `statusLine`，默认保留原值并继续同步 AGPair hooks；只有显式 `--force` 才会替换它
 - hook 按 AGPair command identity 追加 / 去重，保留其他 Claude Code hook
 - `--uninstall` 只移除 AGPair 自己的条目，不碰无关配置
+- skill sync 只管理 AGPair skill 路径，遇到非 AGPair skill 会拒绝覆盖
 
 设计取舍：
 
@@ -369,7 +375,7 @@ AGPair 可以输出或安装 Codex hook 配置，让 Codex 对非平凡任务优
 
 ```bash
 agpair codex config
-agpair codex config --install --scope project --repo-path "$REPO"
+agpair codex config --install --scope project --repo-path "$REPO" --sync-skill
 ```
 
 AGPair 管理的 hooks：
@@ -377,6 +383,10 @@ AGPair 管理的 hooks：
 - `UserPromptSubmit`：注入简短 external-first 上下文。
 - `Stop`：只在未接受的 `ready_for_review`、`approval_required` 等需要 Codex 决策的状态阻止过早结束。
 - `SubagentStart`：只给 advisory context；Codex native subagents 仍是 fallback / review 资源。
+
+`--install`、`--uninstall` 和 `--dry-run` 可搭配 `--sync-skill`，只管理
+`.codex/skills/agpair/SKILL.md` 或 `~/.codex/skills/agpair/SKILL.md`
+这一条 AGPair skill 路径。AGPair 遇到非 AGPair skill 会拒绝覆盖。
 
 异步任务使用低噪等待：
 
@@ -518,7 +528,8 @@ Code 原生 subagent。
 发布、提交 PR 或 push 前：
 
 - 跑目标测试和完整 unit/integration suite。
-- 跑 controller matrix 的真实 smoke，smoke report 只留本地。
+- 跑 controller matrix 的真实 smoke，要求 `all_success=true`，且每个尝试过的
+  executor 都是 `adoptable_result=true`；smoke report 只留本地。
 - 跑 `git diff --check`。
 - 检查 `git status --short --untracked-files=all`。
 - 不要提交 `.agpair/`、`~/.agpair`、raw executor logs、本地 receipts、session transcripts、个人 Codex/Claude 配置或生成的 hook debug 输出。

@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from agpair.executors.claude_auth import _run_probe
+from agpair.executors.claude_auth import DEFAULT_LIVE_PROBE_TIMEOUT_SECONDS, _live_probe_timeout, _run_probe
 from agpair.executors import get_executor, is_local_cli_backend
 from agpair.executors.policy import EXECUTOR_SPECS, executor_health_snapshot, resolve_controller_policy
 from agpair.executors.registry import active_executor_ids, executor_start_blocker
@@ -51,6 +51,18 @@ def _process_exists(pid: int) -> bool:
     except ProcessLookupError:
         return False
     return True
+
+
+def test_claude_live_probe_timeout_default_is_realistic(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AGPAIR_CLAUDE_CODE_LIVE_PROBE_TIMEOUT_SECONDS", raising=False)
+    assert _live_probe_timeout() == DEFAULT_LIVE_PROBE_TIMEOUT_SECONDS
+    assert _live_probe_timeout() >= 30
+
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_LIVE_PROBE_TIMEOUT_SECONDS", "12.5")
+    assert _live_probe_timeout() == 12.5
+
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_LIVE_PROBE_TIMEOUT_SECONDS", "bad")
+    assert _live_probe_timeout() == DEFAULT_LIVE_PROBE_TIMEOUT_SECONDS
 
 
 def test_claude_probe_timeout_kills_child_process_group(tmp_path: Path) -> None:
@@ -245,12 +257,21 @@ def test_claude_oauth_live_probe_detects_invalid_auth(monkeypatch, tmp_path: Pat
 
 def test_claude_auto_auth_falls_back_to_ccswitch_provider(monkeypatch, tmp_path: Path) -> None:
     fake_binary = tmp_path / "claude"
+    args_log = tmp_path / "claude-args.log"
     fake_binary.write_text(
-        '#!/bin/sh\nif [ "$1" = "auth" ] && [ "$2" = "status" ]; then '
-        'printf "{\\"loggedIn\\":true,\\"authMethod\\":\\"oauth_token\\"}\\n"; exit 0; fi\n'
-        'if [ "$ANTHROPIC_API_KEY" = "test-secret" ]; then '
-        'printf "{\\"type\\":\\"result\\",\\"subtype\\":\\"success\\",\\"is_error\\":false}\\n"; exit 0; fi\n'
-        'printf "{\\"type\\":\\"result\\",\\"is_error\\":true,\\"api_error_status\\":401}\\n"\nexit 0\n',
+        f"""#!/bin/sh
+printf '%s\\n' "$*" >> {str(args_log)!r}
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf '{{"loggedIn":true,"authMethod":"oauth_token"}}\\n'
+  exit 0
+fi
+if [ "$ANTHROPIC_API_KEY" = "test-secret" ]; then
+  printf '{{"type":"result","subtype":"success","is_error":false}}\\n'
+  exit 0
+fi
+printf '{{"type":"result","is_error":true,"api_error_status":401}}\\n'
+exit 0
+""",
         encoding="utf-8",
     )
     fake_binary.chmod(0o755)
@@ -266,15 +287,29 @@ def test_claude_auto_auth_falls_back_to_ccswitch_provider(monkeypatch, tmp_path:
     assert health["last_failure_type"] is None
     assert health["auth_mode"] == "ccswitch"
     assert health["ccswitch_provider"] == "Kimi Claude Code"
+    assert health["auth_satisfied"] is True
+    assert health["auth_probe_environment_mode"] == "managed-natural"
+    assert health["auth_probe_skill_policy"] == "inherit"
+    assert health["auth_probe_mcp_policy"] == "inherit"
     assert "test-secret" not in json.dumps(health)
+    args = args_log.read_text(encoding="utf-8")
+    for forbidden in ("--bare", "--strict-mcp-config", "--mcp-config", "--disable-slash-commands", "--no-chrome"):
+        assert forbidden not in args
 
 
 def test_claude_oauth_live_probe_accepts_success(monkeypatch, tmp_path: Path) -> None:
     fake_binary = tmp_path / "claude"
+    args_log = tmp_path / "claude-args.log"
     fake_binary.write_text(
-        '#!/bin/sh\nif [ "$1" = "auth" ] && [ "$2" = "status" ]; then '
-        'printf "{\\"loggedIn\\":true,\\"authMethod\\":\\"oauth_token\\"}\\n"; exit 0; fi\n'
-        'printf "{\\"type\\":\\"result\\",\\"subtype\\":\\"success\\",\\"is_error\\":false}\\n"\nexit 0\n',
+        f"""#!/bin/sh
+printf '%s\\n' "$*" >> {str(args_log)!r}
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf '{{"loggedIn":true,"authMethod":"oauth_token"}}\\n'
+  exit 0
+fi
+printf '{{"type":"result","subtype":"success","is_error":false}}\\n'
+exit 0
+""",
         encoding="utf-8",
     )
     fake_binary.chmod(0o755)
@@ -285,7 +320,42 @@ def test_claude_oauth_live_probe_accepts_success(monkeypatch, tmp_path: Path) ->
 
     assert health["available"] is True
     assert health["isolation_auth_satisfied"] is True
+    assert health["auth_satisfied"] is True
+    assert health["auth_probe_environment_mode"] == "managed-natural"
     assert health["last_failure_type"] is None
+    args = args_log.read_text(encoding="utf-8")
+    for forbidden in ("--bare", "--strict-mcp-config", "--mcp-config", "--disable-slash-commands", "--no-chrome"):
+        assert forbidden not in args
+
+
+def test_claude_live_probe_redacts_ccswitch_secret_from_errors(monkeypatch, tmp_path: Path) -> None:
+    fake_binary = tmp_path / "claude"
+    fake_binary.write_text(
+        """#!/bin/sh
+if [ "$1" = "--help" ]; then
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf '{"loggedIn":false,"authMethod":null}\\n'
+  exit 0
+fi
+printf 'bad token %s\\n' "$ANTHROPIC_API_KEY" >&2
+exit 1
+""",
+        encoding="utf-8",
+    )
+    fake_binary.chmod(0o755)
+    _write_ccswitch_provider(tmp_path / ".cc-switch")
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_BIN", str(fake_binary))
+    monkeypatch.setenv("AGPAIR_CC_SWITCH_HOME", str(tmp_path / ".cc-switch"))
+    monkeypatch.delenv("AGPAIR_CLAUDE_CODE_AUTH_MODE", raising=False)
+
+    health = executor_health_snapshot(run_launch_probe=True)["claude-code"]
+
+    assert health["available"] is False
+    assert health["last_failure_type"] == "executor_auth_required"
+    assert "test-secret" not in json.dumps(health)
+    assert "<redacted>" in health["last_error_excerpt"]
 
 
 def test_isolated_auth_requirement_can_be_satisfied_by_settings(monkeypatch, tmp_path: Path) -> None:

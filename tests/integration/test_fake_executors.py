@@ -154,7 +154,7 @@ def test_fake_executor_malformed_receipt_does_not_reach_ready_for_review(tmp_pat
 
     assert task.phase == "blocked"
     receipt = json.loads(latest_terminal_event(paths, "TASK-FAKE-MALFORMED").body)
-    assert receipt["payload"]["blocker_type"] in {"missing_commit", "validation_failure"}
+    assert receipt["payload"]["blocker_type"] == "validation_failure"
 
 
 def test_fake_executor_scope_violation_is_not_silently_accepted(tmp_path: pathlib.Path, monkeypatch) -> None:

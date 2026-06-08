@@ -199,6 +199,10 @@ Local CLI approval modes can be adjusted with environment variables:
 - `AGPAIR_CLAUDE_CODE_MAX_RETRIES=<integer>`
   Default: `0`. AGPair sets `CLAUDE_CODE_MAX_RETRIES` for worker launches so
   invalid OAuth/API credentials fail quickly instead of silently retrying.
+  `agpair doctor --fresh` uses the same managed-natural Claude Code surface for
+  live auth probes; it does not use bare mode or disable skills/MCP. The health
+  JSON reports `auth_satisfied`, `auth_probe_environment_mode`,
+  `auth_probe_skill_policy`, and `auth_probe_mcp_policy` for this path.
 - `AGPAIR_CLAUDE_CODE_SETTINGS=/absolute/path/to/settings.json`
   Optional Claude Code settings JSON or path for API mode.
   Generate a safe template with:
@@ -356,6 +360,7 @@ Config management flags:
 - `--scope project|user`: choose `.claude/settings.json` in the current repo or `~/.claude/settings.json`; default is `project`
 - `--dry-run`: print a unified diff without writing
 - `--uninstall`: remove only AGPair-managed entries
+- `--sync-skill`: also manage the AGPair skill at `.claude/skills/agpair/SKILL.md` or `~/.claude/skills/agpair/SKILL.md`
 - `--force`: replace a conflicting non-AGPair `statusLine`
 
 Safety rules:
@@ -363,6 +368,7 @@ Safety rules:
 - AGPair never overwrites a foreign `statusLine` unless `--force` is passed.
 - AGPair preserves unrelated hook entries and only de-duplicates by AGPair command identity.
 - Uninstall removes only AGPair-managed entries and leaves unrelated settings untouched.
+- Skill sync manages only the AGPair skill path and refuses to overwrite a non-AGPair skill.
 
 Notes:
 
@@ -381,7 +387,7 @@ AGPair can emit Codex hook config so Codex prefers external CLI executors for no
 
 ```bash
 agpair codex config
-agpair codex config --install --scope project --repo-path "$REPO"
+agpair codex config --install --scope project --repo-path "$REPO" --sync-skill
 ```
 
 Managed hooks:
@@ -389,6 +395,11 @@ Managed hooks:
 - `UserPromptSubmit`: adds short external-first context.
 - `Stop`: blocks only actionable AGPair terminal states such as unaccepted `ready_for_review` and `approval_required`.
 - `SubagentStart`: advisory context only; Codex native subagents remain fallback/review resources.
+
+Pass `--sync-skill` with `--install`, `--uninstall`, and `--dry-run` to manage
+only the AGPair skill at `.codex/skills/agpair/SKILL.md` or
+`~/.codex/skills/agpair/SKILL.md`. AGPair refuses to overwrite a non-AGPair
+skill at that path.
 
 For async tasks, attach with:
 
@@ -485,7 +496,9 @@ Code worker, not Claude Code native subagents.
 Before publishing or opening a PR:
 
 - Run the targeted tests plus the full unit/integration suite.
-- Run real smoke for the controller matrix and keep smoke reports local.
+- Run real smoke for the controller matrix, require `all_success=true` plus
+  `adoptable_result=true` for each attempted executor, and keep smoke reports
+  local.
 - Run `git diff --check`.
 - Inspect `git status --short --untracked-files=all`.
 - Do not stage `.agpair/`, `~/.agpair`, raw executor logs, local receipts, session transcripts, personal Codex/Claude config, or generated hook debug output.

@@ -106,7 +106,7 @@ Install or print the managed settings snippet:
 
 ```bash
 agpair claude config
-agpair claude config --install --scope project --repo-path "$REPO"
+agpair claude config --install --scope project --repo-path "$REPO" --sync-skill
 ```
 
 Managed hooks:

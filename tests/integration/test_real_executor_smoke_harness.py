@@ -173,6 +173,13 @@ def test_smoke_harness_runs_codex_controller_fake_executor_matrix(tmp_path: Path
     ]
     for result in payload["results"]:
         assert result["outcome"] == "ready_for_review"
+        assert result["adoptable_result"] is True
+        assert result["adoption_blockers"] == []
+        assert result["adoption_evidence"]["terminal_receipt"] is True
+        assert result["adoption_evidence"]["report"] is True
+        assert result["adoption_evidence"]["present_changed_files"] == [
+            "tests/fixtures/external_executor_smoke/fake.txt"
+        ]
         assert result["phase"] == "ready_for_review"
         assert result["artifacts"]["stdout_path"]
         assert "tests/fixtures/external_executor_smoke/fake.txt" in result["git_status_short"]
@@ -211,6 +218,7 @@ def test_smoke_harness_runs_diagnostic_all_registered_with_self_allowed(tmp_path
         "codex",
     ]
     assert all(result["outcome"] == "ready_for_review" for result in payload["results"])
+    assert all(result["adoptable_result"] is True for result in payload["results"])
 
 
 def test_smoke_harness_reports_controller_suppressed_self_executor(tmp_path: Path) -> None:
@@ -295,6 +303,8 @@ def test_smoke_harness_abandons_silent_executor_after_no_progress(tmp_path: Path
     result = payload["results"][0]
     assert result["attempted"] is True
     assert result["outcome"] == "blocked"
+    assert result["adoptable_result"] is False
+    assert "terminal_receipt_missing" in result["adoption_blockers"]
     assert result["blocker_type"] == "no_progress_timeout"
     assert result["wait_payload"]["watchdog_triggered"] is True
     assert result["phase"] == "abandoned"

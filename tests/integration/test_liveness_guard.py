@@ -83,6 +83,22 @@ def _make_live_via_output(tmp_path: Path, repo: TaskRepository, task_id: str, *,
     return stdout_path
 
 
+def _make_bootstrap_noise_stderr(tmp_path: Path, repo: TaskRepository, task_id: str) -> Path:
+    """Create stderr containing only startup/plugin discovery noise."""
+    task = repo.get_task(task_id)
+    assert task is not None
+    session_id = task.antigravity_session_id or task.executor_session_id or str(tmp_path / "session-noisy")
+    session_dir = Path(str(session_id))
+    session_dir.mkdir(exist_ok=True)
+    stderr_path = session_dir / "stderr.log"
+    stderr_path.write_text(
+        "2026-06-08T09:03:49Z INFO plugin discovered name=backend-tools scope=user\n"
+        "2026-06-08T09:03:50Z INFO plugin discovered name=platform-tools scope=user\n",
+        encoding="utf-8",
+    )
+    return stderr_path
+
+
 def _make_live_via_both(repo: TaskRepository, task_id: str) -> None:
     _make_live_via_heartbeat(repo, task_id)
     _make_live_via_workspace(repo, task_id)
@@ -122,6 +138,14 @@ def test_classify_active_via_output(tmp_path: Path) -> None:
     task = repo.get_task("TASK-LG1")
     assert classify_liveness(task) == LivenessState.active_via_output
     assert is_task_live(task) is True
+
+
+def test_bootstrap_stderr_noise_is_not_live_output(tmp_path: Path) -> None:
+    repo = _seed_acked_task(tmp_path)
+    _make_bootstrap_noise_stderr(tmp_path, repo, "TASK-LG1")
+    task = repo.get_task("TASK-LG1")
+    assert classify_liveness(task) == LivenessState.silent
+    assert is_task_live(task) is False
 
 
 def test_stale_output_activity_is_silent(tmp_path: Path) -> None:
@@ -435,6 +459,32 @@ def test_wait_does_not_watchdog_exit_with_fresh_output_activity(tmp_path: Path) 
     )
     assert result.phase == "evidence_ready"
     assert result.watchdog_triggered is False
+
+
+def test_wait_watchdogs_when_only_bootstrap_stderr_is_fresh(tmp_path: Path) -> None:
+    """Fresh plugin/bootstrap stderr is not progress and should not prevent watchdog."""
+    from agpair.cli.wait import wait_for_terminal_phase
+
+    paths = _make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    repo = TaskRepository(paths.db_path)
+    repo.create_task(task_id="T-NOISE-W1", repo_path="/r")
+    repo.mark_acked(task_id="T-NOISE-W1", session_id=str(tmp_path / "session-noisy"))
+    repo.recommend_retry(task_id="T-NOISE-W1")
+    _make_bootstrap_noise_stderr(tmp_path, repo, "T-NOISE-W1")
+
+    fixed_now = datetime.now(UTC)
+    result = wait_for_terminal_phase(
+        paths.db_path,
+        "T-NOISE-W1",
+        interval_seconds=5,
+        timeout_seconds=60,
+        heartbeat_silence_seconds=300,
+        _clock=FakeClock(),
+        _utcnow=lambda: fixed_now,
+    )
+    assert result.phase == "acked"
+    assert result.watchdog_triggered is True
 
 
 # ---------------------------------------------------------------------------

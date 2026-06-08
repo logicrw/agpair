@@ -164,6 +164,70 @@ def _artifact_summary(status_payload: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _terminal_receipt_payload(status_payload: dict[str, Any] | None) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    if not status_payload:
+        return None, {}
+    receipt = status_payload.get("terminal_receipt")
+    if not isinstance(receipt, dict):
+        return None, {}
+    payload = receipt.get("payload")
+    return receipt, payload if isinstance(payload, dict) else {}
+
+
+def _changed_file_evidence(worktree_path: Path, changed_files: Any) -> tuple[list[str], list[str]]:
+    if not isinstance(changed_files, list):
+        return [], []
+    declared = [item for item in changed_files if isinstance(item, str) and item.strip()]
+    present: list[str] = []
+    for rel_path in declared:
+        path = worktree_path / rel_path
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                present.append(rel_path)
+        except OSError:
+            continue
+    return declared, present
+
+
+def _adoption_evidence(*, status_payload: dict[str, Any] | None, worktree_path: Path) -> dict[str, Any]:
+    receipt, receipt_payload = _terminal_receipt_payload(status_payload)
+    changed_files, present_changed_files = _changed_file_evidence(
+        worktree_path,
+        receipt_payload.get("changed_files"),
+    )
+    report_text = receipt_payload.get("report")
+    report_path = status_payload.get("report_path") if status_payload else None
+    stdout_path = status_payload.get("stdout_path") if status_payload else None
+    receipt_path = status_payload.get("receipt_path") if status_payload else None
+
+    blockers: list[str] = []
+    if receipt is None:
+        blockers.append("terminal_receipt_missing")
+    if not changed_files:
+        blockers.append("changed_files_missing")
+    elif len(present_changed_files) != len(changed_files):
+        blockers.append("changed_files_not_present")
+    if not (isinstance(report_text, str) and report_text.strip()) and not report_path:
+        blockers.append("report_missing")
+    if not stdout_path:
+        blockers.append("stdout_artifact_missing")
+
+    return {
+        "adoptable_result": not blockers,
+        "adoption_blockers": blockers,
+        "adoption_evidence": {
+            "terminal_receipt": receipt is not None,
+            "receipt_status": receipt.get("status") if receipt else None,
+            "report": bool((isinstance(report_text, str) and report_text.strip()) or report_path),
+            "report_path": report_path,
+            "stdout_path": stdout_path,
+            "receipt_path": receipt_path,
+            "changed_files": changed_files,
+            "present_changed_files": present_changed_files,
+        },
+    }
+
+
 def _artifact_progress_signature(status_payload: dict[str, Any] | None, worktree_path: Path) -> tuple[Any, ...]:
     if not status_payload:
         return ()
@@ -496,6 +560,10 @@ def _executor_result(
         outcome = "ready_for_review" if phase in TERMINAL_OK_PHASES else "blocked"
         if wait_returncode != 0 and phase not in TERMINAL_OK_PHASES:
             outcome = "blocked"
+        adoption = _adoption_evidence(status_payload=status_payload, worktree_path=worktree_path)
+        if outcome == "ready_for_review" and not adoption["adoptable_result"]:
+            outcome = "blocked"
+            blocker_type = blocker_type or "adoptable_result_missing"
         result_payload = {
             "executor_id": executor_id,
             "task_id": task_id,
@@ -517,6 +585,7 @@ def _executor_result(
             "wait_payload": wait_payload,
             "status": status_payload,
             "artifacts": _artifact_summary(status_payload),
+            **adoption,
             "stdout_excerpt": (start.stdout or "")[-2000:],
             "stderr_excerpt": (start.stderr or "")[-2000:],
         }
@@ -588,7 +657,7 @@ def main(argv: list[str] | None = None) -> int:
         "results": results,
     }
     report["harness_completed"] = True
-    report["all_success"] = all(result.get("outcome") == "ready_for_review" for result in results)
+    report["all_success"] = all(result.get("adoptable_result") is True for result in results)
     report_path = repo_path / ".agpair" / "smoke" / "reports" / f"{run_id}.json"
     report["report_path"] = str(report_path)
     _write_report(report, repo_path)

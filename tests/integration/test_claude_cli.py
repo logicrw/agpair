@@ -201,6 +201,25 @@ def test_claude_config_dry_run_prints_diff_without_writing(tmp_path: Path, monke
     assert not (repo_path / ".claude" / "settings.json").exists()
 
 
+def test_claude_config_sync_skill_install_and_uninstall(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+
+    install = CliRunner().invoke(app, ["claude", "config", "--install", "--sync-skill"])
+
+    skill_path = repo_path / ".claude" / "skills" / "agpair" / "SKILL.md"
+    assert install.exit_code == 0
+    assert skill_path.exists()
+    assert "name: agpair" in skill_path.read_text(encoding="utf-8")
+
+    uninstall = CliRunner().invoke(app, ["claude", "config", "--uninstall", "--sync-skill"])
+
+    assert uninstall.exit_code == 0
+    assert not skill_path.exists()
+
+
 def test_claude_config_install_preserves_foreign_statusline_without_force(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"

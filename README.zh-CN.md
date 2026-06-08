@@ -86,19 +86,15 @@ agpair task retry TASK-123 \
 Codex：
 
 ```bash
-mkdir -p ~/.codex/skills/agpair
-cp "$PWD/skills/Codex/SKILL.md" ~/.codex/skills/agpair/SKILL.md
 agpair codex config
-agpair codex config --install --scope project --repo-path /path/to/repo
+agpair codex config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
 Claude Code：
 
 ```bash
-mkdir -p ~/.claude/skills/agpair
-cp "$PWD/skills/Claude/SKILL.md" ~/.claude/skills/agpair/SKILL.md
 agpair claude config
-agpair claude config --install --scope project --repo-path /path/to/repo
+agpair claude config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
 要让 Codex 调用外部 `claude-code` worker，AGPair 默认使用 Claude auth
@@ -142,7 +138,7 @@ V1 不做“运行中暂停等待授权”。越界时 executor 应返回 `block
 
 ## 验收门
 
-`ready_for_review`、`evidence_ready`、`committed` 都不是自动成功。主控必须检查 AGPair 状态、git diff/commit 证据、receipt、必要时的 raw log 路径，并运行相应验证后才能报告完成。
+`ready_for_review`、`evidence_ready`、`committed` 都不是自动成功。主控必须检查 AGPair 状态、git diff/commit 证据、receipt、必要时的 raw log 路径，并运行相应验证后才能报告完成。真实 executor smoke 也必须看到 `all_success=true`，且每个尝试过的 executor 都是 `adoptable_result=true`；只 dispatch 成功或只进入成功 phase 不算通过。
 
 主控验收 evidence 后，用下面的命令标记任务已接受，避免 Stop hook 对同一个 receipt 反复阻塞：
 

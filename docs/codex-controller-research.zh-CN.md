@@ -12,5 +12,5 @@
 
 ```bash
 agpair codex config
-agpair codex config --install --scope project --repo-path "$REPO"
+agpair codex config --install --scope project --repo-path "$REPO" --sync-skill
 ```

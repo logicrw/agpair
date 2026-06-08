@@ -122,6 +122,10 @@ def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch
     assert "ccswitch_provider" in health["claude-code"]
     assert "ccswitch_provider_id" in health["claude-code"]
     assert "ccswitch_source" in health["claude-code"]
+    assert health["claude-code"]["auth_satisfied"] is True
+    assert health["claude-code"]["auth_probe_environment_mode"] == "managed-natural"
+    assert health["claude-code"]["auth_probe_skill_policy"] == "inherit"
+    assert health["claude-code"]["auth_probe_mcp_policy"] == "inherit"
     assert health["claude-code"]["isolation_auth_satisfied"] is True
     assert health["codex"]["available"] is True
     assert "codex" in health

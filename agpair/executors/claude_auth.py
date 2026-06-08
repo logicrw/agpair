@@ -9,6 +9,8 @@ import subprocess
 from dataclasses import dataclass
 
 FALSE_ENV_VALUES = {"0", "false", "no", "off"}
+DEFAULT_LIVE_PROBE_TIMEOUT_SECONDS = 30.0
+_SENSITIVE_ENV_KEY_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH")
 
 
 @dataclass(frozen=True)
@@ -185,7 +187,30 @@ def _last_output_line(stdout: str, stderr: str) -> str:
     return excerpt[-1] if excerpt else "unknown error"
 
 
-def _json_result_error(stdout: str, label: str, auth_hint: str) -> str | None:
+def _redact_sensitive_text(text: str, env: dict[str, str]) -> str:
+    redacted = text
+    for key, value in env.items():
+        if not value or len(value) < 6:
+            continue
+        upper_key = key.upper()
+        if any(marker in upper_key for marker in _SENSITIVE_ENV_KEY_MARKERS):
+            redacted = redacted.replace(value, "<redacted>")
+    return redacted
+
+
+def _managed_natural_probe_args(prompt: str) -> list[str]:
+    return [
+        "--permission-mode",
+        "default",
+        "--no-session-persistence",
+        "--output-format",
+        "json",
+        "--print",
+        prompt,
+    ]
+
+
+def _json_result_error(stdout: str, label: str, auth_hint: str, *, redaction_env: dict[str, str]) -> str | None:
     if not stdout.strip():
         return f"{label} live auth check produced no output"
     try:
@@ -201,6 +226,7 @@ def _json_result_error(stdout: str, label: str, auth_hint: str) -> str | None:
             or payload.get("subtype")
             or "unknown error"
         )
+        summary = _redact_sensitive_text(str(summary), redaction_env)
         return f"{label} live auth check failed: {summary}"
     return None
 
@@ -211,10 +237,10 @@ def _live_probe_timeout() -> float:
         try:
             value = float(raw)
         except ValueError:
-            value = 8.0
+            value = DEFAULT_LIVE_PROBE_TIMEOUT_SECONDS
         if value > 0:
             return value
-    return 8.0
+    return DEFAULT_LIVE_PROBE_TIMEOUT_SECONDS
 
 
 def _run_probe(
@@ -281,7 +307,8 @@ def _live_probe_error(
     try:
         proc = _run_probe(binary_path, args, env=env, timeout_seconds=timeout)
     except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as exc:
-        return f"{label} live auth check failed: {type(exc).__name__}: {exc}"
+        message = _redact_sensitive_text(str(exc), env)
+        return f"{label} live auth check failed: {type(exc).__name__}: {message}"
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()
     combined_output = f"{stdout}\n{stderr}"
@@ -290,8 +317,8 @@ def _live_probe_error(
     ):
         return f"{label} live auth check failed: Invalid Authentication; {auth_hint}"
     if proc.returncode != 0:
-        return f"{label} live auth check failed: {_last_output_line(stdout, stderr)}"
-    return _json_result_error(stdout, label, auth_hint)
+        return f"{label} live auth check failed: {_redact_sensitive_text(_last_output_line(stdout, stderr), env)}"
+    return _json_result_error(stdout, label, auth_hint, redaction_env=env)
 
 
 def claude_oauth_error(binary_path: str | None, *, live_probe: bool = False) -> str | None:
@@ -318,20 +345,7 @@ def claude_oauth_error(binary_path: str | None, *, live_probe: bool = False) -> 
         binary_path,
         label="Claude Code OAuth/subscription",
         auth_hint="run `claude auth login`",
-        args=[
-            "--strict-mcp-config",
-            "--mcp-config",
-            '{"mcpServers":{}}',
-            "--disable-slash-commands",
-            "--no-chrome",
-            "--permission-mode",
-            "default",
-            "--no-session-persistence",
-            "--output-format",
-            "json",
-            "--print",
-            "Return exactly: agpair-oauth-health-ok",
-        ],
+        args=_managed_natural_probe_args("Return exactly: agpair-oauth-health-ok"),
     )
 
 
@@ -380,16 +394,7 @@ def claude_ccswitch_error(
             binary_path,
             label=f"Claude Code CC Switch provider {provider_name}",
             auth_hint="update the current Claude provider in CC Switch",
-            args=[
-                "--bare",
-                "--permission-mode",
-                "default",
-                "--no-session-persistence",
-                "--output-format",
-                "json",
-                "--print",
-                "Return exactly: agpair-ccswitch-health-ok",
-            ],
+            args=_managed_natural_probe_args("Return exactly: agpair-ccswitch-health-ok"),
             env_overrides=env,
         )
         if error:

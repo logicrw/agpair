@@ -70,6 +70,7 @@ class ExecutionEvidence:
     report_path: str | None = None
     evidence_path: str | None = None
     output_excerpt: str | None = None
+    report_text: str | None = None
     commit_ref: str | None = None
     changed_files: tuple[str, ...] = ()
     validation_present: bool = False
@@ -78,13 +79,13 @@ class ExecutionEvidence:
 
     @property
     def has_output(self) -> bool:
-        return bool((self.output_excerpt or "").strip()) or any(
+        return bool((self.output_excerpt or "").strip()) or bool((self.report_text or "").strip()) or any(
             _path_has_content(path) for path in (self.stdout_path, self.stderr_path, self.report_path)
         )
 
     @property
     def has_report(self) -> bool:
-        return _path_has_content(self.report_path) or bool((self.output_excerpt or "").strip())
+        return _path_has_content(self.report_path) or bool((self.report_text or "").strip())
 
     @property
     def has_commit(self) -> bool:
@@ -224,6 +225,7 @@ def evidence_from_receipt_and_paths(
     commit_ref = payload.get("commit_ref") or payload.get("commit") or payload.get("commit_sha")
     if commit_ref is not None and not isinstance(commit_ref, str):
         commit_ref = str(commit_ref)
+    report_text = _string_value(payload.get("report"))
     status = receipt.get("status") if isinstance(receipt, Mapping) else None
     return ExecutionEvidence(
         stdout_path=stdout_path or _string_value(payload.get("raw_log_path")),
@@ -232,6 +234,7 @@ def evidence_from_receipt_and_paths(
         report_path=report_path or _string_value(payload.get("report_path")),
         evidence_path=evidence_path,
         output_excerpt=output_excerpt,
+        report_text=report_text,
         commit_ref=commit_ref,
         changed_files=changed_files,
         validation_present=validation_present,
@@ -255,18 +258,6 @@ def evaluate_completion(
     summary = _string_value(receipt.get("summary")) if isinstance(receipt, Mapping) else None
     summary = summary or _string_value(payload.get("message")) or "terminal decision"
 
-    if not evidence.has_output and process_returncode is not None:
-        return CompletionDecision(
-            phase="blocked",
-            ok=False,
-            summary="executor output missing",
-            blocker_type="output_missing",
-            terminal_status=status or None,
-            receipt=dict(receipt) if isinstance(receipt, Mapping) else None,
-            effective_policy=effective_policy,
-            reason_code="output_missing",
-        )
-
     if status == messages.BLOCKED:
         blocker_type = _string_value(payload.get("blocker_type")) or "unknown"
         return CompletionDecision(
@@ -278,6 +269,29 @@ def evaluate_completion(
             receipt=dict(receipt) if isinstance(receipt, Mapping) else None,
             effective_policy=effective_policy,
             reason_code=blocker_type,
+        )
+
+    if not status and not evidence.has_machine_evidence and not evidence.has_output and process_returncode is not None:
+        if effective_policy.requires_report:
+            return CompletionDecision(
+                phase="blocked",
+                ok=False,
+                summary="executor exited without report or terminal receipt",
+                blocker_type="report_output_missing",
+                terminal_status=status or None,
+                receipt=dict(receipt) if isinstance(receipt, Mapping) else None,
+                effective_policy=effective_policy,
+                reason_code="report_output_missing",
+            )
+        return CompletionDecision(
+            phase="blocked",
+            ok=False,
+            summary="executor output missing",
+            blocker_type="output_missing",
+            terminal_status=status or None,
+            receipt=dict(receipt) if isinstance(receipt, Mapping) else None,
+            effective_policy=effective_policy,
+            reason_code="output_missing",
         )
 
     scope_violations = payload.get("scope_violations")
@@ -321,12 +335,12 @@ def evaluate_completion(
         return CompletionDecision(
             phase="blocked",
             ok=False,
-            summary="report policy requires a captured report artifact or report output",
-            blocker_type="report_missing",
+            summary="report policy requires captured report output",
+            blocker_type="report_output_missing",
             terminal_status=status or None,
             receipt=dict(receipt) if isinstance(receipt, Mapping) else None,
             effective_policy=effective_policy,
-            reason_code="report_missing",
+            reason_code="report_output_missing",
         )
 
     if effective_policy.requires_machine_evidence and not evidence.has_machine_evidence:

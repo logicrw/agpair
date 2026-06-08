@@ -15,6 +15,7 @@ from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
 from agpair.targets import resolve_repo_path
 from agpair.terminal_receipts import parse_structured_terminal_receipt
+from agpair.cli.skill_sync import bundled_skill_path, plan_skill_sync
 
 app = typer.Typer(no_args_is_help=True)
 hook_app = typer.Typer(no_args_is_help=True)
@@ -350,6 +351,7 @@ def config(
     merge: bool = typer.Option(False, "--merge", help="Alias of --install for explicit merge/update flows."),
     uninstall: bool = typer.Option(False, "--uninstall", help="Remove the AGPair-managed Claude Code config fragment."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print a unified diff instead of writing changes."),
+    sync_skill: bool = typer.Option(False, "--sync-skill", help="Also sync the AGPair Claude Code skill into the selected scope."),
     force: bool = typer.Option(False, "--force", help="Replace an existing non-AGPair statusLine while preserving non-AGPair hooks."),
     scope: str = typer.Option("project", "--scope", help="Where to manage Claude Code settings: project or user."),
     repo_path: str | None = typer.Option(None, "--repo-path", help="Project repo path for --scope project."),
@@ -375,6 +377,13 @@ def config(
             updated = _uninstall_managed_config(current)
         else:
             updated = _merge_managed_config(current, force=force)
+        skill_plan = None
+        if sync_skill:
+            skill_plan = plan_skill_sync(
+                source_path=bundled_skill_path("Claude"),
+                target_path=settings_path.parent / "skills" / "agpair" / "SKILL.md",
+                uninstall=uninstall,
+            )
     except RuntimeError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
@@ -382,10 +391,15 @@ def config(
 
     if dry_run:
         _emit_diff(settings_path, before, after)
+        if skill_plan is not None:
+            typer.echo(skill_plan.diff(), nl=False)
         return
 
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(after, encoding="utf-8")
+    if skill_plan is not None:
+        skill_plan.apply()
+        typer.echo(f"Updated {skill_plan.target_path}")
     typer.echo(f"Updated {settings_path}")
 
 

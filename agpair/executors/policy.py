@@ -411,12 +411,13 @@ def executor_health_snapshot(*, run_launch_probe: bool = False) -> dict[str, dic
             last_failure_type = "launch_probe_failed"
         elif isolation_auth_error:
             last_failure_type = "executor_auth_required"
+        auth_satisfied = isolation_auth_error is None
         available = (
             lifecycle.allowed_for_new_tasks
             and spec.enabled_by_default
             and binary_available
             and launch_clean is not False
-            and isolation_auth_error is None
+            and auth_satisfied
         )
         snapshot[executor_id] = {
             "available": available,
@@ -446,7 +447,11 @@ def executor_health_snapshot(*, run_launch_probe: bool = False) -> dict[str, dic
             "ccswitch_provider_id": ccswitch_provider.provider_id if ccswitch_provider else None,
             "ccswitch_source": os.path.basename(ccswitch_provider.source) if ccswitch_provider else None,
             "launch_clean": launch_clean,
-            "isolation_auth_satisfied": isolation_auth_error is None,
+            "auth_satisfied": auth_satisfied,
+            "auth_probe_environment_mode": spec.default_environment_mode if executor_id == "claude-code" else None,
+            "auth_probe_skill_policy": spec.default_skill_policy if executor_id == "claude-code" else None,
+            "auth_probe_mcp_policy": spec.default_mcp_policy if executor_id == "claude-code" else None,
+            "isolation_auth_satisfied": auth_satisfied,
             "last_failure_type": last_failure_type,
             "last_error_excerpt": launch_error or isolation_auth_error,
         }
