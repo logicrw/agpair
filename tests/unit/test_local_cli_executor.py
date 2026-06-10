@@ -42,7 +42,8 @@ class EnvDummyLocalCLIExecutor(LocalCLIExecutor):
         return ContinuationCapability.UNSUPPORTED
 
 
-def test_dispatch_injects_executor_env_without_writing_secret_to_cmd_json(tmp_path):
+def test_dispatch_injects_executor_env_without_writing_secret_to_cmd_json(tmp_path, monkeypatch):
+    monkeypatch.delenv("AGPAIR_DELEGATION_DEPTH", raising=False)
     executor = EnvDummyLocalCLIExecutor()
 
     with mock.patch("agpair.executors.local_cli._git_head", return_value="fake-head"), \
