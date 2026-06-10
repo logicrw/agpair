@@ -6,7 +6,10 @@ import pathlib
 import signal
 import sqlite3
 import subprocess
+import tempfile
 from dataclasses import dataclass
+
+from agpair.internal_context import build_internal_probe_env
 
 FALSE_ENV_VALUES = {"0", "false", "no", "off"}
 DEFAULT_LIVE_PROBE_TIMEOUT_SECONDS = 30.0
@@ -25,8 +28,15 @@ class CCSwitchProvider:
 class ClaudeAuthResolution:
     mode: str
     error: str | None = None
+    failure_class: str | None = None
     ccswitch_provider: CCSwitchProvider | None = None
     env_overrides: dict[str, str] | None = None
+
+
+@dataclass(frozen=True)
+class ClaudeProbeFailure:
+    message: str
+    failure_class: str
 
 
 def explicit_claude_auth_mode() -> str | None:
@@ -243,20 +253,31 @@ def _live_probe_timeout() -> float:
     return DEFAULT_LIVE_PROBE_TIMEOUT_SECONDS
 
 
+def _probe_cwd() -> pathlib.Path:
+    configured = os.environ.get("AGPAIR_CLAUDE_CODE_PROBE_CWD", "").strip()
+    if configured:
+        return pathlib.Path(configured).expanduser().resolve()
+    return pathlib.Path(tempfile.gettempdir()).resolve()
+
+
 def _run_probe(
     binary_path: str,
     args: list[str],
     *,
     env: dict[str, str] | None = None,
+    cwd: str | os.PathLike[str] | None = None,
     timeout_seconds: float,
 ) -> subprocess.CompletedProcess[str]:
+    process_env = build_internal_probe_env(env)
+    process_cwd = pathlib.Path(cwd).resolve() if cwd is not None else _probe_cwd()
     process = subprocess.Popen(
         [binary_path, *args],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env=env,
+        env=process_env,
+        cwd=str(process_cwd),
         start_new_session=True,
     )
     try:
@@ -282,6 +303,34 @@ def _run_probe(
             output=stdout,
             stderr=stderr,
         ) from exc
+
+
+def _classify_probe_error(error: str | None) -> str | None:
+    if not error:
+        return None
+    normalized = error.lower()
+    if "timeoutexpired" in normalized or "timed out" in normalized or "timeout" in normalized:
+        return "executor_probe_timeout"
+    if (
+        "agpair external-first routing" in normalized
+        or "agpair task" in normalized
+        or "hookspecificoutput" in normalized
+    ):
+        return "executor_hook_interference"
+    if (
+        "invalid authentication" in normalized
+        or "not logged in" in normalized
+        or "auth login" in normalized
+        or "no api token" in normalized
+        or "api key" in normalized
+        or "anthropic_api_key is empty" in normalized
+        or "missing file" in normalized
+        or "settings file" in normalized
+    ):
+        return "executor_auth_required"
+    if "requires a claude binary" in normalized:
+        return "executor_unavailable"
+    return "executor_probe_failed"
 
 
 def _terminate_process_tree(root_pid: int, sig: signal.Signals) -> None:
@@ -327,6 +376,44 @@ def _process_descendants(root_pid: int) -> set[int]:
     return descendants
 
 
+def _live_probe_failure(
+    binary_path: str,
+    *,
+    label: str,
+    auth_hint: str,
+    args: list[str],
+    env_overrides: dict[str, str] | None = None,
+    timeout_seconds: float | None = None,
+) -> ClaudeProbeFailure | None:
+    timeout = _live_probe_timeout() if timeout_seconds is None else timeout_seconds
+    env = os.environ.copy()
+    env.update(claude_retry_env())
+    if env_overrides:
+        env.update(env_overrides)
+    probe_env = build_internal_probe_env(env)
+    try:
+        proc = _run_probe(binary_path, args, env=probe_env, timeout_seconds=timeout)
+    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as exc:
+        message = _redact_sensitive_text(str(exc), probe_env)
+        error = f"{label} live auth check failed: {type(exc).__name__}: {message}"
+        return ClaudeProbeFailure(error, _classify_probe_error(error) or "executor_probe_failed")
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    combined_output = f"{stdout}\n{stderr}"
+    if "Invalid Authentication" in combined_output or (
+        "api_error_status" in combined_output and "401" in combined_output
+    ):
+        error = f"{label} live auth check failed: Invalid Authentication; {auth_hint}"
+        return ClaudeProbeFailure(error, "executor_auth_required")
+    if proc.returncode != 0:
+        error = f"{label} live auth check failed: {_redact_sensitive_text(_last_output_line(stdout, stderr), probe_env)}"
+        return ClaudeProbeFailure(error, _classify_probe_error(error) or "executor_probe_failed")
+    error = _json_result_error(stdout, label, auth_hint, redaction_env=probe_env)
+    if error is None:
+        return None
+    return ClaudeProbeFailure(error, _classify_probe_error(error) or "executor_probe_failed")
+
+
 def _live_probe_error(
     binary_path: str,
     *,
@@ -336,26 +423,15 @@ def _live_probe_error(
     env_overrides: dict[str, str] | None = None,
     timeout_seconds: float | None = None,
 ) -> str | None:
-    timeout = _live_probe_timeout() if timeout_seconds is None else timeout_seconds
-    env = os.environ.copy()
-    env.update(claude_retry_env())
-    if env_overrides:
-        env.update(env_overrides)
-    try:
-        proc = _run_probe(binary_path, args, env=env, timeout_seconds=timeout)
-    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as exc:
-        message = _redact_sensitive_text(str(exc), env)
-        return f"{label} live auth check failed: {type(exc).__name__}: {message}"
-    stdout = (proc.stdout or "").strip()
-    stderr = (proc.stderr or "").strip()
-    combined_output = f"{stdout}\n{stderr}"
-    if "Invalid Authentication" in combined_output or (
-        "api_error_status" in combined_output and "401" in combined_output
-    ):
-        return f"{label} live auth check failed: Invalid Authentication; {auth_hint}"
-    if proc.returncode != 0:
-        return f"{label} live auth check failed: {_redact_sensitive_text(_last_output_line(stdout, stderr), env)}"
-    return _json_result_error(stdout, label, auth_hint, redaction_env=env)
+    failure = _live_probe_failure(
+        binary_path,
+        label=label,
+        auth_hint=auth_hint,
+        args=args,
+        env_overrides=env_overrides,
+        timeout_seconds=timeout_seconds,
+    )
+    return failure.message if failure else None
 
 
 def claude_oauth_error(binary_path: str | None, *, live_probe: bool = False) -> str | None:
@@ -397,6 +473,22 @@ def claude_api_error(*, live_probe: bool = False, binary_path: str | None = None
     ):
         return "Claude Code API mode requires ANTHROPIC_API_KEY or AGPAIR_CLAUDE_CODE_SETTINGS"
     return None
+
+
+def _auth_resolution(
+    mode: str,
+    *,
+    error: str | None = None,
+    ccswitch_provider: CCSwitchProvider | None = None,
+    env_overrides: dict[str, str] | None = None,
+) -> ClaudeAuthResolution:
+    return ClaudeAuthResolution(
+        mode=mode,
+        error=error,
+        failure_class=_classify_probe_error(error),
+        ccswitch_provider=ccswitch_provider,
+        env_overrides=env_overrides,
+    )
 
 
 def claude_ccswitch_error(
@@ -447,13 +539,13 @@ def resolve_claude_auth(
     explicit = explicit_claude_auth_mode()
     if explicit == "oauth":
         error = claude_oauth_error(binary_path, live_probe=live_probe)
-        return ClaudeAuthResolution(mode="oauth", error=error)
+        return _auth_resolution(mode="oauth", error=error)
     if explicit == "api":
         error = claude_api_error(live_probe=live_probe, binary_path=binary_path)
-        return ClaudeAuthResolution(mode="api", error=error)
+        return _auth_resolution(mode="api", error=error)
     if explicit == "ccswitch":
         error, provider = claude_ccswitch_error(binary_path, live_probe=live_probe)
-        return ClaudeAuthResolution(
+        return _auth_resolution(
             mode="ccswitch",
             error=error,
             ccswitch_provider=provider,
@@ -462,16 +554,16 @@ def resolve_claude_auth(
 
     oauth_error = claude_oauth_error(binary_path, live_probe=live_probe)
     if oauth_error is None:
-        return ClaudeAuthResolution(mode="oauth")
+        return _auth_resolution(mode="oauth")
 
     ccswitch_error, provider = claude_ccswitch_error(binary_path, live_probe=live_probe)
     if ccswitch_error is None:
-        return ClaudeAuthResolution(
+        return _auth_resolution(
             mode="ccswitch",
             ccswitch_provider=provider,
             env_overrides=ccswitch_env_overrides(provider),
         )
-    return ClaudeAuthResolution(
+    return _auth_resolution(
         mode="auto",
         error=f"{oauth_error}; {ccswitch_error}",
         ccswitch_provider=provider,

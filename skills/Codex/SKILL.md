@@ -25,6 +25,8 @@ agpair task start \
 
 Default executor environments are `managed-natural` for `antigravity-cli`, `grok-cli`, and healthy `claude-code`: AGPair manages state and evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config. If an external attempt fails or is low quality, retry naturally, switch to another external executor, or use Codex native subagents as fallback/review.
 
+AGPair external-first routing applies to controller sessions. AGPair-started executor, probe, smoke, and retry processes suppress AGPair client hooks to avoid recursive delegation, but external workers still inherit their normal CLI capabilities, skills, MCP, plugins, memory, and provider config unless an explicit diagnostic mode says otherwise.
+
 ## Bounded Implementation
 
 For non-trivial implementation, refactor, or test-fix work, first dispatch one bounded slice unless the task is tiny, sensitive, external executors are unhealthy, or a prior external result was low quality:
@@ -99,7 +101,7 @@ agpair task retry TASK-123 --from-block --authorization-profile local_mutating
 
 For Codex as controller, prefer `antigravity-cli`, then `grok-cli`, then `claude-code`.
 
-`claude-code` is the AGPair-managed external Claude Code worker for Codex controllers. It is the cross-controller quality escalation lane, not a native Codex subagent. Its default Claude auth mode is `auto`: `agpair doctor --fresh` first verifies the local Claude Code OAuth/subscription login, then falls back to the current Claude provider selected in CC Switch. Update Claude login or the CC Switch provider if `doctor --fresh` reports `executor_auth_required` or `Invalid Authentication`. API-key worker mode is only an explicit fallback via `AGPAIR_CLAUDE_CODE_AUTH_MODE=api`.
+`claude-code` is the AGPair-managed external Claude Code worker for Codex controllers. It is the cross-controller quality escalation lane, not a native Codex subagent. Its default Claude auth mode is `auto`: `agpair doctor --fresh` first verifies the local Claude Code OAuth/subscription login, then falls back to the current Claude provider selected in CC Switch. Update Claude login or the CC Switch provider if `doctor --fresh` reports `executor_auth_required` or `Invalid Authentication`. Probe timeout is not the same as auth failure; check `doctor --fresh` `last_failure_type` for `executor_probe_timeout` or `executor_hook_interference`. API-key worker mode is only an explicit fallback via `AGPAIR_CLAUDE_CODE_AUTH_MODE=api`.
 
 Do not request the AGPair-managed external `codex` executor by default; it is the Codex CLI worker and is suppressed for Codex controllers unless `--allow-self-executor` is explicitly justified. Use Codex native subagents as the fallback/review lane after external executors are unavailable, unsuitable, or not good enough.
 

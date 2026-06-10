@@ -190,6 +190,11 @@ configuration. If an external attempt is not useful, retry naturally, switch to
 another external executor, or let the controller use its native subagents as the
 fallback/review lane.
 
+AGPair external-first hooks are controller-only guidance. AGPair-started
+executor, probe, smoke, and retry processes are marked as internal so Codex and
+Claude hooks no-op instead of recursively injecting delegation guidance or
+blocking on unrelated `ready_for_review` tasks.
+
 Local CLI approval modes can be adjusted with environment variables:
 
 - `AGPAIR_ANTIGRAVITY_CLI_BIN=/absolute/path/to/agy`
@@ -221,7 +226,14 @@ Local CLI approval modes can be adjusted with environment variables:
   `agpair doctor --fresh` uses the same managed-natural Claude Code surface for
   live auth probes; it does not use bare mode or disable skills/MCP. The health
   JSON reports `auth_satisfied`, `auth_probe_environment_mode`,
-  `auth_probe_skill_policy`, and `auth_probe_mcp_policy` for this path.
+  `auth_probe_skill_policy`, `auth_probe_mcp_policy`, `auth_state`, and
+  `last_failure_type` for this path. `executor_probe_timeout` and
+  `executor_hook_interference` are not credential failures; only
+  `executor_auth_required` means the OAuth or CC Switch provider credentials need
+  attention.
+- `AGPAIR_CLAUDE_CODE_PROBE_CWD=/tmp-like-neutral-path`
+  Optional. Live auth probes default to a neutral temp directory so project
+  hooks, MCP, and repo context cannot turn a provider check into controller work.
 - `AGPAIR_CLAUDE_CODE_SETTINGS=/absolute/path/to/settings.json`
   Optional Claude Code settings JSON or path for API mode.
   Generate a safe template with:
@@ -234,6 +246,12 @@ Local CLI approval modes can be adjusted with environment variables:
   Legacy alias: `AGPAIR_CODEX_CLI`
 - `AGPAIR_CODEX_APPROVAL_MODE=default|full_auto|bypass_all`
   Default: `bypass_all`
+
+Internal launch markers, set by AGPair and not meant for global shells:
+
+- `AGPAIR_INTERNAL_ROLE=probe|executor|smoke`
+- `AGPAIR_SUPPRESS_CLIENT_HOOKS=1`
+- `AGPAIR_NONINTERACTIVE=1`
 
 These knobs are adapter-local escape hatches. The registry profile remains the
 shared contract for every executor, and tests require declared noninteractive

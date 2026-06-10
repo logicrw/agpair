@@ -13,7 +13,7 @@ import tempfile
 import time
 from typing import Callable
 
-from agpair.delegation_guard import next_delegation_env
+from agpair.internal_context import build_internal_executor_env
 from agpair.executors.base import DispatchResult, ExecutorAdapter, TaskState
 from agpair.models import (
     ExecutorSafetyMetadata,
@@ -731,7 +731,7 @@ sys.exit(rc)
             process_env.update(
                 {str(key): str(value) for key, value in env_overrides.items() if value is not None}
             )
-            process_env.update(next_delegation_env(task_id, process_env))
+            process_env = build_internal_executor_env(task_id, process_env)
             process = subprocess.Popen(
                 [str(wrapper_script)],
                 stdin=subprocess.DEVNULL,

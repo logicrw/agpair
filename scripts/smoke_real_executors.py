@@ -233,6 +233,22 @@ def _value_metric_defaults(adoptable_result: str, failure_class: str | None) -> 
     }
 
 
+def _executor_runtime_metadata(executor_id: str, health: dict[str, Any] | None = None) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "internal_role_expected": "executor",
+        "client_hooks_suppressed_expected": True,
+    }
+    if executor_id == "claude-code":
+        source = health or {}
+        metadata.update(
+            {
+                "auth_source": source.get("auth_source"),
+                "auth_state": source.get("auth_state"),
+            }
+        )
+    return metadata
+
+
 def _adoption_evidence(*, status_payload: dict[str, Any] | None, worktree_path: Path) -> dict[str, Any]:
     receipt, receipt_payload = _terminal_receipt_payload(status_payload)
     changed_files, present_changed_files = _changed_file_evidence(
@@ -562,6 +578,7 @@ def _executor_result(
             "blocker_type": "invalid_executor",
             "reason": str(exc),
             "attempted": False,
+            **_executor_runtime_metadata(executor_id),
             **_value_metric_defaults("no", "invalid_executor"),
         }
     if decision.rejected_executor:
@@ -574,6 +591,7 @@ def _executor_result(
             "controller_policy": decision.to_dict(),
             "health": health,
             "attempted": False,
+            **_executor_runtime_metadata(executor_id, health),
             **_value_metric_defaults("no", health.get("last_failure_type") or "executor_suppressed"),
         }
 
@@ -631,6 +649,7 @@ def _executor_result(
     try:
         start = _run(start_cmd, cwd=repo_path, timeout=60)
         if start.returncode != 0:
+            health = executor_health_snapshot().get(executor_id, {})
             result_payload = {
                 "executor_id": executor_id,
                 "task_id": task_id,
@@ -640,6 +659,8 @@ def _executor_result(
                 "attempted": True,
                 "worktree_path": str(expected_execution_path),
                 "start_returncode": start.returncode,
+                "health": health,
+                **_executor_runtime_metadata(executor_id, health),
                 **_value_metric_defaults("no", "task_start_timeout" if start.returncode == 124 else "task_start_failed"),
             }
             return result_payload
@@ -674,6 +695,7 @@ def _executor_result(
                 "failure_class": blocker_type,
                 "fallback_suggestion": _fallback_suggestion(str(blocker_type)),
             }
+        health = executor_health_snapshot().get(executor_id, {})
         result_payload = {
             "executor_id": executor_id,
             "task_id": task_id,
@@ -689,10 +711,11 @@ def _executor_result(
             ).stdout,
             "git_diff_name_status": _run(["git", "-C", str(execution_path), "diff", "--name-status"], timeout=30).stdout,
             "controller_policy": decision.to_dict(),
-            "health": executor_health_snapshot().get(executor_id, {}),
+            "health": health,
             "start_returncode": start.returncode,
             "wait_returncode": wait_returncode,
             "status_returncode": status.returncode,
+            **_executor_runtime_metadata(executor_id, health),
             "wait_payload": wait_payload,
             "time_to_first_useful_signal_seconds": wait_payload.get("time_to_first_useful_signal_seconds"),
             "status": status_payload,

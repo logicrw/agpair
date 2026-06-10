@@ -41,6 +41,29 @@ def test_report_without_report_is_not_adoptable() -> None:
     assert decision.blockers == ("report_missing",)
 
 
+def test_blocked_report_receipt_is_not_adoptable_even_with_report() -> None:
+    policy = resolve_effective_task_policy(
+        requested_completion_policy="report",
+        authorization_profile="local_readonly",
+        body="Required changes: none",
+    )
+
+    decision = derive_adoption_decision(
+        effective_policy=policy,
+        receipt={
+            "status": "BLOCKED",
+            "payload": {
+                "blocker_type": "executor_waiting_for_input",
+                "report": "partial notes before blocking",
+            },
+        },
+    )
+
+    assert decision.adoptable_result == "no"
+    assert decision.blockers == ("executor_waiting_for_input",)
+    assert decision.evidence.has_report is True
+
+
 def test_evidence_with_changed_files_and_validation_is_adoptable() -> None:
     policy = resolve_effective_task_policy(
         requested_completion_policy="evidence",

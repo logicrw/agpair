@@ -26,6 +26,8 @@ Gemini is not used for new work. Legacy `gemini_cli` records can still be inspec
 
 Default executor environments are managed-natural for every active external CLI executor: AGPair manages task boundaries, receipts, logs, status, retry, and verification evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config. Controller suppression handles self-executor avoidance; executor launch configuration is not special-cased.
 
+AGPair-started executor, probe, smoke, and retry processes are marked internal, so installed Codex/Claude hooks no-op for those processes. Normal controller sessions still receive external-first guidance.
+
 ## Quick Start
 
 ```bash
@@ -111,8 +113,8 @@ agpair claude config --install --scope project --repo-path /path/to/repo --sync-
 To let Codex use the external `claude-code` worker, AGPair uses Claude auth
 mode `auto` by default. It first tries a valid local Claude Code
 OAuth/subscription login; if that is absent or the live probe fails, it reuses
-the current Claude provider selected in CC Switch, such as Kimi or any future
-Anthropic-compatible provider. AGPair does not need a separate Claude API key
+the current Anthropic-compatible Claude provider selected in CC Switch. AGPair
+does not need a separate Claude API key
 configuration.
 
 ```bash
@@ -123,7 +125,10 @@ agpair doctor --fresh --repo-path /path/to/repo
 `doctor --fresh` runs a tiny live auth probe and reports the selected
 `auth_mode` as `oauth` or `ccswitch`. If OAuth fails, refresh the local Claude
 Code login with `claude auth login`; if CC Switch fails, update the current
-Claude provider inside CC Switch.
+Claude provider inside CC Switch. `executor_probe_timeout` and
+`executor_hook_interference` in `last_failure_type` are runtime/probe boundary
+failures, not credential failures; `executor_auth_required` is the credential
+case.
 
 Use API-key worker mode only when you explicitly want a separate worker credential
 outside OAuth and CC Switch:

@@ -394,6 +394,33 @@ def test_claude_user_prompt_submit_hook_emits_external_first_context(tmp_path: P
     assert "Claude Code remains controller and verifier" in output["additionalContext"]
 
 
+def test_claude_hooks_noop_inside_agpair_internal_executor(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_INTERNAL_ROLE", "executor")
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    init_git_repo(repo_path)
+
+    for command, event_name in (
+        ("session-start", "SessionStart"),
+        ("precompact", "PreCompact"),
+        ("user-prompt-submit", "UserPromptSubmit"),
+        ("stop", "Stop"),
+        ("subagent-start", "SubagentStart"),
+        ("subagent-stop", "SubagentStop"),
+        ("task-created", "TaskCreated"),
+        ("task-completed", "TaskCompleted"),
+    ):
+        result = CliRunner().invoke(
+            app,
+            ["claude", "hook", command],
+            input=hook_input(repo_path, event=event_name, prompt="fix the tests"),
+        )
+
+        assert result.exit_code == 0
+        assert json.loads(result.stdout) == {"continue": True, "suppressOutput": True}
+
+
 def test_claude_stop_hook_blocks_ready_for_review_terminal_receipt(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"

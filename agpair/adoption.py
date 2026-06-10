@@ -110,6 +110,11 @@ def derive_adoption_decision(
     blockers: list[str] = []
     if protocol_errors:
         blockers.append("protocol_errors")
+    receipt_status = _string_value(receipt.get("status") if isinstance(receipt, Mapping) else None).upper()
+    blocker_type = _string_value(payload.get("blocker_type"))
+    if receipt_status == "BLOCKED" or blocker_type:
+        blockers.append(blocker_type or "blocked_terminal_result")
+        return AdoptionDecision("no", tuple(dict.fromkeys(blockers)), warnings, evidence, controller_rework)
 
     policy = effective_policy.effective_completion_policy
     if policy == "report":

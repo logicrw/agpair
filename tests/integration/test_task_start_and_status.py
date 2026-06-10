@@ -1269,6 +1269,55 @@ def test_task_start_explicit_missing_executor_fails_before_dispatch(tmp_path: Pa
     assert make_task_repo(tmp_path).get_task("TASK-MISSING-GROK") is None
 
 
+def test_task_start_surfaces_claude_probe_timeout_not_auth_required(tmp_path: Path, monkeypatch) -> None:
+    from agpair.executors.policy import ExecutorPolicyDecision
+
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+
+    def fake_policy(**kwargs):
+        assert kwargs["requested_executor"] == "claude-code"
+        assert kwargs["require_available"] is True
+        return ExecutorPolicyDecision(
+            controller="codex",
+            selected_executor=None,
+            eligible_executors=(),
+            suppressed_executors=("codex",),
+            rejected_executor="claude-code",
+            allow_self_executor=False,
+            reasons=("executor_probe_timeout: command timed out after 30s",),
+        )
+
+    monkeypatch.setattr("agpair.cli.task.resolve_controller_policy", fake_policy)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            "/tmp/repo",
+            "--controller",
+            "codex",
+            "--executor",
+            "claude-code",
+            "--authorization-profile",
+            "local_readonly",
+            "--completion-policy",
+            "report",
+            "--body",
+            "Goal: test\nScope: test\nRequired changes: none\nExit criteria: test",
+            "--task-id",
+            "TASK-CLAUDE-PROBE-TIMEOUT",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "executor_probe_timeout" in result.output
+    assert "executor_auth_required" not in result.output
+    assert make_task_repo(tmp_path).get_task("TASK-CLAUDE-PROBE-TIMEOUT") is None
+
+
 def test_task_start_fails_before_dispatch_when_no_executor_is_available(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     monkeypatch.setenv("AGPAIR_ANTIGRAVITY_CLI_BIN", str(tmp_path / "missing-agy"))

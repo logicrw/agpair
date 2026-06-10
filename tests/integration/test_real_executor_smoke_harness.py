@@ -173,6 +173,8 @@ def test_smoke_harness_runs_codex_controller_fake_executor_matrix(tmp_path: Path
     ]
     for result in payload["results"]:
         assert result["outcome"] == "ready_for_review"
+        assert result["internal_role_expected"] == "executor"
+        assert result["client_hooks_suppressed_expected"] is True
         assert result["adoptable_result"] in {"yes", "partial"}
         assert result["adoptable"] is True
         assert result["controller_rework"] in {"none", "minor"}
@@ -194,6 +196,9 @@ def test_smoke_harness_runs_codex_controller_fake_executor_matrix(tmp_path: Path
         assert result["cleanup"]["removed"] is True
         assert not Path(result["worktree_path"]).exists()
         assert not Path(result["execution_repo_path"]).exists()
+        if result["executor_id"] == "claude-code":
+            assert result["auth_source"] == "oauth"
+            assert result["auth_state"] == "ok"
     assert Path(payload["report_path"]).is_file()
     assert ".agpair/smoke/reports" in payload["report_path"]
     report_file_payload = json.loads(Path(payload["report_path"]).read_text(encoding="utf-8"))
@@ -315,6 +320,10 @@ def test_smoke_harness_reports_claude_oauth_auth_without_dispatch(tmp_path: Path
     result = payload["results"][0]
     assert result["attempted"] is False
     assert result["blocker_type"] == "executor_auth_required"
+    assert result["internal_role_expected"] == "executor"
+    assert result["client_hooks_suppressed_expected"] is True
+    assert result["auth_source"] == "oauth"
+    assert result["auth_state"] == "executor_auth_required"
     assert "claude auth login" in result["reason"]
 
 

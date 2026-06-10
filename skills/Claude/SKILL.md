@@ -29,6 +29,8 @@ Use Claude Code native subagents only when AGPair is unavailable, unsuitable for
 
 Default executor environments are `managed-natural` for all active external CLI executors: AGPair manages state and evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config.
 
+AGPair external-first routing applies to controller sessions. AGPair-started executor, probe, smoke, and retry processes suppress AGPair client hooks to avoid recursive delegation, but external workers still inherit their normal CLI capabilities, skills, MCP, plugins, memory, and provider config unless an explicit diagnostic mode says otherwise.
+
 ## Dispatch
 
 For one external task, let `task start` wait by default:
@@ -149,3 +151,5 @@ Managed hooks:
 - `SessionStart` and `PreCompact`: lightweight status/compaction guardrails.
 
 Hooks fail open when AGPair state is unavailable. They preserve unrelated Claude Code settings and remove only AGPair-managed entries on uninstall.
+
+Claude Code worker auth mode is `auto`: OAuth/subscription first, then the current Claude provider selected in CC Switch. Probe timeout is not the same as auth failure; check `agpair doctor --fresh` `last_failure_type` for `executor_probe_timeout` or `executor_hook_interference` before changing credentials.

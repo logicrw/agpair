@@ -181,6 +181,27 @@ def test_codex_user_prompt_submit_emits_external_first_context(tmp_path: Path, m
     assert "Codex native subagents" in context
 
 
+def test_codex_hooks_noop_inside_agpair_internal_probe(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_INTERNAL_ROLE", "probe")
+    repo_path = tmp_path / "repo"
+    init_git_repo(repo_path)
+
+    for command, event_name in (
+        ("user-prompt-submit", "UserPromptSubmit"),
+        ("stop", "Stop"),
+        ("subagent-start", "SubagentStart"),
+    ):
+        result = CliRunner().invoke(
+            app,
+            ["codex", "hook", command],
+            input=hook_input(repo_path, event=event_name),
+        )
+
+        assert result.exit_code == 0
+        assert json.loads(result.stdout) == {"continue": True, "suppressOutput": True}
+
+
 def test_codex_stop_does_not_block_for_plain_acked_state(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"

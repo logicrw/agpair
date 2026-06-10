@@ -29,6 +29,10 @@ receipt、日志、status、retry 和验收证据；外部 CLI 继续使用它�
 skills、MCP、memory、plugins 和 provider 配置。自调用规避由 controller
 suppression 处理，不通过 executor launch 配置特殊化。
 
+AGPair 自己启动的 executor、probe、smoke 和 retry 进程会被标记为 internal，
+因此已安装的 Codex / Claude hooks 会对这些进程 no-op。正常主控会话仍会收到
+external-first 提示。
+
 ## 快速开始
 
 ```bash
@@ -113,8 +117,8 @@ agpair claude config --install --scope project --repo-path /path/to/repo --sync-
 
 要让 Codex 调用外部 `claude-code` worker，AGPair 默认使用 Claude auth
 mode `auto`：先尝试有效的本机 Claude Code OAuth / 订阅登录；如果没有登录或
-live probe 失败，就复用 CC Switch 当前选中的 Claude provider，例如 Kimi 或未来
-其他 Anthropic-compatible provider。AGPair 不需要再单独配置一套 Claude API key。
+live probe 失败，就复用 CC Switch 当前选中的 Anthropic-compatible Claude
+provider。AGPair 不需要再单独配置一套 Claude API key。
 
 ```bash
 claude auth status
@@ -124,7 +128,9 @@ agpair doctor --fresh --repo-path /path/to/repo
 `doctor --fresh` 会跑一个极小 live auth probe，并把选中的 `auth_mode` 显示为
 `oauth` 或 `ccswitch`。如果 OAuth 失败，用 `claude auth login` 刷新本机
 Claude Code 登录；如果 CC Switch 失败，就在 CC Switch 里更新当前 Claude
-provider。
+provider。`last_failure_type` 里的 `executor_probe_timeout` 和
+`executor_hook_interference` 是 runtime / probe 边界问题，不是 credential
+问题；`executor_auth_required` 才表示 credential 需要处理。
 
 只有明确想绕过 OAuth 和 CC Switch、给 worker 使用单独 API credential 时，才启用
 API-key worker mode：

@@ -139,6 +139,48 @@ def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch
     assert "gemini_cli" not in health
 
 
+def test_doctor_reports_claude_probe_timeout_not_auth_required(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    _clear_disk_cache(tmp_path)
+    for env_var, filename in (
+        ("AGPAIR_ANTIGRAVITY_CLI_BIN", "agy"),
+        ("AGPAIR_GROK_CLI_BIN", "grok"),
+        ("AGPAIR_CLAUDE_CODE_BIN", "claude"),
+        ("AGPAIR_CODEX_BIN", "codex"),
+    ):
+        bin_path = tmp_path / "bin" / filename
+        bin_path.parent.mkdir(parents=True, exist_ok=True)
+        if filename == "claude":
+            bin_path.write_text(
+                """#!/bin/sh
+if [ "$1" = "--help" ]; then
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf '{"loggedIn":true,"authMethod":"oauth_token"}\\n'
+  exit 0
+fi
+sleep 30
+""",
+                encoding="utf-8",
+            )
+        else:
+            bin_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        bin_path.chmod(0o755)
+        monkeypatch.setenv(env_var, str(bin_path))
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_AUTH_MODE", "oauth")
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_LIVE_PROBE_TIMEOUT_SECONDS", "0.2")
+
+    result = CliRunner().invoke(app, ["doctor", "--fresh"])
+
+    assert result.exit_code == 0
+    health = json.loads(result.stdout)["executor_cli_health"]["claude-code"]
+    assert health["available"] is False
+    assert health["auth_state"] == "executor_probe_timeout"
+    assert health["last_failure_type"] == "executor_probe_timeout"
+    assert health["last_failure_type"] != "executor_auth_required"
+
+
 def test_doctor_reports_daemon_status_and_latest_receipt(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     _clear_disk_cache(tmp_path)

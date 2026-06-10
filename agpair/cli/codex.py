@@ -10,6 +10,7 @@ from typing import Any
 import typer
 
 from agpair.config import AppPaths
+from agpair.internal_context import client_hooks_suppressed
 from agpair.storage.db import ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
@@ -208,6 +209,14 @@ def _emit_json(payload: dict[str, Any]) -> None:
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def _emit_noop_hook() -> None:
+    _emit_json({"continue": True, "suppressOutput": True})
+
+
+def _should_noop_client_hook() -> bool:
+    return client_hooks_suppressed()
+
+
 @app.command("config")
 def config(
     install: bool = typer.Option(False, "--install", help="Install AGPair-managed Codex hooks."),
@@ -266,6 +275,9 @@ def _hook_specific_output(event_name: str, context: str) -> dict[str, Any]:
 
 @hook_app.command("user-prompt-submit")
 def hook_user_prompt_submit() -> None:
+    if _should_noop_client_hook():
+        _emit_noop_hook()
+        return
     payload = _read_stdin_json()
     repo_path = _resolve_repo_from_hook(payload)
     if repo_path is None:
@@ -290,6 +302,9 @@ def _latest_terminal_receipt(paths: AppPaths, task_id: str):
 
 @hook_app.command("stop")
 def hook_stop() -> None:
+    if _should_noop_client_hook():
+        _emit_noop_hook()
+        return
     payload = _read_stdin_json()
     repo_path = _resolve_repo_from_hook(payload)
     if repo_path is None:
@@ -329,6 +344,9 @@ def hook_stop() -> None:
 
 @hook_app.command("subagent-start")
 def hook_subagent_start() -> None:
+    if _should_noop_client_hook():
+        _emit_noop_hook()
+        return
     payload = _read_stdin_json()
     repo_path = _resolve_repo_from_hook(payload)
     if repo_path is None:

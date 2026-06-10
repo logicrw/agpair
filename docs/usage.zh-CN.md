@@ -197,6 +197,10 @@ wait/watch、retry 和验收证据；外部 CLI 保留它正常启动时的 skil
 plugins 和 provider 配置。如果外部 attempt 不够好，就自然模式重试、换另一个
 外部 executor，或者让主控回到自己的原生 subagent fallback / review lane。
 
+AGPair 的 external-first hooks 只面向主控会话。AGPair 自己启动的 executor、
+probe、smoke 和 retry 进程会被标记为 internal，让 Codex / Claude hooks no-op，
+避免递归注入委派提示，或被无关的 `ready_for_review` 任务拦停。
+
 本地 CLI 的 approval 模式可以通过环境变量调整：
 
 - `AGPAIR_ANTIGRAVITY_CLI_BIN=/absolute/path/to/agy`
@@ -227,7 +231,13 @@ plugins 和 provider 配置。如果外部 attempt 不够好，就自然模式�
   `agpair doctor --fresh` 的 live auth probe 也使用同一个 managed-natural
   Claude Code surface；不会使用 bare mode，也不会禁用 skills/MCP。health JSON
   会为这条路径报告 `auth_satisfied`、`auth_probe_environment_mode`、
-  `auth_probe_skill_policy` 和 `auth_probe_mcp_policy`。
+  `auth_probe_skill_policy`、`auth_probe_mcp_policy`、`auth_state` 和
+  `last_failure_type`。`executor_probe_timeout` 和
+  `executor_hook_interference` 不是 credential 失败；只有
+  `executor_auth_required` 表示需要处理 OAuth 或 CC Switch provider credential。
+- `AGPAIR_CLAUDE_CODE_PROBE_CWD=/tmp-like-neutral-path`
+  可选。live auth probe 默认跑在中立临时目录，避免项目 hooks、MCP 和 repo
+  上下文把 provider 检查变成主控任务。
 - `AGPAIR_CLAUDE_CODE_SETTINGS=/absolute/path/to/settings.json`
   API mode 下可选 Claude Code settings JSON 或路径。
   可用下面的命令生成安全模板：
@@ -240,6 +250,12 @@ plugins 和 provider 配置。如果外部 attempt 不够好，就自然模式�
   旧别名：`AGPAIR_CODEX_CLI`
 - `AGPAIR_CODEX_APPROVAL_MODE=default|full_auto|bypass_all`
   默认：`bypass_all`
+
+以下是 AGPair 自动设置的内部 launch markers，不要放进全局 shell：
+
+- `AGPAIR_INTERNAL_ROLE=probe|executor|smoke`
+- `AGPAIR_SUPPRESS_CLIENT_HOOKS=1`
+- `AGPAIR_NONINTERACTIVE=1`
 
 这些开关都是 adapter-local 的诊断/兼容入口。所有 executor 的共享合同仍以
 registry profile 为准，测试会要求 profile 声明的非交互和隔离 flag 与 adapter

@@ -412,6 +412,13 @@ def executor_health_snapshot(
             if claude_auth_resolution
             else None
         )
+        auth_failure_type = (
+            claude_auth_resolution.failure_class
+            if claude_auth_resolution and isolation_auth_error
+            else "executor_auth_required"
+            if isolation_auth_error
+            else None
+        )
         last_failure_type = None
         if not lifecycle.allowed_for_new_tasks:
             last_failure_type = lifecycle.blocker_type
@@ -420,14 +427,14 @@ def executor_health_snapshot(
         elif launch_clean is False:
             last_failure_type = "launch_probe_failed"
         elif isolation_auth_error:
-            last_failure_type = "executor_auth_required"
+            last_failure_type = auth_failure_type or "executor_auth_required"
         auth_satisfied = isolation_auth_error is None
         auth_source = None
         if executor_id == "claude-code":
             auth_source = auth_mode
             if ccswitch_provider:
                 auth_source = "ccswitch"
-        auth_state = "ok" if auth_satisfied else "executor_auth_required"
+        auth_state = "ok" if auth_satisfied else auth_failure_type or "executor_auth_required"
         launch_probe_status = (
             "ok"
             if launch_clean is True

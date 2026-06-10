@@ -98,6 +98,8 @@ def test_dispatch_creates_default_isolated_worktree_and_records_execution_path(t
 
     _, kwargs = mock_popen.call_args
     assert kwargs["cwd"] == str(expected_worktree.resolve())
+    assert kwargs["env"]["AGPAIR_INTERNAL_ROLE"] == "executor"
+    assert kwargs["env"]["AGPAIR_SUPPRESS_CLIENT_HOOKS"] == "1"
 
 
 def test_dispatch_reuses_existing_isolated_worktree(tmp_path) -> None:

@@ -65,6 +65,43 @@ def test_claude_live_probe_timeout_default_is_realistic(monkeypatch: pytest.Monk
     assert _live_probe_timeout() == DEFAULT_LIVE_PROBE_TIMEOUT_SECONDS
 
 
+def test_claude_probe_uses_internal_env_and_neutral_cwd(monkeypatch, tmp_path: Path) -> None:
+    probe_cwd = tmp_path / "neutral"
+    probe_cwd.mkdir()
+    fake_binary = tmp_path / "claude"
+    fake_binary.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+
+print(json.dumps({
+    "cwd": os.getcwd(),
+    "role": os.environ.get("AGPAIR_INTERNAL_ROLE"),
+    "suppress_hooks": os.environ.get("AGPAIR_SUPPRESS_CLIENT_HOOKS"),
+    "noninteractive": os.environ.get("AGPAIR_NONINTERACTIVE"),
+    "ci": os.environ.get("CI"),
+}))
+""",
+        encoding="utf-8",
+    )
+    fake_binary.chmod(0o755)
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_PROBE_CWD", str(probe_cwd))
+
+    result = _run_probe(
+        str(fake_binary),
+        ["--print", "probe"],
+        env={"PATH": os.environ["PATH"]},
+        timeout_seconds=5.0,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["cwd"] == str(probe_cwd)
+    assert payload["role"] == "probe"
+    assert payload["suppress_hooks"] == "1"
+    assert payload["noninteractive"] == "1"
+    assert payload["ci"] == "1"
+
+
 def test_claude_probe_timeout_kills_child_process_group(tmp_path: Path) -> None:
     pid_file = tmp_path / "child.pid"
     fake_binary = tmp_path / "claude"
@@ -283,6 +320,62 @@ def test_claude_oauth_live_probe_detects_invalid_auth(monkeypatch, tmp_path: Pat
     assert health["isolation_auth_satisfied"] is False
     assert health["last_failure_type"] == "executor_auth_required"
     assert "Invalid Authentication" in health["last_error_excerpt"]
+
+
+def test_claude_live_probe_timeout_is_not_reported_as_auth_required(monkeypatch, tmp_path: Path) -> None:
+    fake_binary = tmp_path / "claude"
+    fake_binary.write_text(
+        """#!/bin/sh
+if [ "$1" = "--help" ]; then
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf '{"loggedIn":true,"authMethod":"oauth_token"}\\n'
+  exit 0
+fi
+sleep 30
+""",
+        encoding="utf-8",
+    )
+    fake_binary.chmod(0o755)
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_BIN", str(fake_binary))
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_LIVE_PROBE_TIMEOUT_SECONDS", "0.2")
+    monkeypatch.delenv("AGPAIR_CLAUDE_CODE_AUTH_MODE", raising=False)
+
+    health = executor_health_snapshot(run_launch_probe=True)["claude-code"]
+
+    assert health["available"] is False
+    assert health["auth_state"] == "executor_probe_timeout"
+    assert health["last_failure_type"] == "executor_probe_timeout"
+    assert "timed out" in health["last_error_excerpt"]
+
+
+def test_claude_live_probe_hook_interference_is_not_reported_as_auth_required(monkeypatch, tmp_path: Path) -> None:
+    fake_binary = tmp_path / "claude"
+    fake_binary.write_text(
+        """#!/bin/sh
+if [ "$1" = "--help" ]; then
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf '{"loggedIn":true,"authMethod":"oauth_token"}\\n'
+  exit 0
+fi
+printf 'AGPair external-first routing is available in this repository.\\n'
+exit 1
+""",
+        encoding="utf-8",
+    )
+    fake_binary.chmod(0o755)
+    monkeypatch.setenv("AGPAIR_CLAUDE_CODE_BIN", str(fake_binary))
+    monkeypatch.delenv("AGPAIR_CLAUDE_CODE_AUTH_MODE", raising=False)
+
+    health = executor_health_snapshot(run_launch_probe=True)["claude-code"]
+
+    assert health["available"] is False
+    assert health["auth_state"] == "executor_hook_interference"
+    assert health["last_failure_type"] == "executor_hook_interference"
+    assert "AGPair external-first routing" in health["last_error_excerpt"]
 
 
 def test_claude_auto_auth_falls_back_to_ccswitch_provider(monkeypatch, tmp_path: Path) -> None:

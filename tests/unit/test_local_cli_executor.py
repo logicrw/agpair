@@ -63,6 +63,8 @@ def test_dispatch_injects_executor_env_without_writing_secret_to_cmd_json(tmp_pa
     assert mock_popen.call_args.kwargs["env"]["AGPAIR_TEST_SECRET"] == "secret-value"
     assert mock_popen.call_args.kwargs["env"]["AGPAIR_PARENT_TASK_ID"] == "TASK-ENV-1"
     assert mock_popen.call_args.kwargs["env"]["AGPAIR_DELEGATION_DEPTH"] == "1"
+    assert mock_popen.call_args.kwargs["env"]["AGPAIR_INTERNAL_ROLE"] == "executor"
+    assert mock_popen.call_args.kwargs["env"]["AGPAIR_SUPPRESS_CLIENT_HOOKS"] == "1"
     assert mock_popen.call_args.kwargs["env"]["AGPAIR_NONINTERACTIVE"] == "1"
     assert mock_popen.call_args.kwargs["env"]["CI"] == "1"
     assert mock_popen.call_args.kwargs["stdin"] is not None

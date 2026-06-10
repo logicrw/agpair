@@ -10,6 +10,7 @@ from typing import Any
 import typer
 
 from agpair.config import AppPaths
+from agpair.internal_context import client_hooks_suppressed
 from agpair.storage.db import ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
@@ -140,6 +141,14 @@ def _git_worktree_name(payload: dict[str, Any]) -> str | None:
 
 def _emit_json(payload: dict[str, Any]) -> None:
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _emit_noop_hook() -> None:
+    _emit_json({"continue": True, "suppressOutput": True})
+
+
+def _should_noop_client_hook() -> bool:
+    return client_hooks_suppressed()
 
 
 def _managed_statusline() -> dict[str, Any]:
@@ -427,6 +436,9 @@ def worker_settings(
 @hook_app.command("session-start")
 def hook_session_start() -> None:
     """Emit SessionStart hook context that nudges Claude Code toward AGPair for durable task orchestration."""
+    if _should_noop_client_hook():
+        _emit_noop_hook()
+        return
     payload = _read_stdin_json()
     try:
         paths = _paths()
@@ -456,6 +468,9 @@ def hook_session_start() -> None:
 @hook_app.command("precompact")
 def hook_precompact() -> None:
     """Block compaction only for repo tasks in acked/evidence_ready; other visible states may still show in statusline without blocking."""
+    if _should_noop_client_hook():
+        _emit_noop_hook()
+        return
     payload = _read_stdin_json()
     try:
         repo_path = _resolve_repo_path(payload)
@@ -478,6 +493,9 @@ def hook_precompact() -> None:
 @hook_app.command("user-prompt-submit")
 def hook_user_prompt_submit() -> None:
     """Inject external-first routing context into Claude Code prompts."""
+    if _should_noop_client_hook():
+        _emit_noop_hook()
+        return
     payload = _read_stdin_json()
     repo_path = _resolve_repo_path(payload)
     if repo_path is None:
@@ -492,6 +510,9 @@ def hook_user_prompt_submit() -> None:
 @hook_app.command("stop")
 def hook_stop() -> None:
     """Block Claude Code completion only when AGPair has an actionable terminal state."""
+    if _should_noop_client_hook():
+        _emit_noop_hook()
+        return
     payload = _read_stdin_json()
     repo_path = _resolve_repo_path(payload)
     if repo_path is None:
@@ -534,6 +555,9 @@ def hook_stop() -> None:
 @hook_app.command("subagent-start")
 def hook_subagent_start() -> None:
     """Advise Claude Code native subagents to stay in fallback scope."""
+    if _should_noop_client_hook():
+        _emit_noop_hook()
+        return
     payload = _read_stdin_json()
     repo_path = _resolve_repo_path(payload)
     if repo_path is None:
@@ -548,6 +572,9 @@ def hook_subagent_start() -> None:
 @hook_app.command("subagent-stop")
 def hook_subagent_stop() -> None:
     """Observability-only hook reserved for future AGPair telemetry."""
+    if _should_noop_client_hook():
+        _emit_noop_hook()
+        return
     _read_stdin_json()
     try:
         _paths()
@@ -558,6 +585,9 @@ def hook_subagent_stop() -> None:
 @hook_app.command("task-created")
 def hook_task_created() -> None:
     """Observability-only hook reserved for future AGPair telemetry."""
+    if _should_noop_client_hook():
+        _emit_noop_hook()
+        return
     _read_stdin_json()
     try:
         _paths()
@@ -568,6 +598,9 @@ def hook_task_created() -> None:
 @hook_app.command("task-completed")
 def hook_task_completed() -> None:
     """Observability-only hook reserved for future AGPair telemetry."""
+    if _should_noop_client_hook():
+        _emit_noop_hook()
+        return
     _read_stdin_json()
     try:
         _paths()
