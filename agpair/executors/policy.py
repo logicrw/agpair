@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
+from collections.abc import Iterable
 from typing import Any
 
 from agpair.executors.claude_auth import (
@@ -368,9 +369,18 @@ def _isolation_auth_error(
     )
 
 
-def executor_health_snapshot(*, run_launch_probe: bool = False) -> dict[str, dict[str, Any]]:
+def executor_health_snapshot(
+    *,
+    run_launch_probe: bool = False,
+    executor_ids: Iterable[str] | None = None,
+) -> dict[str, dict[str, Any]]:
     snapshot: dict[str, dict[str, Any]] = {}
+    selected_ids = None
+    if executor_ids is not None:
+        selected_ids = {normalize_executor_id(item) for item in executor_ids}
     for executor_id, spec in EXECUTOR_SPECS.items():
+        if selected_ids is not None and executor_id not in selected_ids:
+            continue
         configured_binary, configured_env_var, binary = _configured_executor_binary(spec)
         lifecycle = lifecycle_decision(
             executor_id=executor_id,
@@ -412,6 +422,19 @@ def executor_health_snapshot(*, run_launch_probe: bool = False) -> dict[str, dic
         elif isolation_auth_error:
             last_failure_type = "executor_auth_required"
         auth_satisfied = isolation_auth_error is None
+        auth_source = None
+        if executor_id == "claude-code":
+            auth_source = auth_mode
+            if ccswitch_provider:
+                auth_source = "ccswitch"
+        auth_state = "ok" if auth_satisfied else "executor_auth_required"
+        launch_probe_status = (
+            "ok"
+            if launch_clean is True
+            else "failed"
+            if launch_clean is False
+            else "not_run"
+        )
         available = (
             lifecycle.allowed_for_new_tasks
             and spec.enabled_by_default
@@ -420,6 +443,7 @@ def executor_health_snapshot(*, run_launch_probe: bool = False) -> dict[str, dic
             and auth_satisfied
         )
         snapshot[executor_id] = {
+            "executor_id": executor_id,
             "available": available,
             "binary": configured_binary,
             "binary_name": spec.default_binary,
@@ -442,7 +466,10 @@ def executor_health_snapshot(*, run_launch_probe: bool = False) -> dict[str, dic
             "recommended_for_controllers": list(spec.recommended_for_controllers),
             "isolation_profile": spec.isolation_profile,
             "launch_probe": list(spec.launch_probe),
+            "launch_probe_status": launch_probe_status,
             "auth_mode": auth_mode,
+            "auth_state": auth_state,
+            "auth_source": auth_source,
             "ccswitch_provider": ccswitch_provider.name if ccswitch_provider else None,
             "ccswitch_provider_id": ccswitch_provider.provider_id if ccswitch_provider else None,
             "ccswitch_source": os.path.basename(ccswitch_provider.source) if ccswitch_provider else None,
@@ -451,6 +478,9 @@ def executor_health_snapshot(*, run_launch_probe: bool = False) -> dict[str, dic
             "auth_probe_environment_mode": spec.default_environment_mode if executor_id == "claude-code" else None,
             "auth_probe_skill_policy": spec.default_skill_policy if executor_id == "claude-code" else None,
             "auth_probe_mcp_policy": spec.default_mcp_policy if executor_id == "claude-code" else None,
+            "environment_mode": spec.default_environment_mode,
+            "skill_policy": spec.default_skill_policy,
+            "mcp_policy": spec.default_mcp_policy,
             "isolation_auth_satisfied": auth_satisfied,
             "last_failure_type": last_failure_type,
             "last_error_excerpt": launch_error or isolation_auth_error,
@@ -474,6 +504,22 @@ def _suppressed_executors_for_controller(controller_id: str, *, allow_self_execu
     return tuple(suppressed)
 
 
+def _static_eligible_executors(suppressed: list[str]) -> list[str]:
+    eligible: list[str] = []
+    for spec in sorted(EXECUTOR_SPECS.values(), key=lambda item: item.default_priority):
+        lifecycle = lifecycle_decision(
+            executor_id=spec.executor_id,
+            lifecycle_status=spec.lifecycle_status,
+            replacement_executor=spec.replacement_executor,
+        )
+        if not spec.enabled_by_default or not lifecycle.allowed_for_new_tasks:
+            continue
+        if spec.executor_id in suppressed:
+            continue
+        eligible.append(spec.executor_id)
+    return eligible
+
+
 def resolve_controller_policy(
     *,
     controller: str | None = None,
@@ -488,9 +534,17 @@ def resolve_controller_policy(
         reasons.append(f"{controller_id} controller suppresses external {executor_id} by default")
 
     requested_normalized = normalize_executor_id(requested_executor) if requested_executor else None
-    health = executor_health_snapshot(run_launch_probe=require_available)
+    health = executor_health_snapshot(
+        run_launch_probe=require_available,
+        executor_ids=(requested_normalized,) if requested_normalized else None,
+    )
     eligible = []
-    for spec in sorted(EXECUTOR_SPECS.values(), key=lambda item: item.default_priority):
+    specs_to_consider = (
+        [EXECUTOR_SPECS[requested_normalized]]
+        if requested_normalized
+        else sorted(EXECUTOR_SPECS.values(), key=lambda item: item.default_priority)
+    )
+    for spec in specs_to_consider:
         lifecycle = lifecycle_decision(
             executor_id=spec.executor_id,
             lifecycle_status=spec.lifecycle_status,
@@ -527,6 +581,8 @@ def resolve_controller_policy(
             )
         reasons.append(str(reason))
 
+    if selected is None and not eligible and requested_normalized:
+        eligible = _static_eligible_executors(suppressed)
     if selected is None and eligible:
         selected = eligible[0]
     return ExecutorPolicyDecision(

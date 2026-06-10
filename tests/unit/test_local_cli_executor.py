@@ -60,6 +60,11 @@ def test_dispatch_injects_executor_env_without_writing_secret_to_cmd_json(tmp_pa
     cmd = json.loads((Path(dispatch.session_id) / "cmd.json").read_text(encoding="utf-8"))
     assert "secret-value" not in json.dumps(cmd)
     assert mock_popen.call_args.kwargs["env"]["AGPAIR_TEST_SECRET"] == "secret-value"
+    assert mock_popen.call_args.kwargs["env"]["AGPAIR_PARENT_TASK_ID"] == "TASK-ENV-1"
+    assert mock_popen.call_args.kwargs["env"]["AGPAIR_DELEGATION_DEPTH"] == "1"
+    assert mock_popen.call_args.kwargs["env"]["AGPAIR_NONINTERACTIVE"] == "1"
+    assert mock_popen.call_args.kwargs["env"]["CI"] == "1"
+    assert mock_popen.call_args.kwargs["stdin"] is not None
 
 
 def test_dispatch_injects_task_id_commit_requirement(tmp_path):
@@ -221,6 +226,34 @@ def test_poll_persists_error_summary_to_state_json(tmp_path):
     assert "boom" in persisted["error_summary"]
     assert persisted["final_summary"] is None
     assert state.receipt["payload"]["returncode"] == 7
+
+
+def test_poll_blocks_when_executor_waits_for_interactive_input(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "pid": 12345,
+                "pgid": 12345,
+                "process_start_time": 1,
+                "repo_path": str(tmp_path),
+                "start_head": None,
+                "is_process_alive": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "stderr.log").write_text("Do you want to proceed? [y/N]\n", encoding="utf-8")
+
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=True), \
+         mock.patch.object(executor, "_ensure_process_dead", return_value=(False, 143)):
+        state = executor.poll("TASK-WAITING", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is True
+    assert state.receipt["payload"]["blocker_type"] == "executor_waiting_for_input"
+    assert state.receipt["payload"]["recoverable"] is True
 
 
 def test_poll_classifies_executor_quota_exhaustion(tmp_path):

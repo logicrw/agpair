@@ -84,18 +84,21 @@ def _slug(value: str) -> str:
     return "".join(ch if ch.isalnum() else "-" for ch in value).strip("-").lower()
 
 
-def _ensure_git_repo(repo_path: Path) -> None:
+def _git_toplevel(repo_path: Path) -> Path:
     proc = _run(["git", "-C", str(repo_path), "rev-parse", "--show-toplevel"])
     if proc.returncode != 0:
         raise SystemExit(f"repo path is not a git repository: {repo_path}\n{proc.stderr}")
+    return Path(proc.stdout.strip()).resolve()
+
+def _ensure_git_repo(repo_path: Path) -> None:
+    _git_toplevel(repo_path)
 
 
-def _make_worktree(repo_path: Path, worktree_path: Path) -> tuple[bool, str | None]:
-    worktree_path.parent.mkdir(parents=True, exist_ok=True)
-    proc = _run(["git", "-C", str(repo_path), "worktree", "add", "--detach", "--", str(worktree_path), "HEAD"])
-    if proc.returncode == 0:
-        return True, None
-    return False, (proc.stderr or proc.stdout).strip()
+def _expected_isolated_execution_path(repo_path: Path, task_id: str) -> Path:
+    repo_root = _git_toplevel(repo_path)
+    relative_path = repo_path.resolve().relative_to(repo_root)
+    worktree_root = repo_root / ".agpair" / "worktrees" / task_id
+    return (worktree_root / relative_path).resolve()
 
 
 def _cleanup_worktree(repo_path: Path, worktree_path: Path) -> dict[str, Any]:
@@ -114,8 +117,25 @@ def _cleanup_worktree(repo_path: Path, worktree_path: Path) -> dict[str, Any]:
     }
 
 
+def _execution_path_from_status(status_payload: dict[str, Any] | None, fallback: Path) -> Path:
+    if status_payload:
+        raw = status_payload.get("execution_repo_path")
+        if isinstance(raw, str) and raw.strip():
+            return Path(raw).expanduser().resolve()
+    return fallback
+
+
+def _cleanup_root_for_execution_path(execution_path: Path) -> Path:
+    if not execution_path.exists():
+        return execution_path
+    proc = _run(["git", "-C", str(execution_path), "rev-parse", "--show-toplevel"], timeout=30)
+    if proc.returncode == 0 and proc.stdout.strip():
+        return Path(proc.stdout.strip()).resolve()
+    return execution_path
+
+
 def _body_for_executor(executor_id: str, controller: str, task_id: str, worktree_path: Path) -> str:
-    target_file = f"tests/fixtures/external_executor_smoke/{_slug(executor_id)}.txt"
+    target_file = f"tests/fixtures/external_executor_smoke/{_slug(executor_id)}.smoke"
     receipt = {
         "schema_version": "1",
         "task_id": task_id,
@@ -189,6 +209,30 @@ def _changed_file_evidence(worktree_path: Path, changed_files: Any) -> tuple[lis
     return declared, present
 
 
+def _fallback_suggestion(failure_class: str | None) -> str | None:
+    if not failure_class:
+        return None
+    if failure_class in {"executor_suppressed", "executor_unavailable", "executor_auth_required"}:
+        return "switch_executor_or_use_controller_native_subagent"
+    if failure_class in {"terminal_receipt_missing", "changed_files_not_present", "report_missing"}:
+        return "retry_bounded_slice_or_switch_executor"
+    if failure_class == "no_progress_timeout":
+        return "abandon_and_switch_executor"
+    return "inspect_artifacts_then_retry_or_fallback"
+
+
+def _value_metric_defaults(adoptable_result: str, failure_class: str | None) -> dict[str, Any]:
+    return {
+        "adoptable_result": adoptable_result,
+        "adoptable": adoptable_result in {"yes", "partial"},
+        "time_to_first_useful_signal_seconds": None,
+        "fallback_suggestion": _fallback_suggestion(failure_class),
+        "controller_rework": "none" if adoptable_result == "yes" else "unknown",
+        "protocol_warnings": [],
+        "failure_class": failure_class,
+    }
+
+
 def _adoption_evidence(*, status_payload: dict[str, Any] | None, worktree_path: Path) -> dict[str, Any]:
     receipt, receipt_payload = _terminal_receipt_payload(status_payload)
     changed_files, present_changed_files = _changed_file_evidence(
@@ -211,10 +255,59 @@ def _adoption_evidence(*, status_payload: dict[str, Any] | None, worktree_path: 
         blockers.append("report_missing")
     if not stdout_path:
         blockers.append("stdout_artifact_missing")
+    status_protocol = status_payload.get("protocol_result") if status_payload else None
+    protocol_warnings = (
+        status_protocol.get("warnings")
+        if isinstance(status_protocol, dict) and isinstance(status_protocol.get("warnings"), list)
+        else []
+    )
+    status_adoption = status_payload.get("adoption_result") if status_payload else None
+    raw_status_adoptable_result = (
+        status_adoption.get("adoptable_result")
+        if isinstance(status_adoption, dict)
+        else None
+    )
+    status_adoptable_result = raw_status_adoptable_result if raw_status_adoptable_result != "unknown" else None
+    status_blockers = (
+        status_adoption.get("blockers")
+        if isinstance(status_adoption, dict) and isinstance(status_adoption.get("blockers"), list)
+        else []
+    )
+    adoption_blockers = status_blockers if status_adoptable_result else blockers
+    adoptable_result = (
+        status_adoptable_result
+        if status_adoptable_result in {"yes", "partial", "no", "unknown"}
+        else "yes"
+        if not blockers
+        else "no"
+    )
+    status_controller_rework = (
+        status_adoption.get("controller_rework")
+        if isinstance(status_adoption, dict)
+        and isinstance(status_adoption.get("controller_rework"), str)
+        and status_adoption.get("controller_rework") != "unknown"
+        else None
+    )
+    controller_rework = (
+        status_controller_rework
+        if status_controller_rework is not None
+        else "none"
+        if adoptable_result == "yes"
+        else "minor"
+        if adoptable_result == "partial" and not adoption_blockers
+        else "unknown"
+    )
+    is_adoptable = adoptable_result in {"yes", "partial"} and not adoption_blockers
+    failure_class = None if is_adoptable else (adoption_blockers[0] if adoption_blockers else "not_adoptable")
 
     return {
-        "adoptable_result": not blockers,
-        "adoption_blockers": blockers,
+        "adoptable_result": adoptable_result,
+        "adoptable": is_adoptable,
+        "adoption_blockers": adoption_blockers,
+        "controller_rework": controller_rework,
+        "protocol_warnings": protocol_warnings,
+        "failure_class": failure_class,
+        "fallback_suggestion": _fallback_suggestion(failure_class),
         "adoption_evidence": {
             "terminal_receipt": receipt is not None,
             "receipt_status": receipt.get("status") if receipt else None,
@@ -352,7 +445,7 @@ def _wait_for_status(
     task_id: str,
     wait_cmd_base: list[str],
     status_cmd: list[str],
-    worktree_path: Path,
+    expected_execution_path: Path,
     timeout_seconds: float,
     interval_seconds: float,
     no_progress_seconds: float,
@@ -360,6 +453,7 @@ def _wait_for_status(
     started_at = time.monotonic()
     deadline = started_at + timeout_seconds
     last_progress_at = started_at
+    first_progress_at: float | None = None
     last_signature: tuple[Any, ...] | None = None
     last_status_payload: dict[str, Any] | None = None
     while True:
@@ -384,11 +478,14 @@ def _wait_for_status(
         phase = status_payload.get("phase") if status_payload else None
         if phase is None and wait_payload:
             phase = wait_payload.get("phase")
-        signature = _artifact_progress_signature(status_payload, worktree_path)
+        execution_path = _execution_path_from_status(status_payload, expected_execution_path)
+        signature = _artifact_progress_signature(status_payload, execution_path)
         if signature != last_signature:
             last_signature = signature
             if _signature_has_progress(signature):
                 last_progress_at = time.monotonic()
+                if first_progress_at is None:
+                    first_progress_at = last_progress_at
         if phase in TERMINAL_PHASES:
             return (0 if phase in TERMINAL_OK_PHASES else 1), {
                 "ok": phase in TERMINAL_OK_PHASES,
@@ -397,6 +494,9 @@ def _wait_for_status(
                 "watchdog_triggered": False,
                 "last_wait_returncode": wait_proc.returncode,
                 "last_wait_payload": wait_payload,
+                "time_to_first_useful_signal_seconds": (
+                    round(first_progress_at - started_at, 3) if first_progress_at is not None else None
+                ),
             }, status_payload
         now = time.monotonic()
         if no_progress_seconds > 0 and now - last_progress_at >= no_progress_seconds:
@@ -415,6 +515,9 @@ def _wait_for_status(
                 "terminate_detail": terminate_detail,
                 "abandon_returncode": abandon.returncode,
                 "abandon_output": (abandon.stdout or abandon.stderr).strip(),
+                "time_to_first_useful_signal_seconds": (
+                    round(first_progress_at - started_at, 3) if first_progress_at is not None else None
+                ),
             }, status_payload
         if now >= deadline:
             return 1, {
@@ -424,6 +527,9 @@ def _wait_for_status(
                 "watchdog_triggered": False,
                 "last_wait_returncode": wait_proc.returncode,
                 "last_wait_payload": wait_payload,
+                "time_to_first_useful_signal_seconds": (
+                    round(first_progress_at - started_at, 3) if first_progress_at is not None else None
+                ),
             }, status_payload
         time.sleep(max(0.1, min(interval_seconds, deadline - now)))
 
@@ -431,13 +537,13 @@ def _wait_for_status(
 def _executor_result(
     *,
     repo_path: Path,
-    worktree_root: Path,
     controller: str,
     executor_id: str,
     allow_self_executor: bool,
     timeout_seconds: float,
     interval_seconds: float,
     no_progress_seconds: float,
+    dirty_snapshot: str,
     cleanup: bool,
     run_id: str,
 ) -> dict[str, Any]:
@@ -456,6 +562,7 @@ def _executor_result(
             "blocker_type": "invalid_executor",
             "reason": str(exc),
             "attempted": False,
+            **_value_metric_defaults("no", "invalid_executor"),
         }
     if decision.rejected_executor:
         health = executor_health_snapshot(run_launch_probe=True).get(executor_id, {})
@@ -467,21 +574,12 @@ def _executor_result(
             "controller_policy": decision.to_dict(),
             "health": health,
             "attempted": False,
+            **_value_metric_defaults("no", health.get("last_failure_type") or "executor_suppressed"),
         }
 
     task_id = f"TASK-SMOKE-{_slug(controller)[:8].upper()}-{_slug(executor_id).replace('-', '')[:10].upper()}-{run_id[-6:]}"
-    worktree_path = worktree_root / f"{task_id}-{_slug(executor_id)}"
-    created, error = _make_worktree(repo_path, worktree_path)
-    if not created:
-        return {
-            "executor_id": executor_id,
-            "task_id": task_id,
-            "outcome": "blocked",
-            "blocker_type": "worktree_create_failed",
-            "reason": error,
-            "attempted": False,
-            "worktree_path": str(worktree_path),
-        }
+    expected_execution_path = _expected_isolated_execution_path(repo_path, task_id)
+    cleanup_target = expected_execution_path
 
     start_cmd = [
         sys.executable,
@@ -490,7 +588,7 @@ def _executor_result(
         "task",
         "start",
         "--repo-path",
-        str(worktree_path),
+        str(repo_path),
         "--controller",
         policy_controller,
         "--executor",
@@ -499,12 +597,15 @@ def _executor_result(
         "evidence",
         "--authorization-profile",
         "local_mutating",
+        "--isolated-worktree",
         "--task-id",
         task_id,
         "--body",
-        _body_for_executor(executor_id, policy_controller, task_id, worktree_path),
+        _body_for_executor(executor_id, policy_controller, task_id, expected_execution_path),
         "--no-wait",
     ]
+    if dirty_snapshot != "default":
+        start_cmd.extend(["--dirty-snapshot", dirty_snapshot])
     if allow_self_executor:
         start_cmd.append("--allow-self-executor")
     wait_cmd_base = [
@@ -537,21 +638,24 @@ def _executor_result(
                 "blocker_type": "task_start_timeout" if start.returncode == 124 else "task_start_failed",
                 "reason": (start.stderr or start.stdout).strip(),
                 "attempted": True,
-                "worktree_path": str(worktree_path),
+                "worktree_path": str(expected_execution_path),
                 "start_returncode": start.returncode,
+                **_value_metric_defaults("no", "task_start_timeout" if start.returncode == 124 else "task_start_failed"),
             }
             return result_payload
         wait_returncode, wait_payload, status_payload = _wait_for_status(
             task_id=task_id,
             wait_cmd_base=wait_cmd_base,
             status_cmd=status_cmd,
-            worktree_path=worktree_path,
+            expected_execution_path=expected_execution_path,
             timeout_seconds=timeout_seconds,
             interval_seconds=interval_seconds,
             no_progress_seconds=no_progress_seconds,
         )
         status = _run(status_cmd, cwd=repo_path, timeout=30)
         status_payload = _parse_json_output(status.stdout) or status_payload
+        execution_path = _execution_path_from_status(status_payload, expected_execution_path)
+        cleanup_target = _cleanup_root_for_execution_path(execution_path)
         phase = status_payload.get("phase") if status_payload else None
         failure_context = status_payload.get("failure_context") if status_payload else None
         blocker_type = wait_payload.get("blocker_type")
@@ -560,10 +664,16 @@ def _executor_result(
         outcome = "ready_for_review" if phase in TERMINAL_OK_PHASES else "blocked"
         if wait_returncode != 0 and phase not in TERMINAL_OK_PHASES:
             outcome = "blocked"
-        adoption = _adoption_evidence(status_payload=status_payload, worktree_path=worktree_path)
-        if outcome == "ready_for_review" and not adoption["adoptable_result"]:
+        adoption = _adoption_evidence(status_payload=status_payload, worktree_path=execution_path)
+        if outcome == "ready_for_review" and not adoption["adoptable"]:
             outcome = "blocked"
             blocker_type = blocker_type or "adoptable_result_missing"
+        if blocker_type and not adoption["adoptable"]:
+            adoption = {
+                **adoption,
+                "failure_class": blocker_type,
+                "fallback_suggestion": _fallback_suggestion(str(blocker_type)),
+            }
         result_payload = {
             "executor_id": executor_id,
             "task_id": task_id,
@@ -571,18 +681,20 @@ def _executor_result(
             "blocker_type": blocker_type,
             "phase": phase,
             "attempted": True,
-            "worktree_path": str(worktree_path),
+            "worktree_path": str(cleanup_target),
+            "execution_repo_path": str(execution_path),
             "git_status_short": _run(
-                ["git", "-C", str(worktree_path), "status", "--short", "--untracked-files=all"],
+                ["git", "-C", str(execution_path), "status", "--short", "--untracked-files=all"],
                 timeout=30,
             ).stdout,
-            "git_diff_name_status": _run(["git", "-C", str(worktree_path), "diff", "--name-status"], timeout=30).stdout,
+            "git_diff_name_status": _run(["git", "-C", str(execution_path), "diff", "--name-status"], timeout=30).stdout,
             "controller_policy": decision.to_dict(),
             "health": executor_health_snapshot().get(executor_id, {}),
             "start_returncode": start.returncode,
             "wait_returncode": wait_returncode,
             "status_returncode": status.returncode,
             "wait_payload": wait_payload,
+            "time_to_first_useful_signal_seconds": wait_payload.get("time_to_first_useful_signal_seconds"),
             "status": status_payload,
             "artifacts": _artifact_summary(status_payload),
             **adoption,
@@ -592,7 +704,7 @@ def _executor_result(
         return result_payload
     finally:
         if cleanup:
-            result_payload["cleanup"] = _cleanup_worktree(repo_path, worktree_path)
+            result_payload["cleanup"] = _cleanup_worktree(repo_path, cleanup_target)
 
 
 def _write_report(report: dict[str, Any], repo_path: Path) -> Path:
@@ -613,13 +725,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout-seconds", type=float, default=300)
     parser.add_argument("--interval-seconds", type=float, default=2)
     parser.add_argument("--no-progress-seconds", type=float, default=120)
+    parser.add_argument(
+        "--dirty-snapshot",
+        choices=("off", "tracked", "default"),
+        default="off",
+        help="Dirty worktree context mode for the AGPair isolated smoke task. Use 'default' to exercise task start defaults.",
+    )
     parser.add_argument("--keep-worktrees", action="store_true")
     args = parser.parse_args(argv)
 
     repo_path = Path(args.repo_path).expanduser().resolve()
     _ensure_git_repo(repo_path)
     run_id = f"smoke-{_slug(args.controller)}-{_timestamp()}"
-    worktree_root = repo_path / ".agpair" / "smoke" / "worktrees" / run_id
     if args.all_registered:
         executor_ids = list(registered_executor_ids())
     elif args.executors:
@@ -632,13 +749,13 @@ def main(argv: list[str] | None = None) -> int:
     results = [
         _executor_result(
             repo_path=repo_path,
-            worktree_root=worktree_root,
             controller=args.controller,
             executor_id=executor_id,
             allow_self_executor=args.allow_self_executor,
             timeout_seconds=args.timeout_seconds,
             interval_seconds=args.interval_seconds,
             no_progress_seconds=args.no_progress_seconds,
+            dirty_snapshot=args.dirty_snapshot,
             cleanup=not args.keep_worktrees,
             run_id=run_id,
         )
@@ -654,10 +771,11 @@ def main(argv: list[str] | None = None) -> int:
         "all_registered": args.all_registered,
         "timeout_seconds": args.timeout_seconds,
         "no_progress_seconds": args.no_progress_seconds,
+        "dirty_snapshot": args.dirty_snapshot,
         "results": results,
     }
     report["harness_completed"] = True
-    report["all_success"] = all(result.get("adoptable_result") is True for result in results)
+    report["all_success"] = all(result.get("adoptable") is True for result in results)
     report_path = repo_path / ".agpair" / "smoke" / "reports" / f"{run_id}.json"
     report["report_path"] = str(report_path)
     _write_report(report, repo_path)

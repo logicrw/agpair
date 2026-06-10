@@ -1,0 +1,95 @@
+version: 2
+
+goal:
+  title: "Adoption-Oriented External Agent V2.3 Implementation"
+  slug: "adoption-oriented-external-agent-v2-3"
+  kind: existing_plan
+  status: complete
+  oracle:
+    signal: "V2.3 plan is implemented in code/tests/docs/local config and verified by tests, real smoke, and final audit."
+    cadence: "after each implementation slice and final audit"
+    final_proof: "PYTHONPATH=. pytest -q, git diff --check, real executor smoke matrices with adoptable_result or precise blockers, local config sync proof, and final privacy-safe audit."
+  intake:
+    original_request: "/goal-prep docs/superpowers/plans/2026-06-09-adoption-oriented-external-agent-v2-3.md 全部落入代码层面。"
+    interpreted_outcome: "AGPair V2.3 becomes a practical external subagent layer with adoption-oriented results and bounded mutating implementation support."
+    input_shape: existing_plan
+    audience: "AGPair maintainer; Codex and Claude Code local controllers"
+    authority: requested
+    proof_type: test
+    likely_misfire: "Stopping after docs, fake smoke, or receipt parsing only while implementation delegation remains uncommon and results still require controller salvage."
+
+rules:
+  pm_owns_state: true
+  one_active_task: true
+  max_write_workers: 1
+  no_completion_without_judge_or_pm_audit: true
+  external_agent_first: true
+  delete_unused_paths: true
+
+agents:
+  scout: installed
+  worker: installed
+  judge: installed
+
+visual_board:
+  selected: local
+  local:
+    status: pending
+    url: "http://goalbuddy.localhost:41737/adoption-oriented-external-agent-v2-3/"
+    command: "npx goalbuddy board docs/goals/adoption-oriented-external-agent-v2-3"
+
+active_task: null
+
+tasks:
+  - id: T001
+    type: worker
+    assignee: PM
+    status: done
+    objective: "Map current implementation to the v2.3 plan, then implement receipt/protocol/adoption core model as the first coherent slice."
+    allowed_files:
+      - "agpair/terminal_receipts.py"
+      - "agpair/completion.py"
+      - "agpair/adoption.py"
+      - "agpair/task_terminal.py"
+      - "agpair/storage/schema.sql"
+      - "agpair/storage/db.py"
+      - "agpair/storage/tasks.py"
+      - "agpair/models.py"
+      - "agpair/cli/task.py"
+      - "tests/fixtures/terminal_receipts/"
+      - "tests/unit/test_receipt_validation.py"
+      - "tests/unit/test_adoption_result.py"
+      - "tests/unit/test_completion_policy_v1_1.py"
+      - "tests/unit/test_local_cli_executor.py"
+    verify:
+      - "PYTHONPATH=. pytest tests/unit/test_receipt_validation.py tests/unit/test_adoption_result.py tests/unit/test_completion_policy_v1_1.py tests/unit/test_local_cli_executor.py -q"
+      - "git diff --check"
+    stop_if:
+      - "Useful report output can still be blocked solely by safe receipt schema/status aliases."
+      - "Status cannot distinguish executor failure, protocol warning, and adoption result."
+
+  - id: T002
+    type: worker
+    assignee: PM
+    status: done
+    objective: "Implement bounded mutating adoption safeguards: dirty snapshot, scope validation, nested delegation guard, non-interactive execution, and isolated worktree liveness."
+    verify:
+      - "PYTHONPATH=. pytest tests/unit/test_scope_validation.py tests/unit/test_delegation_guard.py tests/integration/test_task_start_and_status.py tests/integration/test_task_wait.py -q"
+
+  - id: T003
+    type: worker
+    assignee: PM
+    status: done
+    objective: "Update wait/watch/status/smoke/docs/skills/local sync so implementation delegation is default for non-trivial code work and adoption metrics are surfaced."
+    verify:
+      - "PYTHONPATH=. pytest tests/integration/test_task_watch_events.py tests/integration/test_real_executor_smoke_harness.py tests/integration/test_codex_cli.py tests/integration/test_claude_cli.py -q"
+
+  - id: T004
+    type: judge
+    assignee: PM
+    status: done
+    objective: "Run full verification, real executor smoke, local sync proof, privacy scan, final audit, commit, and push only if clean."
+    verify:
+      - "PYTHONPATH=. pytest -q"
+      - "git diff --check"
+      - "real executor smoke matrices or precise blockers"

@@ -68,6 +68,20 @@ agpair task watch TASK-123 --json
 
 `watch --json` emits state-change events and paths to raw logs/receipts. It does not stream full executor logs into the controller context.
 
+For implementation/refactor/test-fix slices, use an isolated worktree with evidence completion:
+
+```bash
+agpair task start \
+  --executor antigravity-cli \
+  --authorization-profile local_mutating \
+  --completion-policy evidence \
+  --isolated-worktree \
+  --repo-path /path/to/repo \
+  --body "Goal: make the bounded change. Scope: name allowed files. Required changes: describe edits. Exit criteria: focused validation."
+```
+
+For isolated mutating evidence/commit tasks, AGPair snapshots tracked staged/unstaged changes into the executor worktree by default. It does not copy ignored or untracked files; pass `--dirty-snapshot off` to require a clean committed baseline.
+
 If an executor returns `blocked(approval_required)`, retry with structured blocked context:
 
 ```bash
@@ -137,12 +151,20 @@ V1 does not pause a running executor for live approval. Out-of-scope work should
 
 ## Review Gate
 
-`ready_for_review`, `evidence_ready`, and `committed` are not automatic success. The controller must inspect the AGPair status, git diff/commit evidence, receipts, raw log paths when needed, and run the relevant verification before reporting completion. Real executor smoke also requires `all_success=true` and `adoptable_result=true` for each attempted executor; dispatch or phase success alone is not enough.
+`ready_for_review`, `evidence_ready`, and `committed` are not automatic success. The controller must inspect the AGPair status, git diff/commit evidence, receipts, raw log paths when needed, and run the relevant verification before reporting completion. Real executor smoke also requires `all_success=true` and `adoptable_result=yes` or `partial` without blockers for each attempted executor; dispatch or phase success alone is not enough.
+
+Useful value metrics are completion rate, adoptable-result rate, time to first useful signal, fallback rate, controller rework rate, and abandoned/no-progress rate. Use `task status --json`, `task list --json`, and `scripts/smoke_real_executors.py` to inspect those fields.
 
 After the controller accepts the evidence, mark the task accepted so Stop hooks do not keep blocking on the same receipt:
 
 ```bash
-agpair task accept TASK-123
+agpair task accept TASK-123 --adoptable-result yes --controller-rework none
+```
+
+When AGPair protocol parsing failed but the report/stdout is useful, record explicit salvage instead:
+
+```bash
+agpair task adopt TASK-123 --from-report --adoptable-result partial --controller-rework minor
 ```
 
 `commit_ref` is optional unless the brief or authorization profile explicitly requires a commit.
@@ -166,7 +188,7 @@ Repository source files:
 
 Local installed copies:
 
-- `~/.codex/skills/agpair/SKILL.md`
+- `~/.codex/skills/agpair-codex/SKILL.md`
 - `~/.claude/skills/agpair/SKILL.md`
 - Codex hook config
 - `~/.claude/settings.json`

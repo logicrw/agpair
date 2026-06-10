@@ -1,0 +1,5 @@
+{
+  "type": "result",
+  "status": "success",
+  "result": "human text\n{\"schema_version\":\"1.0.0\",\"task_id\":\"TASK-WRAPPED-REAL\",\"attempt_no\":1,\"review_round\":0,\"status\":\"completed\",\"summary\":\"Done\",\"payload\":{\"report\":\"usable\",\"changed_files\":[],\"validation_not_run\":\"report-only\",\"scope_violations\":[],\"raw_log_path\":\"stdout.log\",\"receipt_path\":\"receipt.json\"}}"
+}

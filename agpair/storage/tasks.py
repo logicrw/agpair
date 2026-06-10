@@ -92,6 +92,7 @@ class TaskRepository:
         environment_mode_source: str | None = None,
         skill_policy: str | None = None,
         mcp_policy: str | None = None,
+        dirty_snapshot_mode: str = "off",
         workflow_id: str | None = None,
         workflow_node_id: str | None = None,
         parent_task_id: str | None = None,
@@ -154,9 +155,12 @@ class TaskRepository:
                   task_id, attempt_no, executor_backend, authorization_profile,
                   requested_completion_policy, effective_policy_json,
                   environment_mode, environment_mode_source, skill_policy, mcp_policy,
+                  protocol_warnings_json, protocol_errors_json, adoptable_result,
+                  adoption_evidence_json, controller_rework_json,
+                  dirty_snapshot_mode, dirty_snapshot_json, dirty_snapshot_applied,
                   executor_session_id, phase, terminal_receipt_json, terminal_source, started_at, finished_at,
                   created_at, updated_at
-                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
+                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', 'unknown', '{}', '{}', ?, '{}', 0, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
                 """,
                 (
                     task_id,
@@ -168,6 +172,7 @@ class TaskRepository:
                     environment.environment_mode_source,
                     selected_skill_policy,
                     selected_mcp_policy,
+                    dirty_snapshot_mode,
                     now,
                     now,
                     now,
@@ -286,6 +291,13 @@ class TaskRepository:
             WHERE task_id=?
             """,
             (reason, last_receipt_id, terminal_source, terminal_receipt_json, now, now, task_id),
+        )
+        self.record_attempt_terminal(
+            task_id=task_id,
+            attempt_no=task.attempt_no,
+            phase="blocked",
+            terminal_receipt_json=terminal_receipt_json,
+            terminal_source=terminal_source or "cli",
         )
 
     def mark_committed(self, *, task_id: str, last_receipt_id: str | None = None, terminal_source: str | None = None) -> None:
@@ -464,6 +476,7 @@ class TaskRepository:
         environment_mode_source: str | None = None,
         skill_policy: str | None = None,
         mcp_policy: str | None = None,
+        dirty_snapshot_mode: str = "off",
     ) -> TaskRecord:
         task = self.get_task(task_id)
         if task is None:
@@ -531,9 +544,12 @@ class TaskRepository:
                   task_id, attempt_no, executor_backend, authorization_profile,
                   requested_completion_policy, effective_policy_json,
                   environment_mode, environment_mode_source, skill_policy, mcp_policy,
+                  protocol_warnings_json, protocol_errors_json, adoptable_result,
+                  adoption_evidence_json, controller_rework_json,
+                  dirty_snapshot_mode, dirty_snapshot_json, dirty_snapshot_applied,
                   executor_session_id, phase, terminal_receipt_json, terminal_source, started_at, finished_at,
                   created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', 'unknown', '{}', '{}', ?, '{}', 0, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
                 """,
                 (
                     task_id,
@@ -546,6 +562,7 @@ class TaskRepository:
                     environment.environment_mode_source,
                     selected_skill_policy,
                     selected_mcp_policy,
+                    dirty_snapshot_mode,
                     now,
                     now,
                     now,
@@ -706,6 +723,74 @@ class TaskRepository:
             )
             conn.commit()
 
+    def update_attempt_adoption(
+        self,
+        *,
+        task_id: str,
+        attempt_no: int,
+        protocol_warnings_json: str,
+        protocol_errors_json: str,
+        adoptable_result: str,
+        adoption_evidence_json: str,
+        controller_rework_json: str = "{}",
+    ) -> None:
+        now = utcnow_iso()
+        with connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE task_attempts
+                SET protocol_warnings_json=?,
+                    protocol_errors_json=?,
+                    adoptable_result=?,
+                    adoption_evidence_json=?,
+                    controller_rework_json=?,
+                    updated_at=?
+                WHERE task_id=? AND attempt_no=?
+                """,
+                (
+                    protocol_warnings_json,
+                    protocol_errors_json,
+                    adoptable_result,
+                    adoption_evidence_json,
+                    controller_rework_json,
+                    now,
+                    task_id,
+                    attempt_no,
+                ),
+            )
+            conn.commit()
+
+    def update_attempt_dirty_snapshot(
+        self,
+        *,
+        task_id: str,
+        attempt_no: int,
+        dirty_snapshot_mode: str,
+        dirty_snapshot_json: str,
+        dirty_snapshot_applied: bool,
+    ) -> None:
+        now = utcnow_iso()
+        with connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE task_attempts
+                SET dirty_snapshot_mode=?,
+                    dirty_snapshot_json=?,
+                    dirty_snapshot_applied=?,
+                    updated_at=?
+                WHERE task_id=? AND attempt_no=?
+                """,
+                (
+                    dirty_snapshot_mode,
+                    dirty_snapshot_json,
+                    1 if dirty_snapshot_applied else 0,
+                    now,
+                    task_id,
+                    attempt_no,
+                ),
+            )
+            conn.commit()
+
     def record_artifact(self, *, task_id: str, attempt_no: int, artifact_type: str, path: str) -> None:
         p = Path(path)
         try:
@@ -827,6 +912,14 @@ class TaskRepository:
             environment_mode_source=get("environment_mode_source", "executor_default"),
             skill_policy=get("skill_policy", "inherit"),
             mcp_policy=get("mcp_policy", "inherit"),
+            protocol_warnings_json=get("protocol_warnings_json", "[]"),
+            protocol_errors_json=get("protocol_errors_json", "[]"),
+            adoptable_result=get("adoptable_result", "unknown"),
+            adoption_evidence_json=get("adoption_evidence_json", "{}"),
+            controller_rework_json=get("controller_rework_json", "{}"),
+            dirty_snapshot_mode=get("dirty_snapshot_mode", "off"),
+            dirty_snapshot_json=get("dirty_snapshot_json", "{}"),
+            dirty_snapshot_applied=bool(get("dirty_snapshot_applied", 0)),
             executor_session_id=row["executor_session_id"],
             phase=row["phase"],
             terminal_receipt_json=row["terminal_receipt_json"],

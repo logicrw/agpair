@@ -145,6 +145,20 @@ agpair task start \
 
 `--repo-path` 应该指向具体项目目录。AGPair 默认拒绝文件系统根目录、用户 home 目录，以及用户 home 上层目录，因为外部 executor 可能扫到私人日志、缓存和无关项目。如果确实要这么做，显式传 `--allow-broad-repo-path`；该 override 会写入 task，并在 `task status` 中可见。
 
+实现 / 重构 / 修测试这类有边界的工作，用 isolated worktree 的 evidence 任务：
+
+```bash
+agpair task start \
+  --executor antigravity-cli \
+  --repo-path /absolute/path/to/repo \
+  --authorization-profile local_mutating \
+  --completion-policy evidence \
+  --isolated-worktree \
+  --body "Goal: 有边界的修改。Scope: 允许文件。Required changes: 修改内容。Exit criteria: 聚焦验证。"
+```
+
+isolated 的 mutating evidence/commit 任务默认是 `--dirty-snapshot tracked`，会把主控 worktree 里 tracked 的 staged/unstaged 改动复制进 executor worktree。ignored 和 untracked 文件不会复制。需要让 worker 只基于已提交 HEAD 时，传 `--dirty-snapshot off`。
+
 新任务可用 executor id：
 
 - `antigravity-cli`：默认外部实现 executor
@@ -194,7 +208,8 @@ plugins 和 provider 配置。如果外部 attempt 不够好，就自然模式�
   旧别名：`AGPAIR_GROK_CLI`
 - `AGPAIR_GROK_OUTPUT_FORMAT=json|streaming-json`
   默认：`json`
-- `AGPAIR_GROK_MAX_TURNS=24`
+- `AGPAIR_GROK_MAX_TURNS=6`
+  默认值刻意收紧，适合 AGPair 后台 bounded 任务；只有明确的大任务才建议调高。
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
   旧别名：`AGPAIR_CLAUDE_CODE_CLI`
 - `AGPAIR_CLAUDE_CODE_AUTH_MODE=auto|oauth|ccswitch|api`
@@ -348,7 +363,7 @@ agpair claude hook subagent-start
 - `--scope project|user`：选择当前 repo 下的 `.claude/settings.json` 或 `~/.claude/settings.json`；默认 `project`
 - `--dry-run`：只打印 unified diff，不写盘
 - `--uninstall`：只移除 AGPair 自己管理的条目
-- `--sync-skill`：同时管理 `.claude/skills/agpair/SKILL.md` 或 `~/.claude/skills/agpair/SKILL.md`
+- `--sync-skill/--no-sync-skill`：管理 `.claude/skills/agpair/SKILL.md` 或 `~/.claude/skills/agpair/SKILL.md`；安装/卸载时默认同步
 - `--force`：显式覆盖非 AGPair 管理的 `statusLine`
 
 安全约束：
@@ -384,9 +399,17 @@ AGPair 管理的 hooks：
 - `Stop`：只在未接受的 `ready_for_review`、`approval_required` 等需要 Codex 决策的状态阻止过早结束。
 - `SubagentStart`：只给 advisory context；Codex native subagents 仍是 fallback / review 资源。
 
-`--install`、`--uninstall` 和 `--dry-run` 可搭配 `--sync-skill`，只管理
-`.codex/skills/agpair/SKILL.md` 或 `~/.codex/skills/agpair/SKILL.md`
-这一条 AGPair skill 路径。AGPair 遇到非 AGPair skill 会拒绝覆盖。
+`--install`、`--uninstall` 和 `--dry-run` 默认同步 Codex AGPair skill，只管理
+`.codex/skills/agpair-codex/SKILL.md` 或 `~/.codex/skills/agpair-codex/SKILL.md`
+这一条 AGPair skill 路径。需要只管理 hook 时传 `--no-sync-skill`。AGPair 遇到非 AGPair skill 会拒绝覆盖。
+
+### 如何判断 AGPair 是否真的有价值
+
+不要把 dispatch 成功或进程还活着当成价值。重点看 completion rate、
+adoptable-result rate（`yes` 和可用的 `partial`）、time-to-first-useful-signal、
+fallback rate、controller rework rate，以及 abandoned/no-progress rate。主要入口是
+`agpair task status --json`、`agpair task list --json` 和
+`scripts/smoke_real_executors.py`。
 
 异步任务使用低噪等待：
 
@@ -529,7 +552,7 @@ Code 原生 subagent。
 
 - 跑目标测试和完整 unit/integration suite。
 - 跑 controller matrix 的真实 smoke，要求 `all_success=true`，且每个尝试过的
-  executor 都是 `adoptable_result=true`；smoke report 只留本地。
+  executor 都是无 blocker 的 `adoptable_result=yes` 或可用的 `partial`；smoke report 只留本地。
 - 跑 `git diff --check`。
 - 检查 `git status --short --untracked-files=all`。
 - 不要提交 `.agpair/`、`~/.agpair`、raw executor logs、本地 receipts、session transcripts、个人 Codex/Claude 配置或生成的 hook debug 输出。

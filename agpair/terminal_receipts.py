@@ -26,6 +26,31 @@ class ReceiptValidationResult:
     required_missing: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class ReceiptProtocolResult:
+    receipt: StructuredTerminalReceipt | None
+    ok: bool
+    warnings: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
+    raw_body: str = ""
+
+    @property
+    def has_usable_receipt(self) -> bool:
+        return self.receipt is not None and not self.errors
+
+    @property
+    def status(self) -> TerminalReceiptStatus | None:
+        return self.receipt.status if self.receipt is not None else None
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return self.receipt.payload if self.receipt is not None else {}
+
+    @property
+    def summary(self) -> str | None:
+        return self.receipt.summary if self.receipt is not None else None
+
+
 _VALID_STATUSES = frozenset({"EVIDENCE_PACK", "BLOCKED", "COMMITTED"})
 _STATUS_ALIASES = {
     "evidence_pack": "EVIDENCE_PACK",
@@ -60,6 +85,22 @@ def _normalize_status(value: Any) -> TerminalReceiptStatus | None:
     if alias in _VALID_STATUSES:
         return alias  # type: ignore[return-value]
     return None
+
+
+def _status_is_alias(value: Any) -> bool:
+    return isinstance(value, str) and value.strip() not in _VALID_STATUSES and _normalize_status(value) is not None
+
+
+def _schema_is_alias(value: Any) -> bool:
+    return str(value or "").strip() in {"1.0", "1.0.0"}
+
+
+def _receipt_payload_has_missing_artifact_path(payload: Mapping[str, Any]) -> bool:
+    for key in ("raw_log_path", "receipt_path"):
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip():
+            return True
+    return False
 
 
 def validate_terminal_receipt_payload(
@@ -105,7 +146,7 @@ def validate_structured_receipt_dict(
     if not isinstance(parsed, dict):
         return None
     schema_version = str(parsed.get("schema_version", "")).strip()
-    if schema_version not in {"1", "1.0"}:
+    if schema_version not in {"1", "1.0", "1.0.0"}:
         return None
 
     status = _normalize_status(parsed.get("status"))
@@ -171,6 +212,41 @@ def _parse_direct_receipt(
         expected_status=expected_status,
         expected_task_id=expected_task_id,
     )
+
+
+def _protocol_for_receipt(
+    receipt: StructuredTerminalReceipt | None,
+    *,
+    raw_body: str,
+    parsed: Mapping[str, Any] | None = None,
+    source_warning: str | None = None,
+    errors: tuple[str, ...] = (),
+) -> ReceiptProtocolResult:
+    warnings: list[str] = []
+    if source_warning:
+        warnings.append(source_warning)
+    if parsed is not None:
+        if _schema_is_alias(parsed.get("schema_version")):
+            warnings.append("schema_version_alias")
+        if _status_is_alias(parsed.get("status")):
+            warnings.append("status_alias")
+        payload = parsed.get("payload")
+        if isinstance(payload, Mapping) and _receipt_payload_has_missing_artifact_path(payload):
+            warnings.append("artifact_path_missing")
+    return ReceiptProtocolResult(
+        receipt=receipt,
+        ok=receipt is not None and not errors,
+        warnings=tuple(dict.fromkeys(warnings)),
+        errors=errors,
+        raw_body=raw_body,
+    )
+
+
+def _try_parse_json(value: str) -> Any | None:
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
 
 
 def _balanced_json_object_candidates(body: str) -> list[str]:
@@ -253,39 +329,68 @@ def parse_structured_terminal_receipt(
     expected_status: str | None = None,
     expected_task_id: str | None = None,
 ) -> StructuredTerminalReceipt | None:
-    if not body:
-        return None
-    direct = _parse_direct_receipt(
+    return normalize_terminal_receipt(
         body,
         expected_status=expected_status,
         expected_task_id=expected_task_id,
-    )
+    ).receipt
+
+
+def normalize_terminal_receipt(
+    body: str,
+    *,
+    expected_status: str | None = None,
+    expected_task_id: str | None = None,
+) -> ReceiptProtocolResult:
+    if not body:
+        return ReceiptProtocolResult(receipt=None, ok=False, errors=("empty_body",), raw_body=body)
+    parsed_body = _try_parse_json(body)
+    direct = validate_structured_receipt_dict(
+        parsed_body,
+        raw_body=body,
+        expected_status=expected_status,
+        expected_task_id=expected_task_id,
+    ) if isinstance(parsed_body, Mapping) else None
     if direct is not None:
-        return direct
+        return _protocol_for_receipt(direct, raw_body=body, parsed=parsed_body)
+
+    raw_candidates = _balanced_json_object_candidates(body)
     raw_candidate = _receipt_from_json_candidates(
-        _balanced_json_object_candidates(body),
+        raw_candidates,
         expected_status=expected_status,
         expected_task_id=expected_task_id,
     )
     if raw_candidate is not None:
-        return raw_candidate
-    try:
-        parsed = json.loads(body)
-    except json.JSONDecodeError:
-        return None
+        parsed_candidate = _try_parse_json(raw_candidate.raw_body)
+        return _protocol_for_receipt(
+            raw_candidate,
+            raw_body=body,
+            parsed=parsed_candidate if isinstance(parsed_candidate, Mapping) else None,
+            source_warning="mixed_text_json",
+        )
+    parsed = parsed_body
+    if parsed is None:
+        return ReceiptProtocolResult(receipt=None, ok=False, errors=("malformed_json",), raw_body=body)
     for candidate in _wrapped_text_candidates(parsed):
         for line in reversed(candidate.splitlines()):
             stripped = line.strip()
             if not stripped.startswith("{"):
                 continue
-            nested = _parse_direct_receipt(
-                stripped,
+            nested_json = _try_parse_json(stripped)
+            nested = validate_structured_receipt_dict(
+                nested_json,
+                raw_body=stripped,
                 expected_status=expected_status,
                 expected_task_id=expected_task_id,
-            )
+            ) if isinstance(nested_json, Mapping) else None
             if nested is not None:
-                return nested
-    return None
+                return _protocol_for_receipt(
+                    nested,
+                    raw_body=body,
+                    parsed=nested_json,
+                    source_warning="wrapped_text_json",
+                )
+    return ReceiptProtocolResult(receipt=None, ok=False, errors=("receipt_not_found",), raw_body=body)
 
 
 def structured_receipt_to_dict(receipt: StructuredTerminalReceipt) -> dict[str, Any]:

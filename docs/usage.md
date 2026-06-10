@@ -131,6 +131,24 @@ external executors can otherwise scan private logs, caches, and unrelated
 projects. If a broad path is intentional, pass `--allow-broad-repo-path`; that
 override is stored on the task and visible in `task status`.
 
+For bounded implementation/refactor/test-fix work, dispatch an evidence task in
+an isolated worktree:
+
+```bash
+agpair task start \
+  --executor antigravity-cli \
+  --repo-path /absolute/path/to/repo \
+  --authorization-profile local_mutating \
+  --completion-policy evidence \
+  --isolated-worktree \
+  --body "Goal: bounded change. Scope: allowed files. Required changes: edits. Exit criteria: focused validation."
+```
+
+Isolated mutating evidence/commit tasks default to `--dirty-snapshot tracked`,
+which copies tracked staged/unstaged controller changes into the executor
+worktree. Ignored and untracked files are not copied. Use
+`--dirty-snapshot off` for a committed-HEAD-only worker baseline.
+
 Other new-task executor ids are:
 
 - `antigravity-cli`: default external implementation executor
@@ -183,7 +201,8 @@ Local CLI approval modes can be adjusted with environment variables:
   Legacy alias: `AGPAIR_GROK_CLI`
 - `AGPAIR_GROK_OUTPUT_FORMAT=json|streaming-json`
   Default: `json`
-- `AGPAIR_GROK_MAX_TURNS=24`
+- `AGPAIR_GROK_MAX_TURNS=6`
+  Default is intentionally bounded for AGPair background tasks; raise it only for larger explicitly scoped work.
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
   Legacy alias: `AGPAIR_CLAUDE_CODE_CLI`
 - `AGPAIR_CLAUDE_CODE_AUTH_MODE=auto|oauth|ccswitch|api`
@@ -360,7 +379,7 @@ Config management flags:
 - `--scope project|user`: choose `.claude/settings.json` in the current repo or `~/.claude/settings.json`; default is `project`
 - `--dry-run`: print a unified diff without writing
 - `--uninstall`: remove only AGPair-managed entries
-- `--sync-skill`: also manage the AGPair skill at `.claude/skills/agpair/SKILL.md` or `~/.claude/skills/agpair/SKILL.md`
+- `--sync-skill/--no-sync-skill`: manage the AGPair skill at `.claude/skills/agpair/SKILL.md` or `~/.claude/skills/agpair/SKILL.md`; sync is enabled by default during install/uninstall
 - `--force`: replace a conflicting non-AGPair `statusLine`
 
 Safety rules:
@@ -396,10 +415,18 @@ Managed hooks:
 - `Stop`: blocks only actionable AGPair terminal states such as unaccepted `ready_for_review` and `approval_required`.
 - `SubagentStart`: advisory context only; Codex native subagents remain fallback/review resources.
 
-Pass `--sync-skill` with `--install`, `--uninstall`, and `--dry-run` to manage
-only the AGPair skill at `.codex/skills/agpair/SKILL.md` or
-`~/.codex/skills/agpair/SKILL.md`. AGPair refuses to overwrite a non-AGPair
-skill at that path.
+`--install`, `--uninstall`, and `--dry-run` manage the Codex AGPair skill by
+default at `.codex/skills/agpair-codex/SKILL.md` or
+`~/.codex/skills/agpair-codex/SKILL.md`. Pass `--no-sync-skill` to manage only
+hooks. AGPair refuses to overwrite a non-AGPair skill at that path.
+
+### How to judge AGPair value
+
+Do not treat dispatch or process liveness as value. Track completion rate,
+adoptable-result rate (`yes` and useful `partial`), time to first useful signal,
+fallback rate, controller rework rate, and abandoned/no-progress rate. The main
+surfaces are `agpair task status --json`, `agpair task list --json`, and
+`scripts/smoke_real_executors.py`.
 
 For async tasks, attach with:
 
@@ -497,8 +524,8 @@ Before publishing or opening a PR:
 
 - Run the targeted tests plus the full unit/integration suite.
 - Run real smoke for the controller matrix, require `all_success=true` plus
-  `adoptable_result=true` for each attempted executor, and keep smoke reports
-  local.
+  blocker-free `adoptable_result=yes` or useful `partial` for each attempted
+  executor, and keep smoke reports local.
 - Run `git diff --check`.
 - Inspect `git status --short --untracked-files=all`.
 - Do not stage `.agpair/`, `~/.agpair`, raw executor logs, local receipts, session transcripts, personal Codex/Claude config, or generated hook debug output.

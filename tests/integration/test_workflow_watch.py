@@ -5,6 +5,7 @@ from pathlib import Path
 
 from agpair.config import AppPaths
 from agpair.storage.db import ensure_database
+from agpair.storage.tasks import TaskRepository
 from agpair.workflows.schema import validate_manifest
 from agpair.workflows.store import WorkflowRepository
 from agpair.workflows.watch import workflow_event_payload, workflow_status_payload
@@ -38,7 +39,24 @@ def test_workflow_watch_payload_reports_terminal_node_and_stable_cursor(tmp_path
         repo_path=str(repo_dir),
     )
     workflows = WorkflowRepository(paths.db_path)
+    tasks = TaskRepository(paths.db_path)
     workflow_id = workflows.create_workflow(manifest, workflow_id="WF-WATCH", repo_path=str(repo_dir))
+    tasks.create_task(task_id="WF-WATCH-scan", repo_path=str(repo_dir), executor_backend="antigravity-cli")
+    tasks.update_attempt_adoption(
+        task_id="WF-WATCH-scan",
+        attempt_no=1,
+        protocol_warnings_json=json.dumps(["schema_version_alias"]),
+        protocol_errors_json="[]",
+        adoptable_result="partial",
+        adoption_evidence_json=json.dumps(
+            {
+                "adoptable_result": "partial",
+                "blockers": [],
+                "warnings": ["schema_version_alias"],
+                "evidence": {"has_report": True},
+            }
+        ),
+    )
     evidence_path = paths.root / "workflows" / workflow_id / "evidence.json"
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
     evidence_path.write_text(json.dumps({"schema_version": "1", "ok": True}), encoding="utf-8")
@@ -69,6 +87,9 @@ def test_workflow_watch_payload_reports_terminal_node_and_stable_cursor(tmp_path
     assert status["phase"] == "ready_for_review"
     assert status["evidence_path"] == str(evidence_path)
     assert status["result"] == {"schema_version": "1", "ok": True}
+    scan = next(node for node in status["nodes"] if node["node_id"] == "scan")
+    assert scan["protocol_result"]["warnings"] == ["schema_version_alias"]
+    assert scan["adoption_result"]["adoptable_result"] == "partial"
     assert event["event"] == "node_state_changed"
     assert event["node_id"] == "gate"
     assert event["node_phase"] == "ready_for_review"

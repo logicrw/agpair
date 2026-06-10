@@ -17,9 +17,12 @@ def workflow_status_payload(paths: AppPaths, workflow_id: str) -> dict[str, Any]
     cursor_parts = [workflow.updated_at, workflow.phase]
     for node in nodes:
         artifact_paths: dict[str, str] = {}
+        protocol_result = None
+        adoption_result = None
         if node.task_id:
             task = tasks.get_task(node.task_id)
             if task is not None:
+                protocol_result, adoption_result = _attempt_protocol_adoption(tasks, node.task_id)
                 for artifact in tasks.list_artifacts(task_id=task.task_id, attempt_no=task.attempt_no):
                     artifact_paths[artifact.artifact_type] = artifact.path
         cursor_parts.append(f"{node.node_id}:{node.phase}:{node.updated_at}:{node.task_id or ''}")
@@ -39,6 +42,8 @@ def workflow_status_payload(paths: AppPaths, workflow_id: str) -> dict[str, Any]
             "allow_partial": node.allow_partial,
             "max_retries": node.max_retries,
             "artifact_paths": artifact_paths,
+            "protocol_result": protocol_result,
+            "adoption_result": adoption_result,
             "error": node.error or node.last_error,
             "evidence": _json_object(node.evidence_json),
             "result": _json_object(node.result_json),
@@ -117,3 +122,33 @@ def _json_object(text: str | None) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
+
+
+def _attempt_protocol_adoption(tasks: TaskRepository, task_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    attempt = tasks.current_attempt(task_id)
+    if attempt is None:
+        return (
+            {"ok": True, "warnings": [], "errors": []},
+            {"adoptable_result": "unknown", "blockers": [], "warnings": [], "evidence": {}},
+        )
+    warnings = _json_list(attempt.protocol_warnings_json)
+    errors = _json_list(attempt.protocol_errors_json)
+    adoption = _json_object(attempt.adoption_evidence_json) or {}
+    adoption.setdefault("adoptable_result", attempt.adoptable_result)
+    adoption.setdefault("blockers", [])
+    adoption.setdefault("warnings", [])
+    adoption.setdefault("evidence", {})
+    return (
+        {"ok": not bool(errors), "warnings": warnings, "errors": errors},
+        adoption,
+    )
+
+
+def _json_list(text: str | None) -> list[Any]:
+    if not text:
+        return []
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    return value if isinstance(value, list) else []

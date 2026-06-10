@@ -1,0 +1,4 @@
+plugin manifest warning: skipped invalid manifest
+mcp-debugger initialization failed: Broken pipe
+session registry sync 404 Not Found
+grep timed out timeout_secs=60

@@ -1042,10 +1042,48 @@ def test_task_watch_json_emits_live_attempt_artifact_metadata(tmp_path: Path, mo
     live_events = [item for item in parsed if item["phase"] == "acked"]
     assert live_events
     live_event = live_events[0]
+    assert live_event["event_type"] == "artifact_progress"
     assert live_event["stdout_path"] == str(stdout_path)
     assert live_event["last_executor_output_at"] is not None
+    assert live_event["stdout_size"] > 0
+    assert live_event["useful_progress"] is True
+    assert live_event["last_output_excerpt"] == "watch live output"
     assert live_event["active_attempt_artifacts"]["stdout"]["path"] == str(stdout_path)
     assert live_event["active_attempt_artifacts"]["stdout"]["excerpt"] == "watch live output"
+
+
+def test_task_watch_json_marks_bootstrap_stderr_as_not_useful_progress(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WATCH-NOISE", repo_path="/r")
+    session_dir = tmp_path / "watch-noise-session"
+    session_dir.mkdir()
+    stderr_path = session_dir / "stderr.log"
+    stderr_path.write_text(
+        (Path("tests/fixtures/terminal_receipts/bootstrap_noise_only.stderr")).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    repo.mark_acked(task_id="T-WATCH-NOISE", session_id=str(session_dir))
+
+    def noop_inline_poll(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("agpair.cli.wait._try_inline_poll", noop_inline_poll)
+
+    result = CliRunner().invoke(app, [
+        "task", "watch", "T-WATCH-NOISE", "--json",
+        "--interval-seconds", "0.01",
+        "--timeout-seconds", "0.05",
+    ])
+
+    assert result.exit_code == 1
+    parsed = [json.loads(line) for line in result.stdout.strip().splitlines() if line]
+    live_event = next(item for item in parsed if item["phase"] == "acked")
+    assert live_event["event_type"] == "artifact_progress"
+    assert live_event["stderr_path"] == str(stderr_path)
+    assert live_event["stderr_size"] > 0
+    assert live_event["useful_progress"] is False
+    assert "plugin manifest" in live_event["last_output_excerpt"]
 
 
 def test_task_watch_json_emits_environment_metadata(tmp_path: Path, monkeypatch):

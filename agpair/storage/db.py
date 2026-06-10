@@ -224,6 +224,14 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "environment_mode_source": "TEXT NOT NULL DEFAULT 'executor_default'",
         "skill_policy": "TEXT NOT NULL DEFAULT 'inherit'",
         "mcp_policy": "TEXT NOT NULL DEFAULT 'inherit'",
+        "protocol_warnings_json": "TEXT NOT NULL DEFAULT '[]'",
+        "protocol_errors_json": "TEXT NOT NULL DEFAULT '[]'",
+        "adoptable_result": "TEXT NOT NULL DEFAULT 'unknown'",
+        "adoption_evidence_json": "TEXT NOT NULL DEFAULT '{}'",
+        "controller_rework_json": "TEXT NOT NULL DEFAULT '{}'",
+        "dirty_snapshot_mode": "TEXT NOT NULL DEFAULT 'off'",
+        "dirty_snapshot_json": "TEXT NOT NULL DEFAULT '{}'",
+        "dirty_snapshot_applied": "INTEGER NOT NULL DEFAULT 0",
     }
     for column, ddl in attempt_defaults.items():
         if column not in attempt_cols:

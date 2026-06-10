@@ -13,6 +13,7 @@ from agpair.transport.bus import AgentBusClient, BusSendError
 
 import dataclasses
 
+from agpair.delegation_guard import nested_delegation_blocked
 from agpair.cli.wait import (
     DEFAULT_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
@@ -40,7 +41,7 @@ from agpair.models import (
     authorization_profile_summary,
     validate_authorization_profile,
 )
-from agpair.runtime_liveness import LivenessState, classify_liveness, effective_no_progress_seconds, is_task_live
+from agpair.runtime_liveness import LivenessState, classify_liveness, effective_no_progress_seconds, is_bootstrap_noise, is_task_live
 from agpair.terminal_receipts import (
     blocked_failure_context_from_receipt,
     committed_result_from_receipt,
@@ -58,6 +59,8 @@ app = typer.Typer(no_args_is_help=True)
 
 _BRIDGE_PORT_MARKER = "bridge_port"
 _BRIDGE_AUTH_TOKEN_MARKER = "bridge_auth_token"
+_ADOPTABLE_RESULTS = {"yes", "partial", "no", "unknown"}
+_CONTROLLER_REWORK = {"none", "minor", "major", "redone", "unknown"}
 
 
 def _broad_repo_path_reason(repo_path: str) -> str | None:
@@ -301,7 +304,7 @@ def _iso_is_newer(candidate: str | None, baseline: str | None) -> bool:
 
 
 def _derive_antigravity_bridge_state(paths: AppPaths, task) -> dict:
-    if task.phase != "new" or task.executor_backend not in {None, "antigravity"}:
+    if task.phase != "new" or task.executor_backend not in {None, "antigravity", "antigravity-cli"}:
         return {}
 
     from agpair.cli.doctor import build_doctor_report
@@ -330,7 +333,7 @@ def _derive_antigravity_bridge_state(paths: AppPaths, task) -> dict:
     bridge_state = None
     status_sync = None
     provider_session_id = None
-    detected_activity = detect_workspace_activity(task.repo_path)
+    detected_activity = detect_workspace_activity(task.execution_repo_path or task.repo_path)
     if matching_pending_task is not None:
         bridge_state = "provider_consumed_no_ack"
         provider_session_id = matching_pending_task.get("provider_session_id")
@@ -449,6 +452,218 @@ def _environment_payload_from_current_attempt(paths: AppPaths, task_id: str, exe
     }
 
 
+def _attempt_protocol_adoption_payload(paths: AppPaths, task_id: str) -> dict:
+    attempt = TaskRepository(paths.db_path).current_attempt(task_id)
+    if attempt is None:
+        return {
+            "protocol_result": None,
+            "adoption_result": None,
+        }
+    warnings = _json_value(attempt.protocol_warnings_json, [])
+    errors = _json_value(attempt.protocol_errors_json, [])
+    adoption = _json_value(attempt.adoption_evidence_json, {})
+    if isinstance(adoption, dict):
+        adoption.setdefault("adoptable_result", attempt.adoptable_result)
+    return {
+        "protocol_result": {
+            "ok": not bool(errors),
+            "warnings": warnings if isinstance(warnings, list) else [],
+            "errors": errors if isinstance(errors, list) else [],
+        },
+        "adoption_result": adoption if isinstance(adoption, dict) else {
+            "adoptable_result": attempt.adoptable_result,
+            "blockers": [],
+            "warnings": [],
+            "evidence": {},
+        },
+    }
+
+
+def _validate_choice(value: str | None, allowed: set[str], field: str) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized not in allowed:
+        raise typer.BadParameter(f"{field} must be one of: {', '.join(sorted(allowed))}")
+    return normalized
+
+
+def _resolve_dirty_snapshot_mode(
+    *,
+    requested: str | None,
+    isolated_worktree: bool,
+    authorization_profile: str,
+    effective_completion_policy: str,
+) -> str:
+    if requested is not None:
+        normalized = _validate_choice(requested, {"off", "tracked"}, "dirty snapshot")
+        assert normalized is not None
+        if normalized == "tracked" and not isolated_worktree:
+            raise typer.BadParameter("--dirty-snapshot tracked requires --isolated-worktree")
+        return normalized
+    if (
+        isolated_worktree
+        and authorization_profile != "local_readonly"
+        and effective_completion_policy in {"evidence", "commit"}
+    ):
+        return "tracked"
+    return "off"
+
+
+def _dirty_snapshot_from_attempt(attempt) -> dict:
+    snapshot = _json_value(getattr(attempt, "dirty_snapshot_json", "{}"), {})
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    return {
+        "mode": getattr(attempt, "dirty_snapshot_mode", "off"),
+        "applied": bool(getattr(attempt, "dirty_snapshot_applied", False)),
+        "snapshot": snapshot,
+    }
+
+
+def _persist_attempt_dirty_snapshot_from_state(
+    *,
+    tasks: TaskRepository,
+    task_id: str,
+    session_id: str | None,
+) -> None:
+    if not session_id:
+        return
+    attempt = tasks.current_attempt(task_id)
+    if attempt is None:
+        return
+    state_path = Path(str(session_id)) / "state.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(state, dict):
+        return
+    snapshot = state.get("dirty_snapshot_json")
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    tasks.update_attempt_dirty_snapshot(
+        task_id=task_id,
+        attempt_no=attempt.attempt_no,
+        dirty_snapshot_mode=str(state.get("dirty_snapshot_mode") or "off"),
+        dirty_snapshot_json=json.dumps(snapshot, ensure_ascii=False, sort_keys=True),
+        dirty_snapshot_applied=bool(state.get("dirty_snapshot_applied")),
+    )
+
+
+def _update_controller_adoption(
+    *,
+    paths: AppPaths,
+    tasks: TaskRepository,
+    task_id: str,
+    adoptable_result: str | None,
+    controller_rework: str | None,
+    note: str | None,
+) -> dict:
+    attempt = tasks.current_attempt(task_id)
+    if attempt is None:
+        return {}
+    adoption = _json_value(attempt.adoption_evidence_json, {})
+    if not isinstance(adoption, dict):
+        adoption = {}
+    if adoptable_result is not None:
+        adoption["adoptable_result"] = adoptable_result
+    else:
+        adoption.setdefault("adoptable_result", attempt.adoptable_result)
+    if note:
+        adoption["controller_note"] = note
+    rework_payload = _json_value(attempt.controller_rework_json, {})
+    if not isinstance(rework_payload, dict):
+        rework_payload = {}
+    if controller_rework is not None:
+        rework_payload["controller_rework"] = controller_rework
+        adoption["controller_rework"] = controller_rework
+    if note:
+        rework_payload["note"] = note
+    tasks.update_attempt_adoption(
+        task_id=task_id,
+        attempt_no=attempt.attempt_no,
+        protocol_warnings_json=attempt.protocol_warnings_json,
+        protocol_errors_json=attempt.protocol_errors_json,
+        adoptable_result=str(adoption.get("adoptable_result") or attempt.adoptable_result),
+        adoption_evidence_json=json.dumps(adoption, ensure_ascii=False, sort_keys=True),
+        controller_rework_json=json.dumps(rework_payload, ensure_ascii=False, sort_keys=True),
+    )
+    return adoption
+
+
+def _executor_state_payload(task, attempt=None) -> dict:
+    base_dirty_snapshot = _dirty_snapshot_from_attempt(attempt) if attempt is not None else None
+    session_id = task.executor_session_id or task.antigravity_session_id
+    if not session_id:
+        return {
+            "dirty_snapshot": base_dirty_snapshot,
+        }
+    state_path = Path(str(session_id)) / "state.json"
+    try:
+        raw = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "dirty_snapshot": base_dirty_snapshot,
+        }
+    if not isinstance(raw, dict):
+        return {
+            "dirty_snapshot": base_dirty_snapshot,
+        }
+    start_dirty = raw.get("start_dirty_files")
+    snapshot = raw.get("dirty_snapshot_json") if isinstance(raw.get("dirty_snapshot_json"), dict) else {}
+    return {
+        "dirty_snapshot": {
+            "mode": raw.get("dirty_snapshot_mode") or (base_dirty_snapshot or {}).get("mode", "off"),
+            "applied": bool(raw.get("dirty_snapshot_applied")),
+            "snapshot": snapshot or (base_dirty_snapshot or {}).get("snapshot", {}),
+            "start_head": raw.get("start_head"),
+            "current_head": raw.get("current_head"),
+            "start_dirty_files": start_dirty if isinstance(start_dirty, list) else [],
+            "is_worktree_dirty": bool(raw.get("is_worktree_dirty")),
+            "repo_path": raw.get("repo_path"),
+        },
+    }
+
+
+def _watch_progress_payload(payload: dict) -> dict:
+    active = payload.get("active_attempt_artifacts") if isinstance(payload.get("active_attempt_artifacts"), dict) else {}
+    stdout_meta = active.get("stdout") if isinstance(active, dict) else None
+    stderr_meta = active.get("stderr") if isinstance(active, dict) else None
+    stdout_size = int(stdout_meta.get("size_bytes") or 0) if isinstance(stdout_meta, dict) else 0
+    stderr_size = int(stderr_meta.get("size_bytes") or 0) if isinstance(stderr_meta, dict) else 0
+    stdout_excerpt = str(stdout_meta.get("excerpt") or "") if isinstance(stdout_meta, dict) else ""
+    stderr_excerpt = str(stderr_meta.get("excerpt") or "") if isinstance(stderr_meta, dict) else ""
+    last_excerpt = stdout_excerpt or stderr_excerpt or str(payload.get("executor_output_excerpt") or "")
+    useful_progress = bool(
+        payload.get("report_path")
+        or payload.get("receipt_path")
+        or payload.get("evidence_path")
+        or (stdout_size > 0 and not is_bootstrap_noise(stdout_excerpt))
+        or (
+            stderr_size > 0
+            and stderr_excerpt.strip()
+            and not is_bootstrap_noise(stderr_excerpt)
+        )
+        or payload.get("liveness_state") in {"active_via_workspace", "active_via_both"}
+    )
+    return {
+        "stdout_size": stdout_size,
+        "stderr_size": stderr_size,
+        "useful_progress": useful_progress,
+        "last_output_excerpt": last_excerpt[-500:] if last_excerpt else None,
+    }
+
+
+def _json_value(raw: str | None, default):
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return default
+
+
 def build_task_payload(paths: AppPaths, task) -> dict:
     derived_bridge_state = _derive_antigravity_bridge_state(paths, task)
     phase_detail = derived_bridge_state.get("phase_detail")
@@ -502,6 +717,9 @@ def build_task_payload(paths: AppPaths, task) -> dict:
     if active_exec is None:
         active_exec = get_executor("antigravity", agent_bus_bin="")
     environment_payload = _environment_payload_from_current_attempt(paths, task.task_id, active_backend_id)
+    current_attempt = TaskRepository(paths.db_path).current_attempt(task.task_id)
+    protocol_adoption_payload = _attempt_protocol_adoption_payload(paths, task.task_id)
+    executor_state_payload = _executor_state_payload(task, current_attempt)
 
     return {
         "task_id": task.task_id,
@@ -512,6 +730,8 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "effective_task_policy": effective_policy.to_dict(),
         "effective_task_safety": effective_safety.to_dict(),
         **environment_payload,
+        **protocol_adoption_payload,
+        **executor_state_payload,
         "artifact_paths": artifact_paths,
         **artifact_top_level,
         "supported_backends": supported_backends,
@@ -766,12 +986,14 @@ def start_task(
     authorization_profile: str = typer.Option("local_mutating", "--authorization-profile", help="Dispatch-time authorization profile."),
     depends_on: str | None = typer.Option(None, "--depends-on", help="JSON array of task IDs this task depends on."),
     isolated_worktree: bool = typer.Option(False, "--isolated-worktree", help="Whether the task requires a parallel-safe isolated worktree."),
+    dirty_snapshot: str | None = typer.Option(None, "--dirty-snapshot", help="Dirty worktree snapshot mode for isolated tasks: off or tracked."),
     setup_commands: str | None = typer.Option(None, "--setup-commands", help="JSON array of setup commands to run before the task."),
     teardown_commands: str | None = typer.Option(None, "--teardown-commands", help="JSON array of teardown commands to run after the task."),
     env_vars: str | None = typer.Option(None, "--env-vars", help="JSON object of environment overrides (e.g. PORT) for this task's worktree."),
     worktree_boundary: str | None = typer.Option(None, "--worktree-boundary", help="Declared worktree boundary path/label for this task."),
     spotlight_testing: bool = typer.Option(False, "--spotlight-testing", help="Declare intent to prefer localized/spotlight tests over full-suite runs."),
     allow_broad_repo_path: bool = typer.Option(False, "--allow-broad-repo-path", help="Explicitly allow a broad repo path such as $HOME for external executor dispatch."),
+    allow_nested_delegation: bool = typer.Option(False, "--allow-nested-delegation", help="Permit an AGPair-controlled executor to start another AGPair task."),
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
@@ -788,6 +1010,11 @@ def start_task(
         body = body_from_file if body is None else body
     if body is None:
         raise typer.BadParameter("Either --body or --body-file is required.")
+    if nested_delegation_blocked() and not allow_nested_delegation:
+        raise typer.BadParameter(
+            "nested_delegation_blocked: external executors may not start nested AGPair tasks by default; "
+            "pass --allow-nested-delegation only for an explicitly bounded orchestration task"
+        )
     _validate_task_body(body)
     try:
         normalized_authorization_profile = validate_authorization_profile(authorization_profile)
@@ -803,6 +1030,12 @@ def start_task(
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+    resolved_dirty_snapshot_mode = _resolve_dirty_snapshot_mode(
+        requested=dirty_snapshot,
+        isolated_worktree=isolated_worktree,
+        authorization_profile=normalized_authorization_profile,
+        effective_completion_policy=effective_policy.effective_completion_policy,
+    )
 
     paths = _paths()
     resolved_repo_path = resolve_repo_path(repo_path, target, paths)
@@ -909,6 +1142,7 @@ def start_task(
             environment_mode_source=environment.environment_mode_source,
             skill_policy=environment.skill_policy,
             mcp_policy=environment.mcp_policy,
+            dirty_snapshot_mode=resolved_dirty_snapshot_mode,
         )
     except sqlite3.IntegrityError:
         if not idempotency_key:
@@ -964,11 +1198,12 @@ def start_task(
             repo_path=resolved_repo_path,
             isolated_worktree=isolated_worktree,
             worktree_boundary=resolved_worktree_boundary,
-                authorization_profile=normalized_authorization_profile,
-                authorization_summary=normalized_authorization_summary,
-                environment_mode=environment.environment_mode,
-                skill_policy=environment.skill_policy,
-                mcp_policy=environment.mcp_policy,
+            authorization_profile=normalized_authorization_profile,
+            authorization_summary=normalized_authorization_summary,
+            environment_mode=environment.environment_mode,
+            skill_policy=environment.skill_policy,
+            mcp_policy=environment.mcp_policy,
+            dirty_snapshot_mode=resolved_dirty_snapshot_mode,
         )
     except (subprocess.SubprocessError, FileNotFoundError, BusSendError, WorktreeProvisionError, ValueError) as exc:
         reason = f"dispatch failed: {exc}"
@@ -984,6 +1219,11 @@ def start_task(
         )
 
     if dispatch_result.session_id:
+        _persist_attempt_dirty_snapshot_from_state(
+            tasks=tasks,
+            task_id=final_task_id,
+            session_id=dispatch_result.session_id,
+        )
         tasks.mark_acked(task_id=final_task_id, session_id=dispatch_result.session_id)
         journal.append(
             final_task_id,
@@ -1045,6 +1285,27 @@ def task_status(
     typer.echo(f"environment_mode_source: {payload['environment_mode_source']}")
     typer.echo(f"skill_policy: {payload['skill_policy']}")
     typer.echo(f"mcp_policy: {payload['mcp_policy']}")
+    protocol_result = payload.get("protocol_result") or {}
+    adoption_result = payload.get("adoption_result") or {}
+    protocol_warnings = protocol_result.get("warnings") if isinstance(protocol_result, dict) else []
+    protocol_errors = protocol_result.get("errors") if isinstance(protocol_result, dict) else []
+    adoption_blockers = adoption_result.get("blockers") if isinstance(adoption_result, dict) else []
+    typer.echo(
+        "protocol_warnings: "
+        + (",".join(protocol_warnings) if isinstance(protocol_warnings, list) and protocol_warnings else "none")
+    )
+    typer.echo(
+        "protocol_errors: "
+        + (",".join(protocol_errors) if isinstance(protocol_errors, list) and protocol_errors else "none")
+    )
+    typer.echo(
+        "adoptable_result: "
+        + str(adoption_result.get("adoptable_result") if isinstance(adoption_result, dict) else "unknown")
+    )
+    typer.echo(
+        "adoption_blockers: "
+        + (",".join(adoption_blockers) if isinstance(adoption_blockers, list) and adoption_blockers else "none")
+    )
     typer.echo(f"supported_backends: {json.dumps(payload['supported_backends'])}")
     typer.echo(f"phase: {payload['phase']}")
     typer.echo(f"phase_detail: {payload['phase_detail']}")
@@ -1063,6 +1324,7 @@ def task_status(
     typer.echo(f"last_workspace_activity_at: {payload['last_workspace_activity_at']}")
     typer.echo(f"depends_on: {json.dumps(payload['depends_on'])}")
     typer.echo(f"isolated_worktree: {payload['isolated_worktree']}")
+    typer.echo(f"dirty_snapshot: {json.dumps(payload.get('dirty_snapshot'), ensure_ascii=False)}")
     typer.echo(f"setup_commands: {json.dumps(payload['setup_commands'])}")
     typer.echo(f"teardown_commands: {json.dumps(payload['teardown_commands'])}")
     typer.echo(f"env_vars: {json.dumps(payload['env_vars'])}")
@@ -1312,6 +1574,9 @@ def abandon_task(
 @app.command("accept")
 def accept_task(
     task_id: str,
+    adoptable_result: str | None = typer.Option(None, "--adoptable-result", help="Controller adoption result: yes, partial, no, or unknown."),
+    controller_rework: str | None = typer.Option(None, "--controller-rework", help="Controller rework required: none, minor, major, redone, or unknown."),
+    note: str | None = typer.Option(None, "--note", help="Controller note recorded with adoption metadata."),
     json_output: bool = _JSON_OPTION,
 ) -> None:
     """Mark a reviewed terminal evidence pack as accepted by the controller.
@@ -1323,6 +1588,8 @@ def accept_task(
     tasks = TaskRepository(paths.db_path)
     journal = JournalRepository(paths.db_path)
     task = tasks.get_task(task_id)
+    normalized_adoptable = _validate_choice(adoptable_result, _ADOPTABLE_RESULTS, "--adoptable-result")
+    normalized_rework = _validate_choice(controller_rework, _CONTROLLER_REWORK, "--controller-rework")
     if task is None:
         if json_output:
             _emit_json(_not_found_payload(task_id))
@@ -1350,8 +1617,16 @@ def accept_task(
         updated = task
     else:
         tasks.mark_approved(task_id=task_id)
-        journal.append(task_id, "cli", "accepted", "controller accepted terminal evidence pack")
+        journal.append(task_id, "cli", "accepted", note or "controller accepted terminal evidence pack")
         updated = tasks.get_task(task_id)
+    adoption = _update_controller_adoption(
+        paths=paths,
+        tasks=tasks,
+        task_id=task_id,
+        adoptable_result=normalized_adoptable,
+        controller_rework=normalized_rework,
+        note=note,
+    )
     if json_output:
         _emit_json(
             {
@@ -1359,6 +1634,73 @@ def accept_task(
                 "task_id": task_id,
                 "phase": updated.phase if updated else task.phase,
                 "is_approved": bool(updated.is_approved) if updated else True,
+                "adoption_result": adoption,
+            }
+        )
+        return
+    typer.echo(task_id)
+
+
+@app.command("adopt")
+def adopt_task(
+    task_id: str,
+    from_report: bool = typer.Option(False, "--from-report", help="Adopt available report/stdout evidence without changing the task phase."),
+    adoptable_result: str = typer.Option("partial", "--adoptable-result", help="Controller adoption result: yes, partial, no, or unknown."),
+    controller_rework: str = typer.Option("minor", "--controller-rework", help="Controller rework required: none, minor, major, redone, or unknown."),
+    note: str | None = typer.Option(None, "--note", help="Controller note recorded with adoption metadata."),
+    json_output: bool = _JSON_OPTION,
+) -> None:
+    paths = _paths()
+    tasks = TaskRepository(paths.db_path)
+    journal = JournalRepository(paths.db_path)
+    task = tasks.get_task(task_id)
+    normalized_adoptable = _validate_choice(adoptable_result, _ADOPTABLE_RESULTS, "--adoptable-result")
+    normalized_rework = _validate_choice(controller_rework, _CONTROLLER_REWORK, "--controller-rework")
+    if task is None:
+        if json_output:
+            _emit_json(_not_found_payload(task_id))
+        else:
+            typer.echo(f"task not found: {task_id}", err=True)
+        raise typer.Exit(code=1)
+    if not from_report:
+        raise typer.BadParameter("Only --from-report adoption is supported.")
+    artifact_paths, _ = _artifact_payload(paths, task)
+    report_path = artifact_paths.get("report")
+    stdout_path = artifact_paths.get("stdout")
+    if not report_path and not stdout_path:
+        payload = {
+            "ok": False,
+            "error": "adoption_evidence_missing",
+            "task_id": task_id,
+            "required": ["report_path", "stdout_path"],
+        }
+        if json_output:
+            _emit_json(payload)
+        else:
+            typer.echo("Refused: no report or stdout artifact is available to adopt.", err=True)
+        raise typer.Exit(code=1)
+    if not task.is_approved:
+        tasks.mark_approved(task_id=task_id)
+    adoption = _update_controller_adoption(
+        paths=paths,
+        tasks=tasks,
+        task_id=task_id,
+        adoptable_result=normalized_adoptable,
+        controller_rework=normalized_rework,
+        note=note,
+    )
+    journal.append(task_id, "cli", "controller_adopted_report", note or "controller adopted report/stdout evidence")
+    updated = tasks.get_task(task_id)
+    if json_output:
+        _emit_json(
+            {
+                "ok": True,
+                "task_id": task_id,
+                "phase": updated.phase if updated else task.phase,
+                "is_approved": bool(updated.is_approved) if updated else True,
+                "adoption_result": adoption,
+                "report_path": report_path,
+                "stdout_path": stdout_path,
             }
         )
         return
@@ -1563,16 +1905,20 @@ def watch_task(
 
         if changed or watchdog or timed_out or is_terminal:
             event_type = "status_update"
+            progress_payload = _watch_progress_payload(payload)
             if watchdog:
                 event_type = "watchdog"
             elif timed_out:
                 event_type = "timeout"
             elif is_terminal:
                 event_type = "terminal"
+            elif payload.get("active_attempt_artifacts") and current_phase == "acked":
+                event_type = "artifact_progress"
 
             if json_output:
                 typer.echo(json.dumps({
                     "event_type": event_type,
+                    "event": event_type,
                     "task_id": task_id,
                     "phase": current_phase,
                     "timestamp": datetime.now(UTC).isoformat(),
@@ -1591,6 +1937,7 @@ def watch_task(
                     "active_attempt_artifacts": payload.get("active_attempt_artifacts"),
                     "last_executor_output_at": payload.get("last_executor_output_at"),
                     "no_progress_threshold_seconds": payload.get("no_progress_threshold_seconds"),
+                    **progress_payload,
                     "payload": payload,
                 }, ensure_ascii=False))
             else:
@@ -1785,6 +2132,7 @@ def retry_task(
     from_block: bool = typer.Option(False, "--from-block", help="Build a new attempt from structured blocked context."),
     authorization_profile: str | None = typer.Option(None, "--authorization-profile", help="Authorization profile for the new attempt."),
     completion_policy: str | None = typer.Option(None, "--completion-policy", help="Completion policy for the new attempt."),
+    dirty_snapshot: str | None = typer.Option(None, "--dirty-snapshot", help="Dirty worktree snapshot mode for the new attempt: off or tracked."),
     controller: str = typer.Option("generic", "--controller", help="Controller id for executor-suppression policy."),
     executor: str | None = typer.Option(None, "--executor", help=f"Executor backend for the new attempt ({', '.join(supported_executor_ids())})."),
     allow_self_executor: bool = typer.Option(False, "--allow-self-executor", help="Permit controller to delegate to the same external CLI."),
@@ -1867,6 +2215,12 @@ def retry_task(
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+    resolved_dirty_snapshot_mode = _resolve_dirty_snapshot_mode(
+        requested=dirty_snapshot,
+        isolated_worktree=task.isolated_worktree,
+        authorization_profile=next_authorization_profile,
+        effective_completion_policy=next_effective_policy.effective_completion_policy,
+    )
 
     if is_local_cli_backend(selected_executor):
         exec_instance = get_executor(selected_executor)
@@ -1887,6 +2241,7 @@ def retry_task(
                 environment_mode=next_environment.environment_mode,
                 skill_policy=next_environment.skill_policy,
                 mcp_policy=next_environment.mcp_policy,
+                dirty_snapshot_mode=resolved_dirty_snapshot_mode,
             )
         except (subprocess.SubprocessError, FileNotFoundError, BusSendError, WorktreeProvisionError, ValueError) as exc:
             reason = f"dispatch failed: {exc}"
@@ -1909,12 +2264,18 @@ def retry_task(
             environment_mode_source=next_environment.environment_mode_source,
             skill_policy=next_environment.skill_policy,
             mcp_policy=next_environment.mcp_policy,
+            dirty_snapshot_mode=resolved_dirty_snapshot_mode,
         )
         if dispatch_result.execution_repo_path:
             tasks.set_execution_repo_path(
                 task_id=updated.task_id,
                 execution_repo_path=dispatch_result.execution_repo_path,
             )
+        _persist_attempt_dirty_snapshot_from_state(
+            tasks=tasks,
+            task_id=updated.task_id,
+            session_id=dispatch_result.session_id,
+        )
         tasks.mark_acked(task_id=updated.task_id, session_id=dispatch_result.session_id)
         journal.append(
             updated.task_id,
@@ -1942,6 +2303,7 @@ def retry_task(
             environment_mode_source=next_environment.environment_mode_source,
             skill_policy=next_environment.skill_policy,
             mcp_policy=next_environment.mcp_policy,
+            dirty_snapshot_mode=resolved_dirty_snapshot_mode,
         )
         journal.append(updated.task_id, "cli", "retried", f"id={message_id} attempt={updated.attempt_no}")
     typer.echo(task.task_id)

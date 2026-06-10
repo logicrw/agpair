@@ -111,6 +111,12 @@ def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch
     assert health["antigravity-cli"]["binary_name"] == "agy"
     assert health["antigravity-cli"]["binary_available"] is True
     assert health["antigravity-cli"]["launch_clean"] is True
+    assert health["antigravity-cli"]["executor_id"] == "antigravity-cli"
+    assert health["antigravity-cli"]["launch_probe_status"] == "ok"
+    assert health["antigravity-cli"]["auth_state"] == "ok"
+    assert health["antigravity-cli"]["environment_mode"] == "managed-natural"
+    assert health["antigravity-cli"]["skill_policy"] == "inherit"
+    assert health["antigravity-cli"]["mcp_policy"] == "inherit"
     assert health["antigravity-cli"]["isolation_auth_satisfied"] is True
     assert health["antigravity-cli"]["receipt_capable"] == "prompt_contract"
     assert health["antigravity-cli"]["lifecycle_status"] == "active"
@@ -119,6 +125,7 @@ def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch
     assert health["grok-cli"]["available"] is True
     assert health["claude-code"]["available"] is True
     assert health["claude-code"]["auth_mode"] == "oauth"
+    assert health["claude-code"]["auth_state"] == "ok"
     assert "ccswitch_provider" in health["claude-code"]
     assert "ccswitch_provider_id" in health["claude-code"]
     assert "ccswitch_source" in health["claude-code"]

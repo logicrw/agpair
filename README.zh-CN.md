@@ -71,6 +71,20 @@ agpair task watch TASK-123 --json
 
 `watch --json` 只输出状态变化和 raw log / receipt 路径，不会把完整 executor 日志塞进主控上下文。
 
+实现 / 重构 / 修测试这类切片，用 isolated worktree 加 evidence completion：
+
+```bash
+agpair task start \
+  --executor antigravity-cli \
+  --authorization-profile local_mutating \
+  --completion-policy evidence \
+  --isolated-worktree \
+  --repo-path /path/to/repo \
+  --body "Goal: 做一个有边界的修改。Scope: 写清允许文件。Required changes: 写清要改什么。Exit criteria: 跑聚焦验证。"
+```
+
+isolated 的 mutating evidence/commit 任务默认会把 tracked 的 staged/unstaged 改动同步到 executor worktree；不会复制 ignored 或 untracked 文件。需要强制干净基线时传 `--dirty-snapshot off`。
+
 如果 executor 返回 `blocked(approval_required)`，用 structured blocked context 开新 attempt：
 
 ```bash
@@ -138,12 +152,20 @@ V1 不做“运行中暂停等待授权”。越界时 executor 应返回 `block
 
 ## 验收门
 
-`ready_for_review`、`evidence_ready`、`committed` 都不是自动成功。主控必须检查 AGPair 状态、git diff/commit 证据、receipt、必要时的 raw log 路径，并运行相应验证后才能报告完成。真实 executor smoke 也必须看到 `all_success=true`，且每个尝试过的 executor 都是 `adoptable_result=true`；只 dispatch 成功或只进入成功 phase 不算通过。
+`ready_for_review`、`evidence_ready`、`committed` 都不是自动成功。主控必须检查 AGPair 状态、git diff/commit 证据、receipt、必要时的 raw log 路径，并运行相应验证后才能报告完成。真实 executor smoke 也必须看到 `all_success=true`，且每个尝试过的 executor 都是无 blocker 的 `adoptable_result=yes` 或 `partial`；只 dispatch 成功或只进入成功 phase 不算通过。
+
+判断 AGPair 是否真的有价值，主要看 completion rate、adoptable-result rate、time-to-first-useful-signal、fallback rate、controller rework rate，以及 abandoned/no-progress rate。用 `task status --json`、`task list --json` 和 `scripts/smoke_real_executors.py` 看这些字段。
 
 主控验收 evidence 后，用下面的命令标记任务已接受，避免 Stop hook 对同一个 receipt 反复阻塞：
 
 ```bash
-agpair task accept TASK-123
+agpair task accept TASK-123 --adoptable-result yes --controller-rework none
+```
+
+如果 AGPair 协议解析失败但 report/stdout 可用，用显式采纳记录 salvage：
+
+```bash
+agpair task adopt TASK-123 --from-report --adoptable-result partial --controller-rework minor
 ```
 
 除非 brief 或授权 profile 明确要求 commit，`commit_ref` 是可选字段。
@@ -167,7 +189,7 @@ export AGPAIR_HOME=/path/to/agpair-state
 
 本机安装副本：
 
-- `~/.codex/skills/agpair/SKILL.md`
+- `~/.codex/skills/agpair-codex/SKILL.md`
 - `~/.claude/skills/agpair/SKILL.md`
 - Codex hook config
 - `~/.claude/settings.json`

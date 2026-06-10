@@ -94,6 +94,36 @@ time.sleep(30)
     assert not _process_exists(child_pid)
 
 
+def test_claude_probe_timeout_kills_descendant_in_new_process_group(tmp_path: Path) -> None:
+    pid_file = tmp_path / "child.pid"
+    fake_binary = tmp_path / "claude"
+    fake_binary.write_text(
+        f"""#!/usr/bin/env python3
+import os
+import pathlib
+import subprocess
+import time
+
+child = subprocess.Popen(["sleep", "30"], preexec_fn=os.setsid)
+pathlib.Path({str(pid_file)!r}).write_text(str(child.pid), encoding="utf-8")
+time.sleep(30)
+""",
+        encoding="utf-8",
+    )
+    fake_binary.chmod(0o755)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_probe(str(fake_binary), ["--print", "probe"], timeout_seconds=1.0)
+
+    child_pid = int(pid_file.read_text(encoding="utf-8").strip())
+    for _ in range(20):
+        if not _process_exists(child_pid):
+            break
+        time.sleep(0.05)
+
+    assert not _process_exists(child_pid)
+
+
 @pytest.mark.parametrize("status", ["disabled", "deprecated", "removed"])
 def test_non_active_lifecycle_states_are_not_eligible_for_new_dispatch(monkeypatch, status: str) -> None:
     original = EXECUTOR_SPECS["grok-cli"]

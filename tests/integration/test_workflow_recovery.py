@@ -70,6 +70,7 @@ def test_advance_running_workflows_after_restart_dispatches_each_pending_child_o
             "repo_path": str(repo_dir),
             "authorization_profile": "local_readonly",
             "isolated_worktree": False,
+            "dirty_snapshot_mode": "off",
         }
     ]
     node = workflows.require_node("WF-ADVANCE-RESTART", "scan")

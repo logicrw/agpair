@@ -228,6 +228,7 @@ def _build_executor_cli_health(*, run_launch_probe: bool = False) -> dict[str, d
         configured_env_var = item.get("configured_env_var")
         configured = os.environ.get(str(configured_env_var), "").strip() if configured_env_var else None
         health[executor_id] = {
+            "executor_id": item.get("executor_id"),
             "env_var": spec.env_var,
             "env_aliases": list(spec.env_aliases),
             "env_vars": [spec.env_var, *spec.env_aliases],
@@ -249,7 +250,10 @@ def _build_executor_cli_health(*, run_launch_probe: bool = False) -> dict[str, d
             "recommended_for_controllers": item.get("recommended_for_controllers"),
             "isolation_profile": item.get("isolation_profile"),
             "launch_probe": item.get("launch_probe"),
+            "launch_probe_status": item.get("launch_probe_status"),
             "auth_mode": item.get("auth_mode"),
+            "auth_state": item.get("auth_state"),
+            "auth_source": item.get("auth_source"),
             "ccswitch_provider": item.get("ccswitch_provider"),
             "ccswitch_provider_id": item.get("ccswitch_provider_id"),
             "ccswitch_source": item.get("ccswitch_source"),
@@ -257,6 +261,9 @@ def _build_executor_cli_health(*, run_launch_probe: bool = False) -> dict[str, d
             "auth_probe_environment_mode": item.get("auth_probe_environment_mode"),
             "auth_probe_skill_policy": item.get("auth_probe_skill_policy"),
             "auth_probe_mcp_policy": item.get("auth_probe_mcp_policy"),
+            "environment_mode": item.get("environment_mode"),
+            "skill_policy": item.get("skill_policy"),
+            "mcp_policy": item.get("mcp_policy"),
             "launch_clean": item.get("launch_clean"),
             "isolation_auth_satisfied": item.get("isolation_auth_satisfied"),
             "last_failure_type": item.get("last_failure_type"),

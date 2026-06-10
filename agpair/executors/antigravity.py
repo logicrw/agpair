@@ -39,8 +39,14 @@ class AntigravityExecutor(ExecutorAdapter):
         worktree_boundary: str | None = None,
         authorization_profile: str = "local_mutating",
         authorization_summary: str | None = None,
+        environment_mode: str | None = None,
+        skill_policy: str | None = None,
+        mcp_policy: str | None = None,
+        dirty_snapshot_mode: str = "off",
     ) -> DispatchResult:
         """Dispatch via the existing AgentBusClient semantics."""
+        del isolated_worktree, worktree_boundary, authorization_profile, authorization_summary
+        del environment_mode, skill_policy, mcp_policy, dirty_snapshot_mode
         msg_id = self.bus.send_task(task_id=task_id, body=body, repo_path=repo_path)
         return DispatchResult(message_id=str(msg_id))
 

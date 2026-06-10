@@ -237,6 +237,8 @@ def auto_advance_dependent_tasks(
             )
             continue
 
+        current_attempt = tasks.current_attempt(task.task_id)
+        dirty_snapshot_mode = current_attempt.dirty_snapshot_mode if current_attempt else "off"
         try:
             dispatch_result = exec_instance.dispatch(
                 task_id=task.task_id,
@@ -246,6 +248,7 @@ def auto_advance_dependent_tasks(
                 worktree_boundary=task.worktree_boundary,
                 authorization_profile=task.authorization_profile,
                 authorization_summary=task.authorization_summary,
+                dirty_snapshot_mode=dirty_snapshot_mode,
             )
         except Exception as exc:
             reason = f"auto-advance dispatch failed: {exc}"

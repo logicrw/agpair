@@ -13,13 +13,16 @@ import tempfile
 import time
 from typing import Callable
 
+from agpair.delegation_guard import next_delegation_env
 from agpair.executors.base import DispatchResult, ExecutorAdapter, TaskState
 from agpair.models import (
     ExecutorSafetyMetadata,
     authorization_profile_summary,
     validate_authorization_profile,
 )
+from agpair.scope_validation import changed_files_from_git_status
 from agpair.terminal_receipts import (
+    normalize_terminal_receipt,
     parse_structured_terminal_receipt,
     validate_terminal_receipt_payload,
 )
@@ -316,6 +319,134 @@ def ensure_worktree_exists(base_repo_path: str, worktree_root: pathlib.Path) -> 
     return worktree_root
 
 
+def _status_paths_from_porcelain(status_raw: str) -> tuple[str, ...]:
+    files: list[str] = []
+    for line in status_raw.splitlines():
+        if not line:
+            continue
+        path = line[3:].strip() if len(line) > 3 else ""
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1].strip()
+        if path:
+            files.append(path)
+    return tuple(files)
+
+
+def _run_git_snapshot_command(repo_path: str, args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", repo_path, *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _capture_dirty_snapshot(repo_path: str, temp_dir: pathlib.Path, mode: str) -> dict[str, object]:
+    normalized_mode = (mode or "off").strip().lower()
+    if normalized_mode == "off":
+        return {
+            "mode": "off",
+            "status_raw": "",
+            "status_files": [],
+            "untracked_files": [],
+            "staged_diff_path": None,
+            "unstaged_diff_path": None,
+            "has_staged_diff": False,
+            "has_unstaged_diff": False,
+        }
+    if normalized_mode != "tracked":
+        raise WorktreeProvisionError(f"Unsupported dirty snapshot mode: {mode}")
+
+    context_dir = temp_dir / "context"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        status_proc = _run_git_snapshot_command(
+            repo_path,
+            ["status", "--porcelain=v1", "--untracked-files=all"],
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise WorktreeProvisionError(
+            f"dirty_snapshot_capture_failed: {detail or exc}"
+        ) from exc
+
+    staged_diff = context_dir / "staged.diff"
+    unstaged_diff = context_dir / "unstaged.diff"
+    for diff_path, args in (
+        (staged_diff, ["diff", "--cached", "--binary"]),
+        (unstaged_diff, ["diff", "--binary"]),
+    ):
+        try:
+            with diff_path.open("w", encoding="utf-8") as fh:
+                subprocess.run(
+                    ["git", "-C", repo_path, *args],
+                    check=True,
+                    stdout=fh,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").strip()
+            raise WorktreeProvisionError(
+                f"dirty_snapshot_capture_failed: {detail or exc}"
+            ) from exc
+
+    status_raw = getattr(status_proc, "stdout", "") or ""
+    untracked = [
+        line[3:].strip()
+        for line in status_raw.splitlines()
+        if line.startswith("?? ") and line[3:].strip()
+    ]
+    tracked_status_raw = "\n".join(
+        line for line in status_raw.splitlines() if not line.startswith("?? ")
+    )
+    return {
+        "mode": "tracked",
+        "status_raw": status_raw,
+        "status_files": list(_status_paths_from_porcelain(tracked_status_raw)),
+        "untracked_files": untracked,
+        "staged_diff_path": str(staged_diff),
+        "unstaged_diff_path": str(unstaged_diff),
+        "has_staged_diff": staged_diff.stat().st_size > 0,
+        "has_unstaged_diff": unstaged_diff.stat().st_size > 0,
+    }
+
+
+def _apply_dirty_snapshot(execution_repo_path: str, snapshot: dict[str, object]) -> bool:
+    if snapshot.get("mode") != "tracked":
+        return False
+    applied = False
+    for key in ("staged_diff_path", "unstaged_diff_path"):
+        raw_path = snapshot.get(key)
+        if not raw_path:
+            continue
+        diff_path = pathlib.Path(str(raw_path))
+        if not diff_path.exists() or diff_path.stat().st_size == 0:
+            continue
+        try:
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    execution_repo_path,
+                    "apply",
+                    "--3way",
+                    "--whitespace=nowarn",
+                    str(diff_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "").strip()
+            raise WorktreeProvisionError(
+                f"dirty_snapshot_apply_failed: {detail or exc}"
+            ) from exc
+        applied = True
+    return applied
+
+
 def _seconds_since(iso_str: str) -> float:
     from datetime import datetime, timezone
     try:
@@ -335,6 +466,8 @@ def _strip_ansi(text: str) -> str:
 
 def _classify_executor_error(summary: str) -> tuple[str, bool, str | None]:
     normalized = summary.lower()
+    if _looks_waiting_for_input(normalized):
+        return "executor_waiting_for_input", True, "switch_executor_or_retry_with_noninteractive_flags"
     if "usage limit" in normalized or "purchase more credits" in normalized or "quota" in normalized:
         return "executor_quota_exhausted", True, "wait_or_switch_executor"
     if (
@@ -345,6 +478,22 @@ def _classify_executor_error(summary: str) -> tuple[str, bool, str | None]:
     ):
         return "executor_auth_failed", False, "repair_executor_auth"
     return "execution_error", False, "inspect_logs"
+
+
+_WAITING_FOR_INPUT_PATTERNS: tuple[str, ...] = (
+    "press enter to continue",
+    "do you want to proceed",
+    "approve",
+    "continue?",
+    "waiting for input",
+    "requires confirmation",
+    "confirm",
+)
+
+
+def _looks_waiting_for_input(text: str) -> bool:
+    normalized = text.lower()
+    return any(pattern in normalized for pattern in _WAITING_FOR_INPUT_PATTERNS)
 
 
 def _reap_child_process(pid: int | None) -> None:
@@ -458,7 +607,18 @@ class LocalCLIExecutor(ExecutorAdapter):
         environment_mode: str | None = None,
         skill_policy: str | None = None,
         mcp_policy: str | None = None,
+        dirty_snapshot_mode: str = "off",
     ) -> DispatchResult:
+        temp_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"agpair_{self._backend_id}_{task_id}_"))
+        normalized_dirty_snapshot_mode = (dirty_snapshot_mode or "off").strip().lower()
+        if normalized_dirty_snapshot_mode == "tracked" and not isolated_worktree:
+            raise WorktreeProvisionError("dirty snapshot mode 'tracked' requires --isolated-worktree.")
+        dirty_snapshot = _capture_dirty_snapshot(
+            repo_path,
+            temp_dir,
+            normalized_dirty_snapshot_mode,
+        )
+        dirty_snapshot_applied = False
         execution_repo_path = repo_path
         if isolated_worktree:
             worktree_root = ensure_worktree_exists(
@@ -472,10 +632,10 @@ class LocalCLIExecutor(ExecutorAdapter):
                 raise WorktreeProvisionError(
                     "Isolated worktree resolved back to the base repository path."
                 )
-
-        temp_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"agpair_{self._backend_id}_{task_id}_"))
+            dirty_snapshot_applied = _apply_dirty_snapshot(execution_repo_path, dirty_snapshot)
 
         start_head = _git_head(execution_repo_path)
+        start_dirty_files = changed_files_from_git_status(execution_repo_path)
         contracted_body = _body_with_task_contract(
             task_id,
             body,
@@ -540,6 +700,7 @@ sys.exit(rc)
             "started_at": _now_iso(),
             "repo_path": execution_repo_path,
             "start_head": start_head,
+            "start_dirty_files": list(start_dirty_files),
             "current_head": None,
             "exit_code": None,
             "arbitration_rc": None,
@@ -555,6 +716,9 @@ sys.exit(rc)
             "environment_mode": environment_mode,
             "skill_policy": skill_policy,
             "mcp_policy": mcp_policy,
+            "dirty_snapshot_mode": normalized_dirty_snapshot_mode,
+            "dirty_snapshot_json": dirty_snapshot,
+            "dirty_snapshot_applied": dirty_snapshot_applied,
             "updated_at": _now_iso(),
         }
         _atomic_write_state(temp_dir / "state.json", state)
@@ -567,8 +731,10 @@ sys.exit(rc)
             process_env.update(
                 {str(key): str(value) for key, value in env_overrides.items() if value is not None}
             )
+            process_env.update(next_delegation_env(task_id, process_env))
             process = subprocess.Popen(
                 [str(wrapper_script)],
+                stdin=subprocess.DEVNULL,
                 stdout=stdout_fh, 
                 stderr=stderr_fh,
                 cwd=execution_repo_path,
@@ -721,22 +887,22 @@ sys.exit(rc)
             if not log_path.exists():
                 continue
             log_body = log_path.read_text(encoding="utf-8", errors="replace")
-            receipt = parse_structured_terminal_receipt(
+            receipt = normalize_terminal_receipt(
                 log_body,
                 expected_task_id=task_id,
             )
-            if receipt is not None:
+            if receipt.receipt is not None:
                 return receipt
             lines = log_body.splitlines()
             for line in reversed(lines):
                 candidate = line.strip()
                 if not candidate:
                     continue
-                receipt = parse_structured_terminal_receipt(
+                receipt = normalize_terminal_receipt(
                     candidate,
                     expected_task_id=task_id,
                 )
-                if receipt is not None:
+                if receipt.receipt is not None:
                     return receipt
         return None
 
@@ -768,8 +934,8 @@ sys.exit(rc)
         temp_dir: pathlib.Path,
         state: dict,
     ) -> tuple[bool, dict] | None:
-        structured = self._structured_receipt_from_logs(temp_dir, task_id)
-        if structured is None:
+        protocol = self._structured_receipt_from_logs(temp_dir, task_id)
+        if protocol is None:
             malformed_candidate = self._malformed_structured_receipt_candidate(temp_dir)
             if malformed_candidate is not None:
                 payload = {
@@ -789,7 +955,14 @@ sys.exit(rc)
                     payload,
                 )
             return None
+        structured = protocol.receipt
+        if structured is None:
+            return None
         payload = structured.payload.copy()
+        if protocol.warnings:
+            payload["protocol_warnings"] = list(protocol.warnings)
+        if protocol.errors:
+            payload["protocol_errors"] = list(protocol.errors)
         payload.setdefault("raw_log_path", str(temp_dir / "stdout.log"))
         payload.setdefault("stderr_log_path", str(temp_dir / "stderr.log"))
         payload.setdefault("receipt_path", str(temp_dir / "receipt.json"))
@@ -1015,6 +1188,24 @@ sys.exit(rc)
                 )
 
         # ---- 情况 4：进程还在跑，没有提交 ----
+        if process_alive and self._is_waiting_for_input(temp_dir):
+            summary = "Executor appears to be waiting for interactive input"
+            state["final_summary"] = None
+            state["error_summary"] = summary
+            return True, self._make_receipt(
+                task_id,
+                attempt_no,
+                "BLOCKED",
+                summary,
+                {
+                    "exit_code": -1,
+                    "blocker_type": "executor_waiting_for_input",
+                    "recoverable": True,
+                    "recommended_next_action": "switch_executor_or_retry_with_noninteractive_flags",
+                    **self._raw_log_payload(temp_dir),
+                    "receipt_path": str(temp_dir / "receipt.json"),
+                },
+            )
         return False, None
 
     def _count_events(self, temp_dir: pathlib.Path) -> int:
@@ -1112,6 +1303,19 @@ sys.exit(rc)
             "Permission denied sending %s to pgid %d — treating as still alive (count=%d).",
             signal_name, pgid, count,
         )
+        return False
+
+    def _is_waiting_for_input(self, temp_dir: pathlib.Path) -> bool:
+        for log_name in ("stderr.log", "stdout.log"):
+            log_path = temp_dir / log_name
+            if not log_path.exists():
+                continue
+            try:
+                body = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+            except OSError:
+                continue
+            if _looks_waiting_for_input(body):
+                return True
         return False
 
     def _clean_git_locks(self, repo_path: str | None, *, started_at: str | None = None) -> None:

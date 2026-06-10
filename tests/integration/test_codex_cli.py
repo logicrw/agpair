@@ -102,7 +102,7 @@ def test_codex_config_sync_skill_dry_run_and_install(tmp_path: Path, monkeypatch
         ],
     )
 
-    skill_path = repo_path / ".codex" / "skills" / "agpair" / "SKILL.md"
+    skill_path = repo_path / ".codex" / "skills" / "agpair-codex" / "SKILL.md"
     assert dry_run.exit_code == 0
     assert str(skill_path) in dry_run.stdout
     assert "agpair-codex" in dry_run.stdout
@@ -131,7 +131,7 @@ def test_codex_config_sync_skill_refuses_non_agpair_skill(tmp_path: Path, monkey
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"
     init_git_repo(repo_path)
-    skill_path = repo_path / ".codex" / "skills" / "agpair" / "SKILL.md"
+    skill_path = repo_path / ".codex" / "skills" / "agpair-codex" / "SKILL.md"
     skill_path.parent.mkdir(parents=True)
     skill_path.write_text("---\nname: custom\n---\n# Custom\n", encoding="utf-8")
 

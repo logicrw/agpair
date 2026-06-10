@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+from agpair.adoption import derive_adoption_decision
 from agpair.artifacts import (
     artifact_metadata,
     copy_artifact,
@@ -20,6 +21,11 @@ from agpair.completion import (
 )
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
+from agpair.scope_validation import (
+    changed_files_from_git_diff,
+    changed_files_from_git_status,
+    validate_changed_files,
+)
 from agpair.terminal_receipts import (
     parse_structured_terminal_receipt,
     validate_structured_receipt_dict,
@@ -75,6 +81,9 @@ def finalize_executor_receipt(
         payload["report_path"] = report_path
     receipt_path = str(attempt_dir / "receipt.json")
     payload["receipt_path"] = receipt_path
+    scope_validation = _scope_validation_payload(task, payload)
+    if scope_validation is not None:
+        payload["scope_validation"] = scope_validation
 
     structured = validate_structured_receipt_dict(receipt, expected_task_id=task.task_id)
     structured_ok = structured is not None
@@ -150,6 +159,18 @@ def finalize_executor_receipt(
         process_returncode=_int_value(payload.get("returncode") or payload.get("exit_code")),
         structured_receipt_ok=structured_ok,
     )
+    protocol_warnings = tuple(str(item) for item in payload.get("protocol_warnings", ()) if isinstance(item, str))
+    protocol_errors = tuple(str(item) for item in payload.get("protocol_errors", ()) if isinstance(item, str))
+    adoption = derive_adoption_decision(
+        effective_policy=effective_policy,
+        receipt=decision.receipt or receipt,
+        report_path=report_path,
+        stdout_path=stdout_path,
+        receipt_path=receipt_path,
+        scope_validation=scope_validation,
+        protocol_warnings=protocol_warnings,
+        protocol_errors=protocol_errors,
+    )
     terminal_receipt = dict(decision.receipt or receipt)
     terminal_payload = terminal_receipt.get("payload")
     if not isinstance(terminal_payload, dict):
@@ -191,6 +212,14 @@ def finalize_executor_receipt(
         terminal_receipt_json=terminal_body,
         terminal_source=source,
         effective_policy_json=json.dumps(effective_policy.to_dict(), ensure_ascii=False, sort_keys=True),
+    )
+    tasks.update_attempt_adoption(
+        task_id=task.task_id,
+        attempt_no=task.attempt_no,
+        protocol_warnings_json=json.dumps(list(protocol_warnings), ensure_ascii=False, sort_keys=True),
+        protocol_errors_json=json.dumps(list(protocol_errors), ensure_ascii=False, sort_keys=True),
+        adoptable_result=adoption.adoptable_result,
+        adoption_evidence_json=json.dumps(adoption.to_dict(), ensure_ascii=False, sort_keys=True),
     )
     return decision
 
@@ -237,3 +266,46 @@ def _int_value(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _scope_validation_payload(task, payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    execution_repo_path = getattr(task, "execution_repo_path", None) or getattr(task, "repo_path", None)
+    if not execution_repo_path:
+        return None
+
+    state = _executor_state(task)
+    commit_ref = _string_value(payload.get("commit_ref") or payload.get("commit") or payload.get("commit_sha"))
+    if commit_ref:
+        actual = changed_files_from_git_diff(
+            execution_repo_path,
+            start_ref=_string_value(state.get("start_head")) if state else None,
+            end_ref=commit_ref,
+        )
+        baseline = ()
+    else:
+        actual = changed_files_from_git_status(execution_repo_path)
+        baseline = state.get("start_dirty_files") if isinstance(state, dict) else ()
+    result = validate_changed_files(
+        declared_changed_files=payload.get("changed_files"),
+        actual_changed_files=actual,
+        baseline_changed_files=baseline,
+    )
+    return result.to_dict()
+
+
+def _executor_state(task) -> dict[str, Any]:
+    session_id = getattr(task, "executor_session_id", None) or getattr(task, "antigravity_session_id", None)
+    if not session_id:
+        return {}
+    state_path = Path(str(session_id)) / "state.json"
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _string_value(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None

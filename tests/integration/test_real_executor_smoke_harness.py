@@ -58,9 +58,9 @@ if [ -z "$task_id" ]; then
   task_id="TASK-UNKNOWN"
 fi
 mkdir -p tests/fixtures/external_executor_smoke
-printf 'fake-executor %s\\n' "$task_id" > tests/fixtures/external_executor_smoke/fake.txt
+printf 'fake-executor %s\\n' "$task_id" > tests/fixtures/external_executor_smoke/fake.smoke
 printf 'Smoke report for %s\\n' "$task_id"
-receipt=$(printf '{"schema_version":"1","task_id":"%s","attempt_no":1,"review_round":0,"status":"EVIDENCE_PACK","summary":"Smoke report","payload":{"claimed_state":"ready_for_review","changed_files":["tests/fixtures/external_executor_smoke/fake.txt"],"validation_not_run":"fake executor smoke","scope_violations":[],"report":"Smoke report","raw_log_path":"stdout.log","receipt_path":"receipt.json"}}' "$task_id")
+receipt=$(printf '{"schema_version":"1","task_id":"%s","attempt_no":1,"review_round":0,"status":"EVIDENCE_PACK","summary":"Smoke report","payload":{"claimed_state":"ready_for_review","changed_files":["tests/fixtures/external_executor_smoke/fake.smoke"],"validation_not_run":"fake executor smoke","scope_violations":[],"report":"Smoke report","raw_log_path":"stdout.log","receipt_path":"receipt.json"}}' "$task_id")
 printf '%s\\n' "$receipt"
 if [ -n "$output_file" ]; then
   printf '%s\\n' "$receipt" > "$output_file"
@@ -173,18 +173,27 @@ def test_smoke_harness_runs_codex_controller_fake_executor_matrix(tmp_path: Path
     ]
     for result in payload["results"]:
         assert result["outcome"] == "ready_for_review"
-        assert result["adoptable_result"] is True
+        assert result["adoptable_result"] in {"yes", "partial"}
+        assert result["adoptable"] is True
+        assert result["controller_rework"] in {"none", "minor"}
+        assert result["fallback_suggestion"] is None
+        assert result["failure_class"] is None
+        assert isinstance(result["protocol_warnings"], list)
         assert result["adoption_blockers"] == []
         assert result["adoption_evidence"]["terminal_receipt"] is True
         assert result["adoption_evidence"]["report"] is True
         assert result["adoption_evidence"]["present_changed_files"] == [
-            "tests/fixtures/external_executor_smoke/fake.txt"
+            "tests/fixtures/external_executor_smoke/fake.smoke"
         ]
         assert result["phase"] == "ready_for_review"
+        assert result["status"]["isolated_worktree"] is True
+        assert result["status"]["dirty_snapshot"]["mode"] == "off"
+        assert result["status"]["execution_repo_path"] == result["execution_repo_path"]
         assert result["artifacts"]["stdout_path"]
-        assert "tests/fixtures/external_executor_smoke/fake.txt" in result["git_status_short"]
+        assert "tests/fixtures/external_executor_smoke/fake.smoke" in result["git_status_short"]
         assert result["cleanup"]["removed"] is True
         assert not Path(result["worktree_path"]).exists()
+        assert not Path(result["execution_repo_path"]).exists()
     assert Path(payload["report_path"]).is_file()
     assert ".agpair/smoke/reports" in payload["report_path"]
     report_file_payload = json.loads(Path(payload["report_path"]).read_text(encoding="utf-8"))
@@ -218,7 +227,36 @@ def test_smoke_harness_runs_diagnostic_all_registered_with_self_allowed(tmp_path
         "codex",
     ]
     assert all(result["outcome"] == "ready_for_review" for result in payload["results"])
-    assert all(result["adoptable_result"] is True for result in payload["results"])
+    assert all(result["adoptable_result"] in {"yes", "partial"} for result in payload["results"])
+    assert all(result["status"]["isolated_worktree"] is True for result in payload["results"])
+    assert all(result["status"]["dirty_snapshot"]["mode"] == "off" for result in payload["results"])
+
+
+def test_smoke_harness_can_exercise_tracked_dirty_snapshot(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    tracked_file = repo / "agpair" / "cli" / "task.py"
+    tracked_file.write_text("# dirty fixture\n", encoding="utf-8")
+
+    payload = _run_smoke(
+        tmp_path,
+        repo,
+        "--controller",
+        "codex",
+        "--executors",
+        "grok-cli",
+        "--dirty-snapshot",
+        "tracked",
+        "--timeout-seconds",
+        "10",
+        "--interval-seconds",
+        "0.1",
+    )
+
+    result = payload["results"][0]
+    assert result["outcome"] == "ready_for_review"
+    assert result["status"]["dirty_snapshot"]["mode"] == "tracked"
+    assert result["status"]["dirty_snapshot"]["applied"] is True
+    assert "agpair/cli/task.py" in result["status"]["dirty_snapshot"]["snapshot"]["status_files"]
 
 
 def test_smoke_harness_reports_controller_suppressed_self_executor(tmp_path: Path) -> None:
@@ -303,9 +341,12 @@ def test_smoke_harness_abandons_silent_executor_after_no_progress(tmp_path: Path
     result = payload["results"][0]
     assert result["attempted"] is True
     assert result["outcome"] == "blocked"
-    assert result["adoptable_result"] is False
+    assert result["adoptable_result"] == "no"
+    assert result["adoptable"] is False
     assert "terminal_receipt_missing" in result["adoption_blockers"]
     assert result["blocker_type"] == "no_progress_timeout"
+    assert result["failure_class"] == "no_progress_timeout"
+    assert result["fallback_suggestion"] == "abandon_and_switch_executor"
     assert result["wait_payload"]["watchdog_triggered"] is True
     assert result["phase"] == "abandoned"
     assert result["cleanup"]["removed"] is True

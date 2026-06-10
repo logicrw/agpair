@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agpair.executors import get_executor
+import agpair.executors.policy as policy
 from agpair.executors.policy import (
     ENVIRONMENT_MODES,
     EXECUTOR_SPECS,
@@ -126,3 +127,25 @@ def test_diagnostic_policy_can_include_all_registered_executors_when_self_allowe
 
     assert decision.suppressed_executors == ()
     assert decision.eligible_executors == registered_executor_ids()
+
+
+def test_requested_executor_availability_probe_is_targeted(monkeypatch, tmp_path) -> None:
+    fake_grok = tmp_path / "grok"
+    fake_grok.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_grok.chmod(0o755)
+    monkeypatch.setenv("AGPAIR_GROK_CLI_BIN", str(fake_grok))
+
+    def fail_if_claude_is_probed(*args, **kwargs):
+        raise AssertionError("requested grok-cli preflight must not probe claude-code auth")
+
+    monkeypatch.setattr(policy, "resolve_claude_auth", fail_if_claude_is_probed)
+
+    decision = resolve_controller_policy(
+        controller="codex",
+        requested_executor="grok-cli",
+        require_available=True,
+    )
+
+    assert decision.rejected_executor is None
+    assert decision.selected_executor == "grok-cli"
+    assert decision.eligible_executors == ("grok-cli",)

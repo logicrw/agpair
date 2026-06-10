@@ -1,7 +1,9 @@
 import json
+from pathlib import Path
 
 from agpair.terminal_receipts import (
     blocked_failure_context_from_receipt,
+    normalize_terminal_receipt,
     parse_structured_terminal_receipt,
     validate_terminal_receipt_payload,
 )
@@ -256,6 +258,41 @@ def test_parse_receipt_normalizes_blocked_and_committed_status_aliases() -> None
     assert parsed_blocked.status == "BLOCKED"
     assert parsed_committed is not None
     assert parsed_committed.status == "COMMITTED"
+
+
+def test_parse_real_antigravity_schema_1_0_0_mixed_fixture() -> None:
+    raw = Path(
+        "tests/fixtures/terminal_receipts/antigravity_ready_for_review_1_0_0_mixed.txt"
+    ).read_text(encoding="utf-8")
+
+    protocol = normalize_terminal_receipt(raw, expected_task_id="TASK-AGY-REAL")
+    parsed = protocol.receipt
+
+    assert parsed is not None
+    assert parsed.schema_version == "1"
+    assert parsed.status == "EVIDENCE_PACK"
+    assert parsed.payload["report"] == "中文报告"
+    assert "schema_version_alias" in protocol.warnings
+    assert "status_alias" in protocol.warnings
+    assert "mixed_text_json" in protocol.warnings
+    assert "artifact_path_missing" in protocol.warnings
+
+
+def test_parse_real_antigravity_nested_schema_1_0_0_fixture() -> None:
+    raw = Path(
+        "tests/fixtures/terminal_receipts/antigravity_report_with_nested_receipt.json"
+    ).read_text(encoding="utf-8")
+
+    protocol = normalize_terminal_receipt(raw, expected_task_id="TASK-WRAPPED-REAL")
+    parsed = protocol.receipt
+
+    assert parsed is not None
+    assert parsed.schema_version == "1"
+    assert parsed.status == "EVIDENCE_PACK"
+    assert parsed.payload["report"] == "usable"
+    assert "schema_version_alias" in protocol.warnings
+    assert "status_alias" in protocol.warnings
+    assert "wrapped_text_json" in protocol.warnings
 
 
 def test_blocked_failure_context_prefers_recommended_next_action() -> None:

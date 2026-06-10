@@ -1930,13 +1930,14 @@ def test_task_start_isolated_worktree_persists_boundary(tmp_path: Path, monkeypa
             body="Goal: test isolated\nScope: test\nRequired changes: test\nExit criteria: test",
             repo_path=str(repo_path.resolve()),
             isolated_worktree=True,
-                worktree_boundary=expected_boundary,
-                authorization_profile="local_mutating",
-                authorization_summary="Allowed actions: inspect and edit repository-local files, run focused tests, and prepare commits when requested. Denied actions: destructive cleanup, credential changes, production deploys, or broad external network access.",
-                environment_mode="managed-natural",
-                skill_policy="inherit",
-                mcp_policy="inherit",
-            )
+            worktree_boundary=expected_boundary,
+            authorization_profile="local_mutating",
+            authorization_summary="Allowed actions: inspect and edit repository-local files, run focused tests, and prepare commits when requested. Denied actions: destructive cleanup, credential changes, production deploys, or broad external network access.",
+            environment_mode="managed-natural",
+            skill_policy="inherit",
+            mcp_policy="inherit",
+            dirty_snapshot_mode="tracked",
+        )
 
         status_result = runner.invoke(app, ["task", "status", "TASK-ISO-DB", "--json"])
         payload = json.loads(status_result.stdout)
@@ -1945,6 +1946,8 @@ def test_task_start_isolated_worktree_persists_boundary(tmp_path: Path, monkeypa
         assert payload["worktree_boundary"] == expected_boundary
         assert payload["execution_repo_path"] == expected_boundary
         assert payload["isolation_satisfied"] is True
+        assert payload["dirty_snapshot"]["mode"] == "tracked"
+        assert payload["dirty_snapshot"]["applied"] is False
 
 
 def test_task_status_derives_provider_consumed_no_ack_from_bridge_health(tmp_path: Path, monkeypatch) -> None:
@@ -2031,6 +2034,134 @@ def test_task_status_derives_running_without_receipt_from_workspace_activity(tmp
     assert payload["last_workspace_activity_at"] is not None
 
 
+def test_task_status_uses_execution_repo_path_for_isolated_activity(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    execution_repo_path = repo_path / ".agpair" / "worktrees" / "TASK-ISO-LIVE"
+    repo_path.mkdir(parents=True)
+    execution_repo_path.mkdir(parents=True)
+    for path in (repo_path, execution_repo_path):
+        subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "tests@example.com"], cwd=path, check=True)
+        subprocess.run(["git", "config", "user.name", "AGPair Tests"], cwd=path, check=True)
+        (path / "tracked.txt").write_text("baseline", encoding="utf-8")
+        subprocess.run(["git", "add", "tracked.txt"], cwd=path, check=True)
+        subprocess.run(["git", "commit", "-m", "baseline"], cwd=path, check=True, capture_output=True)
+
+    repo = make_task_repo(tmp_path)
+    repo.create_task(
+        task_id="TASK-ISO-LIVE",
+        repo_path=str(repo_path),
+        executor_backend="antigravity-cli",
+        isolated_worktree=True,
+        worktree_boundary=str(execution_repo_path),
+    )
+    repo.set_execution_repo_path(task_id="TASK-ISO-LIVE", execution_repo_path=str(execution_repo_path))
+    worker_file = execution_repo_path / "worker-only.txt"
+    worker_file.write_text("fresh activity", encoding="utf-8")
+    future_mtime = worker_file.stat().st_mtime + 2
+    os.utime(worker_file, (future_mtime, future_mtime))
+
+    def fake_build_doctor_report(*args, **kwargs):
+        return {
+            "repo_bridge_reachable": True,
+            "repo_bridge_session_ready": True,
+            "repo_bridge_pending_task_count": 0,
+            "repo_bridge_pending_task_ids": [],
+            "repo_bridge_pending_tasks": [],
+        }
+
+    monkeypatch.setattr("agpair.cli.doctor.build_doctor_report", fake_build_doctor_report)
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-ISO-LIVE", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["execution_repo_path"] == str(execution_repo_path)
+    assert payload["phase_detail"] == "running_without_receipt"
+    assert payload["last_workspace_activity_at"] is not None
+
+
+def test_task_accept_records_controller_adoption_metadata(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    tasks = make_task_repo(tmp_path)
+    tasks.create_task(task_id="TASK-ACCEPT-META", repo_path=str(repo_path), executor_backend="grok-cli")
+    tasks.mark_acked(task_id="TASK-ACCEPT-META", session_id=str(tmp_path / "session"))
+    tasks.mark_ready_for_review(task_id="TASK-ACCEPT-META", terminal_source="test")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "accept",
+            "TASK-ACCEPT-META",
+            "--adoptable-result",
+            "yes",
+            "--controller-rework",
+            "none",
+            "--note",
+            "used directly",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["is_approved"] is True
+    assert payload["adoption_result"]["adoptable_result"] == "yes"
+    attempt = tasks.current_attempt("TASK-ACCEPT-META")
+    assert attempt is not None
+    adoption = json.loads(attempt.adoption_evidence_json)
+    rework = json.loads(attempt.controller_rework_json)
+    assert adoption["controller_note"] == "used directly"
+    assert rework["controller_rework"] == "none"
+    status = CliRunner().invoke(app, ["task", "status", "TASK-ACCEPT-META"])
+    assert status.exit_code == 0
+    assert "protocol_warnings: none" in status.stdout
+    assert "adoptable_result: yes" in status.stdout
+    assert "adoption_blockers: none" in status.stdout
+
+
+def test_task_adopt_from_report_marks_approved_without_changing_blocked_phase(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    report_path = tmp_path / "report.md"
+    report_path.write_text("usable report", encoding="utf-8")
+    tasks = make_task_repo(tmp_path)
+    tasks.create_task(task_id="TASK-ADOPT-REPORT", repo_path=str(repo_path), executor_backend="antigravity-cli")
+    tasks.mark_acked(task_id="TASK-ADOPT-REPORT", session_id=str(tmp_path / "session"))
+    tasks.record_artifact(task_id="TASK-ADOPT-REPORT", attempt_no=1, artifact_type="report", path=str(report_path))
+    tasks.mark_blocked(task_id="TASK-ADOPT-REPORT", reason="protocol failed but report exists")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "adopt",
+            "TASK-ADOPT-REPORT",
+            "--from-report",
+            "--adoptable-result",
+            "partial",
+            "--controller-rework",
+            "minor",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["phase"] == "blocked"
+    assert payload["is_approved"] is True
+    assert payload["adoption_result"]["adoptable_result"] == "partial"
+    updated = tasks.get_task("TASK-ADOPT-REPORT")
+    assert updated is not None
+    assert updated.phase == "blocked"
+    assert updated.is_approved is True
+
+
 def test_inspect_json_surfaces_derived_antigravity_phase(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"
@@ -2111,14 +2242,15 @@ def test_task_retry_preserves_isolated_worktree_metadata_for_local_cli(tmp_path:
             "body": "Fresh retry requested for TASK-RETRY-ISO attempt 2",
             "repo_path": str(repo_path),
             "isolated_worktree": True,
-                "worktree_boundary": execution_repo_path,
-                "authorization_profile": "local_mutating",
-                "authorization_summary": "Allowed actions: inspect and edit repository-local files, run focused tests, and prepare commits when requested. Denied actions: destructive cleanup, credential changes, production deploys, or broad external network access.",
-                "environment_mode": "managed-natural",
-                "skill_policy": "inherit",
-                "mcp_policy": "inherit",
-            }
-        ]
+            "worktree_boundary": execution_repo_path,
+            "authorization_profile": "local_mutating",
+            "authorization_summary": "Allowed actions: inspect and edit repository-local files, run focused tests, and prepare commits when requested. Denied actions: destructive cleanup, credential changes, production deploys, or broad external network access.",
+            "environment_mode": "managed-natural",
+            "skill_policy": "inherit",
+            "mcp_policy": "inherit",
+            "dirty_snapshot_mode": "tracked",
+        }
+    ]
 
     updated = repo.get_task("TASK-RETRY-ISO")
     assert updated is not None

@@ -25,8 +25,10 @@ EXTERNAL_FIRST_CONTEXT = (
     "AGPair external-first routing is available in this repository. For non-trivial "
     "implementation, refactor, test-fix, research, or review work, prefer AGPair "
     "external CLI executors before Claude Code native subagents or background tasks. "
-    "Claude Code remains controller and verifier. Use native subagents only when AGPair "
-    "is unavailable, unsuitable, or not good enough."
+    "For code changes, prefer a bounded `--completion-policy evidence --isolated-worktree` "
+    "slice, then inspect status JSON protocol/adoption results and accept/adopt after "
+    "verification. Claude Code remains controller and verifier. Use native subagents only "
+    "when AGPair is unavailable, unsuitable, or not good enough."
 )
 
 SUBAGENT_ADVISORY_CONTEXT = (
@@ -351,7 +353,7 @@ def config(
     merge: bool = typer.Option(False, "--merge", help="Alias of --install for explicit merge/update flows."),
     uninstall: bool = typer.Option(False, "--uninstall", help="Remove the AGPair-managed Claude Code config fragment."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print a unified diff instead of writing changes."),
-    sync_skill: bool = typer.Option(False, "--sync-skill", help="Also sync the AGPair Claude Code skill into the selected scope."),
+    sync_skill: bool = typer.Option(True, "--sync-skill/--no-sync-skill", help="Sync the AGPair Claude Code skill into the selected scope."),
     force: bool = typer.Option(False, "--force", help="Replace an existing non-AGPair statusLine while preserving non-AGPair hooks."),
     scope: str = typer.Option("project", "--scope", help="Where to manage Claude Code settings: project or user."),
     repo_path: str | None = typer.Option(None, "--repo-path", help="Project repo path for --scope project."),

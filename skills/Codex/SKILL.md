@@ -25,6 +25,25 @@ agpair task start \
 
 Default executor environments are `managed-natural` for `antigravity-cli`, `grok-cli`, and healthy `claude-code`: AGPair manages state and evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config. If an external attempt fails or is low quality, retry naturally, switch to another external executor, or use Codex native subagents as fallback/review.
 
+## Bounded Implementation
+
+For non-trivial implementation, refactor, or test-fix work, first dispatch one bounded slice unless the task is tiny, sensitive, external executors are unhealthy, or a prior external result was low quality:
+
+```bash
+agpair task start \
+  --repo-path "$REPO" \
+  --controller codex \
+  --executor antigravity-cli \
+  --authorization-profile local_mutating \
+  --completion-policy evidence \
+  --isolated-worktree \
+  --body "$BRIEF"
+```
+
+Use a brief with explicit allowed files, forbidden files, required changes, validation command, and exit criteria. The external worker returns `changed_files`, `validation` or `validation_not_run`, `scope_violations`, report text, and raw evidence paths. Codex integrates or rejects the result in the main worktree after verification.
+
+For isolated mutating evidence/commit tasks, AGPair defaults to `--dirty-snapshot tracked`: tracked staged/unstaged controller changes are copied into the executor worktree before launch. Ignored and untracked files are not copied; use `--dirty-snapshot off` when the worker should start from committed HEAD only.
+
 ## Parallel Or Async
 
 ```bash
@@ -38,6 +57,29 @@ Do not use repeated Codex prompts as a polling loop. Use `agpair task watch <TAS
 `watch --json` emits state changes and raw evidence paths; it does not stream full logs. Do not run raw executor output through lossy compression by default.
 
 Use Codex App thread automation only for very long tasks that should wake the same thread later.
+
+## Review And Adoption
+
+Always inspect:
+
+```bash
+agpair task status TASK-123 --json
+agpair task logs TASK-123 --include-executor-output
+```
+
+Use `protocol_result` to judge AGPair receipt quality and `adoption_result` to judge whether Codex can use the result. `adoptable_result=yes` means directly adoptable after normal verification; `partial` means usable with bounded controller review or minor rework; `no` means retry, switch executor, or use native subagents.
+
+After verification, close the loop:
+
+```bash
+agpair task accept TASK-123 --adoptable-result yes --controller-rework none
+```
+
+If the protocol failed but the report/stdout is still useful, record explicit salvage instead of pretending the executor succeeded:
+
+```bash
+agpair task adopt TASK-123 --from-report --adoptable-result partial --controller-rework minor
+```
 
 ## Workflows
 

@@ -42,11 +42,14 @@ def build_workflow_evidence_pack(paths: AppPaths, workflow_id: str, *, phase: st
         terminal_receipt_payload = None
         task_phase = None
         attempt_no = None
+        protocol_result = None
+        adoption_result = None
         if node.task_id:
             task = tasks.get_task(node.task_id)
             if task is not None:
                 task_phase = task.phase
                 attempt_no = task.attempt_no
+                protocol_result, adoption_result = _attempt_protocol_adoption(tasks, node.task_id)
                 terminal_receipt_payload = _parse_json_object(task.terminal_receipt_json)
                 if isinstance(terminal_receipt_payload, dict):
                     payload = terminal_receipt_payload.get("payload")
@@ -74,6 +77,8 @@ def build_workflow_evidence_pack(paths: AppPaths, workflow_id: str, *, phase: st
                     "raw_log_path": artifact_paths.get("stdout"),
                     "stderr_path": artifact_paths.get("stderr"),
                     "report_path": artifact_paths.get("report"),
+                    "protocol_result": protocol_result,
+                    "adoption_result": adoption_result,
                 })
         elif node.phase in SUCCESS_NODE_PHASES and node.kind != "gate":
             residual_risks.append(f"node {node.node_id} completed without child task")
@@ -94,6 +99,8 @@ def build_workflow_evidence_pack(paths: AppPaths, workflow_id: str, *, phase: st
             "task_id": node.task_id,
             "task_phase": task_phase,
             "artifacts": artifacts,
+            "protocol_result": protocol_result,
+            "adoption_result": adoption_result,
             "terminal_receipt": terminal_receipt_payload,
             "error": node.error or node.last_error,
         })
@@ -148,3 +155,33 @@ def _parse_json_object(text: str | None) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
+
+
+def _attempt_protocol_adoption(tasks: TaskRepository, task_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    attempt = tasks.current_attempt(task_id)
+    if attempt is None:
+        return (
+            {"ok": True, "warnings": [], "errors": []},
+            {"adoptable_result": "unknown", "blockers": [], "warnings": [], "evidence": {}},
+        )
+    warnings = _parse_json_list(attempt.protocol_warnings_json)
+    errors = _parse_json_list(attempt.protocol_errors_json)
+    adoption = _parse_json_object(attempt.adoption_evidence_json) or {}
+    adoption.setdefault("adoptable_result", attempt.adoptable_result)
+    adoption.setdefault("blockers", [])
+    adoption.setdefault("warnings", [])
+    adoption.setdefault("evidence", {})
+    return (
+        {"ok": not bool(errors), "warnings": warnings, "errors": errors},
+        adoption,
+    )
+
+
+def _parse_json_list(text: str | None) -> list[Any]:
+    if not text:
+        return []
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    return value if isinstance(value, list) else []

@@ -41,6 +41,23 @@ agpair task start \
   --body "$BRIEF"
 ```
 
+For non-trivial implementation, refactor, or test-fix work, dispatch one bounded mutating slice first unless the task is tiny, sensitive, external executors are unhealthy, or a prior external result was low quality:
+
+```bash
+agpair task start \
+  --repo-path "$REPO" \
+  --controller claude-code \
+  --executor antigravity-cli \
+  --authorization-profile local_mutating \
+  --completion-policy evidence \
+  --isolated-worktree \
+  --body "$BRIEF"
+```
+
+Use a brief with explicit allowed files, forbidden files, required changes, validation command, and exit criteria. The external worker returns `changed_files`, `validation` or `validation_not_run`, `scope_violations`, report text, and raw evidence paths. Claude Code integrates or rejects the result in the main worktree after verification.
+
+For isolated mutating evidence/commit tasks, AGPair defaults to `--dirty-snapshot tracked`: tracked staged/unstaged controller changes are copied into the executor worktree before launch. Ignored and untracked files are not copied; use `--dirty-snapshot off` when the worker should start from committed HEAD only.
+
 For parallel or background work, dispatch asynchronously and attach a low-noise watch:
 
 ```bash
@@ -97,6 +114,20 @@ Before reporting success:
 - inspect changed files, git status, and relevant diff/commit evidence;
 - read receipt and raw log paths when the claim is surprising or high-risk;
 - run the narrowest meaningful local verification.
+
+Use `protocol_result` to judge AGPair receipt quality and `adoption_result` to judge whether Claude Code can use the result. `adoptable_result=yes` means directly adoptable after normal verification; `partial` means usable with bounded controller review or minor rework; `no` means retry, switch executor, or use native subagents.
+
+After verification, close the loop:
+
+```bash
+agpair task accept TASK-123 --adoptable-result yes --controller-rework none
+```
+
+If the protocol failed but report/stdout evidence is still useful, record explicit salvage:
+
+```bash
+agpair task adopt TASK-123 --from-report --adoptable-result partial --controller-rework minor
+```
 
 Claude Code remains accountable for final quality even when AGPair executors did the edits.
 

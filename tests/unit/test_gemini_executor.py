@@ -29,8 +29,12 @@ def test_gemini_executor_dispatch_command_construction(tmp_path):
         assert isinstance(dispatch_res, DispatchResult)
         
         
-        mock_popen.assert_called_once()
-        args = mock_popen.call_args[0][0]
+        wrapper_calls = [
+            call for call in mock_popen.call_args_list
+            if call.args and isinstance(call.args[0], list) and len(call.args[0]) == 1
+        ]
+        assert len(wrapper_calls) == 1
+        args = wrapper_calls[0].args[0]
         
         assert len(args) == 1
         wrapper_script_path = Path(args[0])

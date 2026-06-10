@@ -109,6 +109,14 @@ class TaskAttemptRecord:
     environment_mode_source: str
     skill_policy: str
     mcp_policy: str
+    protocol_warnings_json: str
+    protocol_errors_json: str
+    adoptable_result: str
+    adoption_evidence_json: str
+    controller_rework_json: str
+    dirty_snapshot_mode: str
+    dirty_snapshot_json: str
+    dirty_snapshot_applied: bool
     executor_session_id: str | None
     phase: str
     terminal_receipt_json: str | None

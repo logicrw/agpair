@@ -24,8 +24,10 @@ app.add_typer(hook_app, name="hook")
 EXTERNAL_FIRST_CONTEXT = (
     "AGPair external-first routing is available in this repository. For non-trivial "
     "implementation, refactor, test-fix, research, or review work, prefer dispatching "
-    "through AGPair external CLI executors before using Codex native subagents. Codex "
-    "main remains the controller and verifier. Use native subagents only when AGPair "
+    "through AGPair external CLI executors before using Codex native subagents. For code "
+    "changes, prefer a bounded `--completion-policy evidence --isolated-worktree` slice, "
+    "then inspect status JSON protocol/adoption results and accept/adopt after verification. "
+    "Codex main remains the controller and verifier. Use native subagents only when AGPair "
     "is unavailable, an external executor is unsuitable, or external results are not good enough."
 )
 
@@ -211,7 +213,7 @@ def config(
     install: bool = typer.Option(False, "--install", help="Install AGPair-managed Codex hooks."),
     uninstall: bool = typer.Option(False, "--uninstall", help="Remove AGPair-managed Codex hooks."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print a unified diff instead of writing changes."),
-    sync_skill: bool = typer.Option(False, "--sync-skill", help="Also sync the AGPair Codex skill into the selected scope."),
+    sync_skill: bool = typer.Option(True, "--sync-skill/--no-sync-skill", help="Sync the AGPair Codex skill into the selected scope."),
     scope: str = typer.Option("project", "--scope", help="project or user"),
     repo_path: str | None = typer.Option(None, "--repo-path"),
 ) -> None:
@@ -234,7 +236,7 @@ def config(
         try:
             skill_plan = plan_skill_sync(
                 source_path=bundled_skill_path("Codex"),
-                target_path=path.parent / "skills" / "agpair" / "SKILL.md",
+                target_path=path.parent / "skills" / "agpair-codex" / "SKILL.md",
                 uninstall=uninstall,
             )
         except RuntimeError as exc:

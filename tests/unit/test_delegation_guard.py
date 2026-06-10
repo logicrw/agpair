@@ -1,0 +1,40 @@
+from __future__ import annotations
+
+from typer.testing import CliRunner
+
+from agpair.cli.app import app
+from agpair.delegation_guard import current_delegation_depth, nested_delegation_blocked, next_delegation_env
+
+
+def test_delegation_depth_is_read_from_environment() -> None:
+    assert current_delegation_depth({"AGPAIR_DELEGATION_DEPTH": "2"}) == 2
+    assert current_delegation_depth({"AGPAIR_DELEGATION_DEPTH": "bad"}) == 0
+    assert nested_delegation_blocked({"AGPAIR_DELEGATION_DEPTH": "1"}) is True
+    assert nested_delegation_blocked({"AGPAIR_DELEGATION_DEPTH": "0"}) is False
+
+
+def test_next_delegation_env_sets_noninteractive_parent_and_depth() -> None:
+    env = next_delegation_env("TASK-PARENT", {"AGPAIR_DELEGATION_DEPTH": "1"})
+
+    assert env["AGPAIR_PARENT_TASK_ID"] == "TASK-PARENT"
+    assert env["AGPAIR_DELEGATION_DEPTH"] == "2"
+    assert env["AGPAIR_NONINTERACTIVE"] == "1"
+    assert env["CI"] == "1"
+
+
+def test_task_start_blocks_nested_delegation_by_default(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_DELEGATION_DEPTH", "1")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--body",
+            "Goal: nested\nScope: nested\nRequired changes: nested\nExit criteria: nested",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "nested_delegation_blocked" in (result.stderr or result.output)

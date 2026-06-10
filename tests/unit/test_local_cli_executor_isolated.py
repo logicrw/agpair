@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import pathlib
+import subprocess
+import sys
 from unittest import mock
 
 import pytest
@@ -25,6 +27,34 @@ class DummyLocalCLIExecutor(LocalCLIExecutor):
     @property
     def continuation_capability(self) -> ContinuationCapability:
         return ContinuationCapability.UNSUPPORTED
+
+
+class NoopLocalCLIExecutor(LocalCLIExecutor):
+    def __init__(self) -> None:
+        super().__init__(
+            bin_path=sys.executable,
+            backend_id="noop_cli",
+            build_cmd=self._build_noop_cmd,
+        )
+
+    def _build_noop_cmd(self, body: str, repo_path: str, temp_dir) -> list[str]:
+        del body, repo_path, temp_dir
+        return [self.bin_path, "-c", ""]
+
+    @property
+    def continuation_capability(self) -> ContinuationCapability:
+        return ContinuationCapability.UNSUPPORTED
+
+
+def _init_repo(repo_path: pathlib.Path) -> None:
+    repo_path.mkdir()
+    subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_path, check=True)
+    subprocess.run(["git", "config", "user.name", "AGPair Test"], cwd=repo_path, check=True)
+    (repo_path / "tracked.txt").write_text("original\n", encoding="utf-8")
+    (repo_path / "staged.txt").write_text("original staged\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt", "staged.txt"], cwd=repo_path, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo_path, check=True, capture_output=True)
 
 
 def test_dispatch_creates_default_isolated_worktree_and_records_execution_path(tmp_path) -> None:
@@ -98,7 +128,12 @@ def test_dispatch_reuses_existing_isolated_worktree(tmp_path) -> None:
             isolated_worktree=True,
         )
 
-    assert mock_run.call_count == 0
+    assert not any(
+        call.args
+        and isinstance(call.args[0], list)
+        and call.args[0][:4] == ["git", "-C", str(repo_path.resolve()), "worktree"]
+        for call in mock_run.call_args_list
+    )
     assert mock_check_output.call_args_list[0].args == (
         ["git", "rev-parse", "--show-toplevel"],
     )
@@ -155,3 +190,56 @@ def test_dispatch_rejects_base_repo_as_isolated_worktree(tmp_path) -> None:
                 isolated_worktree=True,
                 worktree_boundary=str(repo_path),
             )
+
+
+def test_dispatch_tracked_dirty_snapshot_applies_to_isolated_worktree(tmp_path) -> None:
+    executor = NoopLocalCLIExecutor()
+    repo_path = tmp_path / "repo"
+    _init_repo(repo_path)
+    (repo_path / "tracked.txt").write_text("dirty unstaged\n", encoding="utf-8")
+    (repo_path / "staged.txt").write_text("dirty staged\n", encoding="utf-8")
+    (repo_path / "untracked-secret.txt").write_text("do not copy\n", encoding="utf-8")
+    subprocess.run(["git", "add", "staged.txt"], cwd=repo_path, check=True)
+
+    dispatch = executor.dispatch(
+        task_id="TASK-DIRTY-TRACKED",
+        body="Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+        repo_path=str(repo_path),
+        isolated_worktree=True,
+        dirty_snapshot_mode="tracked",
+    )
+
+    worktree = pathlib.Path(dispatch.execution_repo_path)
+    assert (worktree / "tracked.txt").read_text(encoding="utf-8") == "dirty unstaged\n"
+    assert (worktree / "staged.txt").read_text(encoding="utf-8") == "dirty staged\n"
+    assert not (worktree / "untracked-secret.txt").exists()
+
+    state = json.loads((pathlib.Path(dispatch.session_id) / "state.json").read_text(encoding="utf-8"))
+    assert state["dirty_snapshot_mode"] == "tracked"
+    assert state["dirty_snapshot_applied"] is True
+    assert state["dirty_snapshot_json"]["has_staged_diff"] is True
+    assert state["dirty_snapshot_json"]["has_unstaged_diff"] is True
+    assert state["dirty_snapshot_json"]["untracked_files"] == ["untracked-secret.txt"]
+    assert sorted(state["start_dirty_files"]) == ["staged.txt", "tracked.txt"]
+
+
+def test_dispatch_dirty_snapshot_off_leaves_isolated_worktree_clean(tmp_path) -> None:
+    executor = NoopLocalCLIExecutor()
+    repo_path = tmp_path / "repo"
+    _init_repo(repo_path)
+    (repo_path / "tracked.txt").write_text("dirty unstaged\n", encoding="utf-8")
+
+    dispatch = executor.dispatch(
+        task_id="TASK-DIRTY-OFF",
+        body="Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+        repo_path=str(repo_path),
+        isolated_worktree=True,
+        dirty_snapshot_mode="off",
+    )
+
+    worktree = pathlib.Path(dispatch.execution_repo_path)
+    assert (worktree / "tracked.txt").read_text(encoding="utf-8") == "original\n"
+    state = json.loads((pathlib.Path(dispatch.session_id) / "state.json").read_text(encoding="utf-8"))
+    assert state["dirty_snapshot_mode"] == "off"
+    assert state["dirty_snapshot_applied"] is False
+    assert state["start_dirty_files"] == []

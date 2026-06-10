@@ -53,19 +53,21 @@ _BOOTSTRAP_STDERR_NOISE_MARKERS = (
 )
 
 
+def is_bootstrap_noise(text: str) -> bool:
+    """Return True when text contains only known startup/plugin noise."""
+    lines = [line.strip().lower() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+    return all(any(marker in line for marker in _BOOTSTRAP_STDERR_NOISE_MARKERS) for line in lines)
+
+
 def _stderr_has_useful_signal(path: Path) -> bool:
     """Return True when stderr contains more than bootstrap/plugin noise."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")[-16384:]
     except OSError:
         return False
-    lines = [line.strip().lower() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return False
-    for line in lines:
-        if not any(marker in line for marker in _BOOTSTRAP_STDERR_NOISE_MARKERS):
-            return True
-    return False
+    return not is_bootstrap_noise(text)
 
 
 REPORT_ONLY_NO_PROGRESS_SECONDS: float = 180.0

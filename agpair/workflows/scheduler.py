@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import subprocess
+from pathlib import Path
 
 from agpair.completion import resolve_effective_task_policy
 from agpair.config import AppPaths
@@ -149,6 +150,11 @@ class WorkflowScheduler:
             executor_backend=executor_id,
         )
         try:
+            dirty_snapshot_mode = (
+                "tracked"
+                if node.isolated_worktree and node.authorization_profile != "local_readonly"
+                else "off"
+            )
             self.tasks.create_task(
                 task_id=task_id,
                 repo_path=repo_path,
@@ -163,6 +169,7 @@ class WorkflowScheduler:
                 parent_task_id=workflow.workflow_id,
                 child_role=node.role or node.kind,
                 isolated_worktree=node.isolated_worktree,
+                dirty_snapshot_mode=dirty_snapshot_mode,
             )
             self.journal.append(task_id, "workflow", "created", body)
         except sqlite3.IntegrityError:
@@ -188,9 +195,26 @@ class WorkflowScheduler:
                     repo_path=repo_path,
                     authorization_profile=node.authorization_profile,
                     isolated_worktree=node.isolated_worktree,
+                    dirty_snapshot_mode=dirty_snapshot_mode,
                 )
                 if dispatch_result.execution_repo_path:
                     self.tasks.set_execution_repo_path(task_id=task_id, execution_repo_path=dispatch_result.execution_repo_path)
+                if dispatch_result.session_id:
+                    state_path = Path(str(dispatch_result.session_id)) / "state.json"
+                    try:
+                        state = json.loads(state_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        state = {}
+                    snapshot = state.get("dirty_snapshot_json") if isinstance(state, dict) else {}
+                    if not isinstance(snapshot, dict):
+                        snapshot = {}
+                    self.tasks.update_attempt_dirty_snapshot(
+                        task_id=task_id,
+                        attempt_no=1,
+                        dirty_snapshot_mode=str(state.get("dirty_snapshot_mode") or dirty_snapshot_mode) if isinstance(state, dict) else dirty_snapshot_mode,
+                        dirty_snapshot_json=json.dumps(snapshot, ensure_ascii=False, sort_keys=True),
+                        dirty_snapshot_applied=bool(state.get("dirty_snapshot_applied")) if isinstance(state, dict) else False,
+                    )
                 if not dispatch_result.session_id:
                     raise RuntimeError(f"local executor {executor_id} did not return a session_id")
                 self.tasks.mark_acked(task_id=task_id, session_id=dispatch_result.session_id)

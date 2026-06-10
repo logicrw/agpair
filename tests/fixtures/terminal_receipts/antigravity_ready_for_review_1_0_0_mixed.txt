@@ -1,0 +1,5 @@
+# Graphiti Lite 架构评估报告
+
+本报告确认现有客户端 guidance 可以主动使用 Graphiti Lite，但中央契约应减少客户端枚举，并将 source anchor 规则保持为服务端无关约束。
+
+{"schema_version":"1.0.0","task_id":"TASK-AGY-REAL","attempt_no":1,"review_round":1,"status":"ready_for_review","summary":"Completed read-only review","payload":{"report":"中文报告","changed_files":[],"validation_not_run":"report-only task","scope_violations":[],"raw_log_path":null,"receipt_path":null}}

@@ -268,17 +268,11 @@ def _run_probe(
             stderr,
         )
     except subprocess.TimeoutExpired as exc:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except OSError:
-            process.terminate()
+        _terminate_process_tree(process.pid, signal.SIGTERM)
         try:
             stdout, stderr = process.communicate(timeout=2.0)
         except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except OSError:
-                process.kill()
+            _terminate_process_tree(process.pid, signal.SIGKILL)
             stdout, stderr = process.communicate()
         message = f"command timed out after {timeout_seconds:g}s"
         stderr = (stderr or "") + ("\n" if stderr else "") + message
@@ -288,6 +282,49 @@ def _run_probe(
             output=stdout,
             stderr=stderr,
         ) from exc
+
+
+def _terminate_process_tree(root_pid: int, sig: signal.Signals) -> None:
+    descendants = _process_descendants(root_pid)
+    try:
+        os.killpg(root_pid, sig)
+    except OSError:
+        try:
+            os.kill(root_pid, sig)
+        except OSError:
+            pass
+    for pid in sorted(descendants, reverse=True):
+        try:
+            os.kill(pid, sig)
+        except OSError:
+            pass
+
+
+def _process_descendants(root_pid: int) -> set[int]:
+    try:
+        output = subprocess.check_output(["ps", "-axo", "pid=,ppid="], text=True, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    children: dict[int, list[int]] = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        try:
+            pid = int(parts[0])
+            ppid = int(parts[1])
+        except ValueError:
+            continue
+        children.setdefault(ppid, []).append(pid)
+    descendants: set[int] = set()
+    stack = list(children.get(root_pid, ()))
+    while stack:
+        pid = stack.pop()
+        if pid in descendants:
+            continue
+        descendants.add(pid)
+        stack.extend(children.get(pid, ()))
+    return descendants
 
 
 def _live_probe_error(
