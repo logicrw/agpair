@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import shlex
 import shutil
 import signal
@@ -480,20 +481,22 @@ def _classify_executor_error(summary: str) -> tuple[str, bool, str | None]:
     return "execution_error", False, "inspect_logs"
 
 
-_WAITING_FOR_INPUT_PATTERNS: tuple[str, ...] = (
-    "press enter to continue",
-    "do you want to proceed",
-    "approve",
-    "continue?",
-    "waiting for input",
-    "requires confirmation",
-    "confirm",
+_WAITING_FOR_INPUT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bpress\s+enter\s+to\s+continue\b", re.IGNORECASE),
+    re.compile(r"\bdo\s+you\s+want\s+to\s+(proceed|continue)\b", re.IGNORECASE),
+    re.compile(r"\b(approve|confirm|continue)\?\s*(\[[^\]]*y[^\]]*n[^\]]*\]|\([^\)]*y[^\)]*n[^\)]*\))?", re.IGNORECASE),
+    re.compile(r"\bwaiting\s+for\s+(user\s+)?input\b", re.IGNORECASE),
+    re.compile(r"\brequires\s+(human\s+)?confirmation\b", re.IGNORECASE),
+    re.compile(r"\bapproval\s+required\b", re.IGNORECASE),
 )
 
 
 def _looks_waiting_for_input(text: str) -> bool:
-    normalized = text.lower()
-    return any(pattern in normalized for pattern in _WAITING_FOR_INPUT_PATTERNS)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in lines[-40:]:
+        if any(pattern.search(line) for pattern in _WAITING_FOR_INPUT_PATTERNS):
+            return True
+    return False
 
 
 def _reap_child_process(pid: int | None) -> None:
@@ -543,16 +546,32 @@ def _body_with_task_contract(
     task_id: str,
     body: str,
     *,
+    execution_repo_path: str | None = None,
     authorization_profile: str = "local_mutating",
     authorization_summary: str | None = None,
 ) -> str:
     normalized_profile = validate_authorization_profile(authorization_profile)
     summary = authorization_summary or authorization_profile_summary(normalized_profile)
+    execution_context = ""
+    if execution_repo_path:
+        repo_root = str(pathlib.Path(execution_repo_path).expanduser().resolve())
+        execution_context = (
+            f"Execution repository root: {repo_root}\n"
+            "Before reading, editing, testing, or running git commands, work from this exact repository root. "
+            "If your CLI opens in a scratch directory, cd to this path or use absolute paths under it. "
+            "Do not search or modify files outside this repository unless the task explicitly says so.\n\n"
+        )
     contract = (
         f"Task ID: {task_id}\n"
         f"If you create a git commit for this task, the commit message must include `{task_id}` verbatim.\n\n"
+        f"{execution_context}"
         f"Authorization profile: {normalized_profile}\n"
         f"{summary}\n\n"
+        "Noninteractive execution requirements:\n"
+        "- This is a background AGPair task; do not wait for human confirmation, editor interaction, or approval prompts.\n"
+        "- For file edits, use deterministic repository-local shell/file operations or your CLI's noninteractive edit tools.\n"
+        "- Do not describe intended work as completed; only claim changed files, validation, or success after observing actual file state and command output.\n"
+        "- If you cannot continue without interaction, return a structured BLOCKED receipt instead of waiting.\n\n"
         "Structured terminal receipt JSON requirements:\n"
         "- Print the requested report or conclusion directly to stdout; do not only save it to an external file, local brain, or link.\n"
         "- The final output line must be one single-line JSON terminal receipt object with schema_version, task_id, attempt_no, review_round, status, summary, and payload.\n"
@@ -639,6 +658,7 @@ class LocalCLIExecutor(ExecutorAdapter):
         contracted_body = _body_with_task_contract(
             task_id,
             body,
+            execution_repo_path=execution_repo_path,
             authorization_profile=authorization_profile,
             authorization_summary=authorization_summary,
         )

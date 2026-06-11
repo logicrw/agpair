@@ -95,6 +95,12 @@ def test_dispatch_creates_default_isolated_worktree_and_records_execution_path(t
 
     cmd_json = json.loads((pathlib.Path(dispatch.session_id) / "cmd.json").read_text(encoding="utf-8"))
     assert cmd_json[cmd_json.index("--repo") + 1] == str(expected_worktree.resolve())
+    prompt = cmd_json[-1]
+    root_lines = [
+        line for line in prompt.splitlines()
+        if line.startswith("Execution repository root:")
+    ]
+    assert root_lines == [f"Execution repository root: {expected_worktree.resolve()}"]
 
     _, kwargs = mock_popen.call_args
     assert kwargs["cwd"] == str(expected_worktree.resolve())

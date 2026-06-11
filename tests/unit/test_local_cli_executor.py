@@ -2,7 +2,12 @@ import json
 from pathlib import Path
 from unittest import mock
 
-from agpair.executors.local_cli import LocalCLIExecutor, _is_process_alive, _get_process_start_time
+from agpair.executors.local_cli import (
+    LocalCLIExecutor,
+    _get_process_start_time,
+    _is_process_alive,
+    _looks_waiting_for_input,
+)
 from agpair.models import ContinuationCapability
 
 
@@ -93,6 +98,31 @@ def test_dispatch_injects_task_id_commit_requirement(tmp_path):
     assert "TASK-HINT-1" in prompt
     assert "commit message" in prompt
     assert "must include" in prompt
+
+
+def test_dispatch_injects_execution_repository_root(tmp_path):
+    executor = DummyLocalCLIExecutor()
+
+    with mock.patch("agpair.executors.local_cli._git_head", return_value="fake-head"), \
+         mock.patch("agpair.executors.local_cli.subprocess.Popen") as mock_popen:
+        process = mock.Mock()
+        process.pid = 12345
+        mock_popen.return_value = process
+
+        dispatch = executor.dispatch(
+            task_id="TASK-ROOT-1",
+            body="Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+            repo_path=str(tmp_path),
+        )
+
+    cmd = json.loads((Path(dispatch.session_id) / "cmd.json").read_text(encoding="utf-8"))
+    prompt = cmd[1]
+    assert f"Execution repository root: {tmp_path.resolve()}" in prompt
+    assert "work from this exact repository root" in prompt
+    assert "If your CLI opens in a scratch directory" in prompt
+    assert "Noninteractive execution requirements" in prompt
+    assert "do not wait for human confirmation" in prompt
+    assert "only claim changed files, validation, or success after observing actual file state" in prompt
 
 
 def test_dispatch_injects_authorization_and_structured_receipt_contract(tmp_path):
@@ -257,6 +287,20 @@ def test_poll_blocks_when_executor_waits_for_interactive_input(tmp_path):
     assert state.is_done is True
     assert state.receipt["payload"]["blocker_type"] == "executor_waiting_for_input"
     assert state.receipt["payload"]["recoverable"] is True
+
+
+def test_waiting_for_input_detection_ignores_instructional_text() -> None:
+    body = "\n".join(
+        [
+            "This manual discusses approval flows and human confirmation in general.",
+            "Do not ask for confirmation unless needed.",
+            "The model should continue after verification.",
+            "Reading additional input from stdin...",
+        ]
+    )
+
+    assert _looks_waiting_for_input(body) is False
+    assert _looks_waiting_for_input("Do you want to proceed? [y/N]\n") is True
 
 
 def test_poll_classifies_executor_quota_exhaustion(tmp_path):

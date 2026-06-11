@@ -24,6 +24,7 @@ from agpair.storage.tasks import TaskRepository
 from agpair.scope_validation import (
     changed_files_from_git_diff,
     changed_files_from_git_status,
+    normalize_changed_files,
     validate_changed_files,
 )
 from agpair.terminal_receipts import (
@@ -275,16 +276,21 @@ def _scope_validation_payload(task, payload: Mapping[str, Any]) -> dict[str, Any
 
     state = _executor_state(task)
     commit_ref = _string_value(payload.get("commit_ref") or payload.get("commit") or payload.get("commit_sha"))
+    start_ref = _string_value(state.get("start_head")) if state else None
+    current_ref = _string_value(state.get("current_head")) if state else None
+    if commit_ref is None and current_ref and current_ref != start_ref:
+        commit_ref = current_ref
+
+    committed_actual: tuple[str, ...] = ()
     if commit_ref:
-        actual = changed_files_from_git_diff(
+        committed_actual = changed_files_from_git_diff(
             execution_repo_path,
-            start_ref=_string_value(state.get("start_head")) if state else None,
+            start_ref=start_ref,
             end_ref=commit_ref,
         )
-        baseline = ()
-    else:
-        actual = changed_files_from_git_status(execution_repo_path)
-        baseline = state.get("start_dirty_files") if isinstance(state, dict) else ()
+    dirty_actual = changed_files_from_git_status(execution_repo_path)
+    actual = normalize_changed_files((*committed_actual, *dirty_actual))
+    baseline = state.get("start_dirty_files") if isinstance(state, dict) else ()
     result = validate_changed_files(
         declared_changed_files=payload.get("changed_files"),
         actual_changed_files=actual,
