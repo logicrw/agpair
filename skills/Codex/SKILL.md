@@ -3,7 +3,7 @@ name: agpair-codex
 description: "Use when Codex should delegate non-trivial coding, refactor, test-fix, research, or review work through AGPair external CLI executors before using Codex native subagents."
 ---
 
-# AGPair for Codex
+# AGPair 3.0 for Codex
 
 Default: external AGPair executor first for non-trivial work. Codex remains the controller and verifier.
 
@@ -134,7 +134,7 @@ agpair task adopt TASK-123 --from-report --adoptable-result partial --controller
 
 ## Workflows
 
-Use `agpair workflow start` only for high-value multi-part, parallel, adversarial, or long-running work. Workflow manifests are declarative; AGPair rejects arbitrary script fields and creates normal V1.1 child tasks.
+Use `agpair workflow start` only for high-value multi-part, parallel, adversarial, or long-running work. Workflow manifests are declarative; AGPair rejects arbitrary script fields and creates normal AGPair child tasks.
 
 Workflow `ready_for_review` means AGPair has an evidence pack for Codex verification, not final user-facing success.
 
@@ -144,7 +144,7 @@ Workflow `ready_for_review` means AGPair has an evidence pack for Codex verifica
 agpair task retry TASK-123 --from-block --authorization-profile local_mutating
 ```
 
-`blocked(approval_required)` is terminal in V1. Retry starts a new attempt with structured blocked context and a dispatch-time authorization profile.
+`blocked(approval_required)` is terminal in AGPair 3.0. Retry starts a new attempt with structured blocked context and a dispatch-time authorization profile.
 
 ## Executor Order
 

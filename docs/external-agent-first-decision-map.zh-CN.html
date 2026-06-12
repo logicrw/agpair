@@ -791,7 +791,7 @@
 <body>
   <div class="topbar">
     <nav class="nav" aria-label="页面导航">
-      <div class="brand"><strong>AGPair V1</strong><span>External Agent First</span></div>
+      <div class="brand"><strong>AGPair 3.0</strong><span>External Agent First</span></div>
       <div class="links">
         <a href="#decisions">决策点</a>
         <a href="#flow">运行流</a>
@@ -806,15 +806,15 @@
     <header class="hero">
       <div class="hero-main reveal">
         <div>
-          <p class="eyebrow">给人看的改造地图 / 不是给 AI 执行的长计划</p>
-          <h1><span>让 Codex 少</span><span>干体力活，</span><span>外部 Agent</span><span>先上。</span></h1>
+          <p class="eyebrow">给人看的 AGPair 3.0 决策地图 / 不是给 AI 执行的长计划</p>
+          <h1><span>让主控少</span><span>干体力活，</span><span>外部 Agent</span><span>先上。</span></h1>
           <p class="hero-copy">
             这次改造的核心不是“多接几个 CLI”，而是重新规定责任边界：
-            <strong>Codex 做主控和验收，AGPair 调度外部执行器，失败再换人或重试。</strong>
+            <strong>Codex / Claude Code 做主控和验收，AGPair 调度外部执行器，失败再换人或重试。</strong>
           </p>
         </div>
         <div class="three-lines">
-          <div class="line-item"><b>01</b><span>外部 agent 是默认劳动力，Codex 子 agent 只做 fallback。</span></div>
+          <div class="line-item"><b>01</b><span>外部 agent 是默认劳动力，主控原生子 agent 只做 fallback / review。</span></div>
           <div class="line-item"><b>02</b><span>授权在派发时给预算，越界就结构化 blocked，然后开新 attempt retry。</span></div>
           <div class="line-item"><b>03</b><span>只认 CLI：Antigravity CLI、Grok CLI、Claude Code、Codex CLI；Gemini 新任务退场。</span></div>
         </div>
@@ -822,8 +822,8 @@
 
       <aside class="hero-side" aria-label="核心指标">
         <div class="stat-panel accent reveal">
-          <strong>1 个主控</strong>
-          <span>Codex main 负责拆任务、派发、整合、最终验证。</span>
+          <strong>主控不干体力活</strong>
+          <span>Codex / Claude Code 负责拆任务、派发、整合、最终验证。</span>
         </div>
         <div class="stat-panel reveal">
           <strong>4 个 executor</strong>
@@ -834,8 +834,8 @@
           <span>Antigravity 不再指 IDE 或桌面端，只指 CLI。</span>
         </div>
         <div class="stat-panel reveal">
-          <strong>2 条禁线</strong>
-          <span>不做运行中审批状态机；不做复杂 capability profile。</span>
+          <strong>2 条边界</strong>
+          <span>不模拟运行中审批；不替外部 CLI 筛 skills / MCP。</span>
         </div>
       </aside>
     </header>
@@ -849,11 +849,11 @@
       <div class="decision-grid">
         <article class="decision-card reveal" data-no="01">
           <span class="tag">责任边界</span>
-          <h3>Codex 不是劳动力池</h3>
-          <p>Codex main 只保留最关键的判断工作：理解意图、拆 brief、派发、验收 diff/test。</p>
+          <h3>主控不是劳动力池</h3>
+          <p>Codex / Claude Code main 只保留最关键的判断工作：理解意图、拆 brief、派发、验收 diff/test。</p>
           <div class="do-dont">
             <div class="mini"><b>要</b>外部 agent 先执行</div>
-            <div class="mini"><b>不要</b>默认开 Codex 子 agent</div>
+            <div class="mini"><b>不要</b>默认开原生子 agent</div>
           </div>
         </article>
 
@@ -890,7 +890,7 @@
         <article class="decision-card reveal" data-no="05">
           <span class="tag">权限模型</span>
           <h3>派发时授权，越界就停</h3>
-          <p>executor 没有人帮它点 approve。V1 给授权预算，超出预算写结构化 blocked。</p>
+          <p>executor 没有人帮它点 approve。AGPair 3.0 在派发时给授权预算，超出预算写结构化 blocked。</p>
           <div class="do-dont">
             <div class="mini"><b>要</b>dispatch-time profile</div>
             <div class="mini"><b>不要</b>运行中模拟审批</div>
@@ -909,11 +909,11 @@
 
         <article class="decision-card reveal" data-no="07">
           <span class="tag red">调度策略</span>
-          <h3>薄 routing table 就够了</h3>
-          <p>现在不做完整 capability profile。先用一张小表记录优先级、默认授权、适合/不适合任务。</p>
+          <h3>可插拔策略表就够了</h3>
+          <p>AGPair 用共享 executor profile 和 runtime policy overlay 管理启用、禁用、优先级和自调用抑制，不为每个 agent 写特殊分支。</p>
           <div class="do-dont">
-            <div class="mini"><b>要</b>可调整的静态表</div>
-            <div class="mini"><b>不要</b>动态评分系统</div>
+            <div class="mini"><b>要</b>统一 profile + overlay</div>
+            <div class="mini"><b>不要</b>散落胶水逻辑</div>
           </div>
         </article>
       </div>
@@ -922,14 +922,14 @@
     <section id="flow">
       <div class="section-head">
         <h2>一次任务怎么跑</h2>
-        <p class="section-note">V1 的精髓是终态 blocked + 新 attempt retry。看起来不如原进程 resume 优雅，但更稳、更可审计。</p>
+        <p class="section-note">AGPair 3.0 的精髓是终态 blocked + 新 attempt retry。看起来不如原进程 resume 优雅，但更稳、更可审计。</p>
       </div>
 
       <div class="flow-band reveal">
         <div class="flow">
           <div class="flow-step">
             <b>new</b>
-            <strong>Codex 写 brief</strong>
+            <strong>主控写 brief</strong>
             <span>目标、scope、非目标、验证命令、授权 profile。</span>
           </div>
           <div class="flow-step">
@@ -945,30 +945,30 @@
           <div class="flow-step">
             <b>terminal</b>
             <strong>提交或 blocked</strong>
-            <span>成功写 COMMITTED；越界写 BLOCKED。</span>
+            <span>成功写 receipt / evidence；越界写 BLOCKED。</span>
           </div>
           <div class="flow-step">
             <b>retry</b>
             <strong>新 attempt 接手</strong>
-            <span>Codex 读上下文，扩授权或换 executor。</span>
+            <span>主控读上下文，扩授权或换 executor。</span>
           </div>
         </div>
       </div>
 
       <div class="split" style="margin-top:18px;">
         <div class="panel reveal">
-          <h3>V1：现在要做</h3>
+          <h3>AGPair 3.0：当前做法</h3>
           <div class="state-machine">
             <div class="state-row"><div class="state-name">new</div><div class="state-desc">任务创建，brief 和授权预算已确定。</div></div>
             <div class="state-row"><div class="state-name">acked</div><div class="state-desc">executor 已启动，AGPair 可 wait/watch。</div></div>
-            <div class="state-row"><div class="state-name ok">committed</div><div class="state-desc">有结构化 receipt、diff、验证命令；Codex 再复验。</div></div>
+            <div class="state-row"><div class="state-name ok">ready</div><div class="state-desc">有结构化 receipt、diff、验证命令；主控再复验。</div></div>
             <div class="state-row"><div class="state-name terminal">blocked</div><div class="state-desc">终态。用 `retry --from-block` 新开 attempt。</div></div>
             <div class="state-row"><div class="state-name terminal">stuck</div><div class="state-desc">运行失败或无进展，优先换外部 executor。</div></div>
           </div>
         </div>
 
         <div class="panel reveal">
-          <h3>V2：以后再说</h3>
+          <h3>高级恢复：以后再说</h3>
           <p class="section-note" style="max-width:none;">
             `acked -> approval_required -> acked/resumed` 暂时不做。它要求所有 CLI 都支持暂停、声明请求、等待审批、恢复。这个抽象现在太脆。
           </p>
@@ -1022,9 +1022,9 @@
           <tr>
             <td><span class="priority">90</span></td>
             <td><span class="code">codex</span></td>
-            <td>外部都不可用、不达标，或任务太贴近当前 Codex 上下文。</td>
+            <td>外部都不可用、不达标，或任务太贴近当前主控上下文。</td>
             <td><span class="code">local_mutating</span></td>
-            <td>fallback。Codex native subagent 也属于 fallback，不走 AGPair executor 表。</td>
+            <td>fallback。主控 native subagent 也属于 fallback，不走 AGPair executor 表。</td>
           </tr>
         </tbody>
       </table>
@@ -1059,7 +1059,7 @@
         </div>
         <div class="phase reveal">
           <h3>6. 更新 skill/docs/doctor</h3>
-          <p>Codex 规则写清：外部 agent first；子 agent fallback；Codex main 永远复验。</p>
+          <p>Codex / Claude Code 规则写清：外部 agent first；原生子 agent fallback / review；主控永远复验。</p>
         </div>
       </div>
     </section>
@@ -1078,13 +1078,13 @@
         <div class="check reveal"><span class="mark">✓</span><span>`blocked(approval_required)` 是终态，不试图原进程恢复。</span></div>
         <div class="check reveal"><span class="mark">✓</span><span>`retry --from-block` 自动带上足够上下文。</span></div>
         <div class="check reveal"><span class="mark">✓</span><span>scope 外修改会进入 receipt/验收失败路径。</span></div>
-        <div class="check reveal"><span class="mark">✓</span><span>Codex 最后自己读 diff、跑验证，再声明完成。</span></div>
+        <div class="check reveal"><span class="mark">✓</span><span>主控最后自己读 diff、跑验证，再声明完成。</span></div>
       </div>
     </section>
 
     <footer class="footer">
-      <div>来源：`docs/superpowers/plans/2026-06-02-external-agent-first-agpair-v1.md`</div>
-      <div>目的：给人快速看懂决策，不替代 AI 执行计划。</div>
+      <div>当前版本：AGPair 3.0。历史计划只作背景，不替代 README / usage / skills。</div>
+      <div>目的：给人快速看懂决策，不替代当前行为文档。</div>
     </footer>
   </main>
 </body>

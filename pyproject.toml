@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agpair"
-version = "2.0.0"
-description = "Durable orchestration for AI coding workflows — task dispatch, structured receipts, recovery, and multi-executor lifecycle control"
+version = "3.0.0"
+description = "Native-feeling external-agent handoff for Codex and Claude Code — dispatch, wait, evidence, adoption, retry, and pluggable CLI executors"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12"

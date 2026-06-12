@@ -1,16 +1,17 @@
-# agpair
+# AGPair 3.0
 
 ![Python](https://img.shields.io/badge/python-≥3.12-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
+![Version](https://img.shields.io/badge/version-3.0.0-blueviolet)
 
 [中文说明](README.zh-CN.md) | [Getting Started](docs/getting-started.en.md) | [Command Reference](docs/usage.md)
 
-AGPair is a local task lifecycle and evidence layer that lets Codex or Claude Code delegate bounded work to external CLI agents, then wait, verify, adopt, retry, or fall back with structured evidence.
+AGPair 3.0 is a local task lifecycle and evidence layer that lets Codex or Claude Code delegate bounded work to external CLI agents, then wait, verify, adopt, retry, or fall back with structured evidence.
 
 Controllers plan and verify. AGPair dispatches external CLI executors, persists task state, waits cheaply, validates structured receipts, and supports state-aware retry when an executor blocks.
 
-## Current Model
+## AGPair 3.0 Model
 
 - Default external executor: `antigravity-cli`
 - Cheap challenger / backup: `grok-cli`
@@ -47,7 +48,8 @@ agpair doctor --fresh --repo-path /path/to/repo
 ```
 
 If Antigravity CLI print mode times out with the current default model, select
-a known-good Antigravity model for AGPair-launched workers:
+a known-good Antigravity model for AGPair-launched workers. The value below is
+an Antigravity model label, not the retired Gemini CLI executor:
 
 ```bash
 export AGPAIR_ANTIGRAVITY_MODEL="Gemini 3.1 Pro (Low)"
@@ -183,7 +185,7 @@ Use the narrowest dispatch-time budget that can finish the work:
 - `local_test_heavy`: broad local builds/tests.
 - `external_network`: external network access required by the task.
 
-V1 does not pause a running executor for live approval. Out-of-scope work should return `blocked(approval_required)`, and the controller starts a new retry attempt.
+AGPair 3.0 does not pause a running executor for live approval. Out-of-scope work should return `blocked(approval_required)`, and the controller starts a new retry attempt.
 
 ## Review Gate
 
@@ -254,14 +256,14 @@ AGPair is not a semantic controller. The AI controller still owns planning, scop
 | [Getting Started](docs/getting-started.en.md) | Minimal setup and first task |
 | [Command Reference](docs/usage.md) | Full CLI reference |
 | [Executor Lifecycle](docs/executor-lifecycle.md) | Add, disable, deprecate, or remove external executors |
-| [Workflows V2](docs/workflows.md) | Declarative multi-task workflow orchestration |
+| [Workflows](docs/workflows.md) | Declarative multi-task workflow orchestration |
 | [Claude Code Integration](docs/claude-code-integration.zh-CN.md) | Claude Code setup and routing rules |
 | [中文说明](README.zh-CN.md) | Chinese README |
 | [中文命令参考](docs/usage.zh-CN.md) | Chinese command reference |
 
 ## Compatibility
 
-The repository keeps legacy companion and bridge diagnostics for existing installations. Current task dispatch uses the registered CLI executors listed in the current model.
+The repository keeps legacy companion and bridge diagnostics for existing installations. Current task dispatch uses the registered CLI executors listed in the AGPair 3.0 model.
 
 ## License
 

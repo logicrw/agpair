@@ -1,8 +1,8 @@
-# AGPair Workflows V2
+# AGPair 3.0 Workflows
 
 AGPair workflows are for high-value, multi-part local engineering orchestration. Use normal `agpair task start` for ordinary single-task delegation.
 
-Workflow manifests are declarative DAGs. AGPair validates the manifest, stores `workflows` and `workflow_nodes`, then creates normal V1.1 child tasks. Child tasks still use AGPair task attempts, durable artifacts, structured receipts, completion policies, and controller-aware executor routing.
+Workflow manifests are declarative DAGs. AGPair validates the manifest, stores `workflows` and `workflow_nodes`, then creates normal AGPair child tasks. Child tasks still use AGPair task attempts, durable artifacts, structured receipts, completion policies, and controller-aware executor routing.
 
 Manifests are not a script runner. Any nested `workflow_script`, `python`, `javascript`, `shell`, `command`, `commands`, `setup_commands`, `teardown_commands`, `postinstall`, or `preinstall` field is rejected.
 

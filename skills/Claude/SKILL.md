@@ -3,7 +3,7 @@ name: agpair
 description: "Use AGPair from Claude Code to delegate non-trivial coding work to external CLI executors first, then watch, verify, and retry blocked attempts with structured context."
 ---
 
-# AGPair For Claude Code
+# AGPair 3.0 For Claude Code
 
 Claude Code is the controller and verifier. AGPair is the durable external-agent control plane.
 
@@ -116,7 +116,7 @@ when those boundaries are known.
 
 ## Workflows
 
-Use `agpair workflow start` only for high-value multi-part, parallel, adversarial, or long-running work. Workflow manifests are declarative; AGPair rejects arbitrary script fields and creates normal V1.1 child tasks.
+Use `agpair workflow start` only for high-value multi-part, parallel, adversarial, or long-running work. Workflow manifests are declarative; AGPair rejects arbitrary script fields and creates normal AGPair child tasks.
 
 Workflow `ready_for_review` means AGPair has an evidence pack for Claude Code verification, not final user-facing success.
 
@@ -129,7 +129,7 @@ Pick the narrowest dispatch-time authorization profile that can finish the task:
 - `local_test_heavy`: long or heavy local validation.
 - `external_network`: work that needs external network access.
 
-AGPair V1 does not pause a running executor for live approval. If an executor needs more authority, it must return `blocked(approval_required)`.
+AGPair 3.0 does not pause a running executor for live approval. If an executor needs more authority, it must return `blocked(approval_required)`.
 
 ## Blocked Retry
 
@@ -196,7 +196,7 @@ Managed hooks:
 - `UserPromptSubmit`: injects external-first routing context.
 - `Stop`: blocks only actionable AGPair terminal states such as `ready_for_review` and `approval_required`.
 - `SubagentStart`: advisory fallback-scope context.
-- `SubagentStop`, `TaskCreated`, `TaskCompleted`: observability-only in V1.
+- `SubagentStop`, `TaskCreated`, `TaskCompleted`: observability-only.
 - `SessionStart` and `PreCompact`: lightweight status/compaction guardrails.
 
 Hooks fail open when AGPair state is unavailable. They preserve unrelated Claude Code settings and remove only AGPair-managed entries on uninstall.

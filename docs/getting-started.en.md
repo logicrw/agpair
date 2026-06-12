@@ -1,6 +1,6 @@
-# Getting Started with AGPair
+# Getting Started with AGPair 3.0
 
-This guide gets AGPair installed and dispatching external CLI agents from Codex or Claude Code.
+This guide gets AGPair 3.0 installed and dispatching external CLI agents from Codex or Claude Code.
 
 ## 1. Install
 
@@ -173,7 +173,8 @@ Historical executor records remain inspectable for compatibility. New dispatch u
 
 If `antigravity-cli` is healthy but `--print` tasks time out with the current
 Antigravity default model, set `AGPAIR_ANTIGRAVITY_MODEL` to a model that works
-in your CLI, for example `Gemini 3.1 Pro (Low)`.
+in your CLI, for example `Gemini 3.1 Pro (Low)`. This is an Antigravity model
+label, not the retired Gemini CLI executor.
 
 Executor onboarding, disabling, deprecation, and removal use the shared registry
 profile contract. See [Executor Lifecycle](executor-lifecycle.md).

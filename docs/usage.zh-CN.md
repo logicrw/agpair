@@ -1,6 +1,6 @@
-# agpair 命令参考
+# AGPair 3.0 命令参考
 
-这份文档是命令参考。
+这份文档是 AGPair 3.0 命令参考。
 
 如果你是第一次使用，建议先看：
 
@@ -224,6 +224,7 @@ probe、smoke 和 retry 进程会被标记为 internal，让 Codex / Claude hook
   默认：`yolo`
 - `AGPAIR_ANTIGRAVITY_MODEL="Gemini 3.1 Pro (Low)"`
   可选；当 Antigravity 默认模型在 `--print` 模式超时时使用。
+  这是 Antigravity 模型标签，不是已经退场的 Gemini CLI executor。
   旧别名：`AGPAIR_ANTIGRAVITY_CLI_MODEL`
 - `AGPAIR_ANTIGRAVITY_PRINT_TIMEOUT=30m0s`
 - `AGPAIR_GROK_CLI_BIN=/absolute/path/to/grok`
@@ -619,7 +620,7 @@ agpair workflow retry-node WF-ABC123DEF456 scan-routing --authorization-profile 
 agpair workflow cancel WF-ABC123DEF456 --reason 'operator requested'
 ```
 
-工作流清单是声明式的。AGPair 会拒绝任意脚本字段，并派发普通 V1.1 子任务；子任务仍使用 durable artifacts、completion policies、结构化 receipt 和 controller-aware executor routing。
+工作流清单是声明式的。AGPair 会拒绝任意脚本字段，并派发普通 AGPair 子任务；子任务仍使用 durable artifacts、completion policies、结构化 receipt 和 controller-aware executor routing。
 
 Workflow `ready_for_review` 表示 AGPair 已生成 evidence pack 等待主控验收，不是最终用户侧完成。`workflow watch --json` 只输出低噪状态变化和 artifact 路径，不输出完整 raw logs。
 

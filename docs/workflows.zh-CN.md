@@ -1,8 +1,8 @@
-# AGPair 工作流 V2
+# AGPair 3.0 工作流
 
 AGPair 工作流用于高价值、多节点的本地工程编排。普通单任务委派仍应优先使用 `agpair task start`。
 
-工作流清单是声明式 DAG。AGPair 会校验清单、创建 `workflows` 与 `workflow_nodes` 持久化记录，然后通过 V1.1 任务核心创建子任务。子任务仍使用普通 AGPair 任务模型，包括 attempt、artifact、结构化 receipt、completion policy 与 controller-aware executor policy。
+工作流清单是声明式 DAG。AGPair 会校验清单、创建 `workflows` 与 `workflow_nodes` 持久化记录，然后通过 AGPair 任务核心创建子任务。子任务仍使用普通 AGPair 任务模型，包括 attempt、artifact、结构化 receipt、completion policy 与 controller-aware executor policy。
 
 清单禁止任意脚本字段。任意层级出现 `workflow_script`、`python`、`javascript`、`shell`、`command`、`commands`、`setup_commands`、`teardown_commands`、`postinstall`、`preinstall` 都会被拒绝。
 

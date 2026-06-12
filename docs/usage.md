@@ -1,6 +1,6 @@
-# agpair Usage
+# AGPair 3.0 Usage
 
-`agpair` is a durable task lifecycle layer for external CLI executors.
+`agpair` is the AGPair 3.0 durable task lifecycle layer for external CLI executors.
 
 Use it when:
 - Your AI coding agent is the main controller
@@ -220,6 +220,7 @@ Local CLI approval modes can be adjusted with environment variables:
   Default: `yolo`
 - `AGPAIR_ANTIGRAVITY_MODEL="Gemini 3.1 Pro (Low)"`
   Optional; use when the Antigravity default model times out in `--print` mode.
+  This is an Antigravity model label, not the retired Gemini CLI executor.
   Legacy alias: `AGPAIR_ANTIGRAVITY_CLI_MODEL`
 - `AGPAIR_ANTIGRAVITY_PRINT_TIMEOUT=30m0s`
 - `AGPAIR_GROK_CLI_BIN=/absolute/path/to/grok`
@@ -418,7 +419,7 @@ run `task accept` only after controller verification.
 agpair task retry TASK-SMOKE-001 --body "Retry with a fresh executor session."
 ```
 
-`retry` is always explicit CLI control in v1. The daemon only marks `retry_recommended=true`; it does not auto-retry.
+`retry` is always explicit CLI control in AGPair 3.0. The daemon only marks `retry_recommended=true`; it does not auto-retry.
 It also waits by default unless you pass `--no-wait`.
 
 For an approval block, retry from the structured terminal context:
@@ -590,7 +591,7 @@ agpair workflow retry-node WF-ABC123DEF456 scan-routing --authorization-profile 
 agpair workflow cancel WF-ABC123DEF456 --reason 'operator requested'
 ```
 
-Workflow manifests are declarative. AGPair rejects arbitrary script fields and dispatches normal V1.1 child tasks with durable artifacts, completion policies, structured receipts, and controller-aware executor routing.
+Workflow manifests are declarative. AGPair rejects arbitrary script fields and dispatches normal AGPair child tasks with durable artifacts, completion policies, structured receipts, and controller-aware executor routing.
 
 Workflow `ready_for_review` means AGPair has an evidence pack for controller verification, not final user-facing success. `workflow watch --json` emits low-noise state changes and artifact paths, not full raw logs.
 

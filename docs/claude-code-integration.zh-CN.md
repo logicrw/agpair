@@ -1,6 +1,6 @@
 # Claude Code 集成
 
-AGPair 面向 Claude Code 的定位很简单：Claude Code 是主控和验收者，AGPair 是外部 CLI agent 的持久化控制面。
+AGPair 3.0 面向 Claude Code 的定位很简单：Claude Code 是主控和验收者，AGPair 是外部 CLI agent 的持久化控制面。
 
 ## 推荐安装
 
@@ -19,7 +19,7 @@ agpair claude config --install --scope project --repo-path "$REPO" --sync-skill
 - `UserPromptSubmit`: 注入 external-first 路由提示。
 - `Stop`: 只在 `ready_for_review`、`approval_required` 等需要主控决策的状态阻止结束。
 - `SubagentStart`: 提醒 Claude 原生 subagent 只作为 fallback/review lane。
-- `SubagentStop`、`TaskCreated`、`TaskCompleted`: V1 仅保留为 observability hook。
+- `SubagentStop`、`TaskCreated`、`TaskCompleted`: 仅作为 observability hook。
 
 安装器只按 AGPair 命令身份追加或移除配置。它不会覆盖非 AGPair `statusLine`，除非显式传 `--force`；也不会删除其他 Claude Code hook。
 

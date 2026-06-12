@@ -1,6 +1,6 @@
-# AGPair 新手教程
+# AGPair 3.0 新手教程
 
-这份教程帮助你让 Codex 或 Claude Code 通过 AGPair 派发外部 CLI agent。
+这份教程帮助你让 Codex 或 Claude Code 通过 AGPair 3.0 派发外部 CLI agent。
 
 ## 1. 安装
 
@@ -172,7 +172,7 @@ Codex 主控之后用 `claude-code`；外部 `codex` 默认被抑制，因为它
 
 如果 `antigravity-cli` 健康，但当前 Antigravity 默认模型在 `--print` 任务中超时，
 设置 `AGPAIR_ANTIGRAVITY_MODEL` 为本机 CLI 已验证可用的模型，例如
-`Gemini 3.1 Pro (Low)`。
+`Gemini 3.1 Pro (Low)`。这是 Antigravity 模型标签，不是已经退场的 Gemini CLI executor。
 
 新增、禁用、弃用或移除 executor 时，走共享 registry profile contract。详见
 [Executor Lifecycle](executor-lifecycle.md)。
