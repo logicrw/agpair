@@ -1,9 +1,11 @@
 ---
 name: agpair
-description: "Use AGPair from Claude Code to delegate non-trivial coding work to external CLI executors first, then watch, verify, and retry blocked attempts with structured context."
+description: "Use when Claude Code handles non-trivial coding, refactor, test-fix, research, review, or multi-file work where AGPair external CLI agents can produce implementation candidates, alternative analysis, or verification evidence."
 ---
 
 # AGPair 3.0 For Claude Code
+
+IRON LAW: Non-trivial work requires an explicit routing decision. Use at least one external AGPair lane by default; add fanout only when it improves adoptable evidence more than it adds coordination cost.
 
 Claude Code is the controller and verifier. AGPair is the durable external-agent control plane.
 
@@ -11,7 +13,7 @@ Claude Code is the controller and verifier. AGPair is the durable external-agent
 
 Use AGPair before Claude Code native subagents for non-trivial implementation, refactor, test-fix, research, review, or multi-file work.
 
-Actively outsource low-value, repetitive, time-consuming, or easily verifiable work through AGPair: repo scans, alternative reviews, focused test-fix attempts, multi-file mechanical edits, smoke checks, and implementation slices with clear acceptance criteria.
+Actively outsource low-value, repetitive, time-consuming, or easily verifiable work through AGPair: repo scans, alternative reviews, focused test-fix attempts, multi-file mechanical edits, smoke checks, and implementation slices with clear acceptance criteria. For non-trivial work, default to one external AGPair lane first; add parallel external lanes when independent evidence can be compared or merged safely.
 
 Prefer executors in this order:
 
@@ -25,13 +27,80 @@ Do not request the AGPair-managed external `claude-code` executor by default; Cl
 
 Only route new work to active registered executor ids. Historical task records may remain inspectable for compatibility, but they are not default dispatch targets.
 
-Use Claude Code native subagents only when AGPair is unavailable, unsuitable for the task, or an external result is not good enough. Native subagents are fallback, review, or narrow helper lanes, not the default execution lane.
+Use Claude Code native subagents only when AGPair is unavailable, unsuitable for the task, or an external result is not good enough. If skipping external AGPair entirely for non-trivial work, state the skip reason before proceeding. Native subagents are fallback, review, or narrow helper lanes, not the default execution lane.
 
 Default executor environments are `managed-natural` for all active external CLI executors: AGPair manages state and evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config.
 
 AGPair external-first routing applies to controller sessions. AGPair-started executor, probe, smoke, and retry processes suppress AGPair client hooks to avoid recursive delegation, but external workers still inherit their normal CLI capabilities, skills, MCP, plugins, memory, and provider config unless an explicit diagnostic mode says otherwise.
 
 Use `agpair policy list --controller claude-code --json` to inspect the effective executor order, suppression, and lifecycle state. Use `agpair policy disable/enable/priority/reset` for pluggable runtime changes instead of editing source.
+
+## Routing And Fanout Decision
+
+Before doing non-trivial work directly or using native subagents, answer:
+
+1. Which external lane is most likely to produce an adoptable result?
+2. Would a second external lane reduce controller labor or improve confidence
+   enough to justify the merge/review cost?
+3. If the task mutates files, can every mutating lane use an isolated worktree
+   or a disjoint scope?
+
+If fanout has clear value, dispatch fanout. If fanout only adds coordination
+cost, use the best single external lane and continue. Do not dispatch extra
+lanes just to satisfy a numeric target.
+
+Skip AGPair entirely only when one of these is true, and state the reason:
+
+- the task is tiny or mostly mechanical;
+- the task is sensitive or depends heavily on current controller context;
+- external executors are unhealthy, unavailable, or already produced low-quality
+  output for this task;
+- safe isolation is unavailable for mutating work and a report-only external
+  lane would not help;
+- the best path is a narrow controller-side check or native helper.
+
+Recommended shapes:
+
+| Work type | Default external shape | Claude Code controller lanes |
+| --- | --- | --- |
+| Non-trivial research/review/diagnosis/design | 2 lanes when executors are healthy and time budget allows | `grok-cli` plus `antigravity-cli`; add `codex` for high-risk work |
+| Non-trivial implementation/refactor/test-fix | 1 isolated implementation lane first; add an external review/test lane or alternative implementation when risk or uncertainty warrants it | `antigravity-cli` primary; `grok-cli` or `codex` challenger |
+| Tiny/sensitive/context-heavy work | 0-1 lane | State the skip reason if AGPair is skipped, then work directly or use a narrow helper |
+
+Give each external lane the same goal, explicit scope, and comparable exit
+criteria. For concurrent lanes, use `--no-wait`, then `task wait` / `task watch`
+to collect evidence without burning controller turns. For one lane, normal
+`task start` waiting is fine.
+
+For code-writing work, fanout is still useful, but every mutating lane must use
+`--isolated-worktree` or a disjoint repo/worktree. Do not run multiple mutating
+executors in the controller worktree. Safe patterns:
+
+- one primary implementation lane plus one external review/test lane;
+- two alternative implementation candidates in separate isolated worktrees;
+- multiple instances of the same executor only when scopes are disjoint or each
+  instance has its own isolated worktree.
+
+Claude Code native subagents remain fallback, review, or narrow helper lanes
+after external executors are unsuitable, unavailable, or not good enough.
+
+Anti-patterns:
+
+- Do not use fanout as ceremony when one external lane is enough.
+- Do not run multiple mutating lanes in the controller worktree.
+- Do not keep waiting on a silent or low-quality lane after another lane has
+  produced adoptable evidence.
+- Do not treat task count as success; success is usable evidence that reduces
+  controller rework.
+
+Pre-delivery check:
+
+- [ ] Routing decision made: external lane, fanout, direct work, or native helper.
+- [ ] AGPair skip reason stated if no external lane was used for non-trivial work.
+- [ ] Every mutating external lane is isolated or disjoint.
+- [ ] `task status --json` inspected for each lane.
+- [ ] Useful evidence was accepted/adopted or explicitly rejected.
+- [ ] Final answer distinguishes external evidence from controller judgment.
 
 ## Dispatch
 
@@ -57,7 +126,7 @@ Exit criteria:
 List required verification, report format, and expected AGPair evidence.
 ```
 
-For one external task, let `task start` wait by default:
+For a single external lane, let `task start` wait by default:
 
 ```bash
 agpair task start \
@@ -71,7 +140,11 @@ agpair task start \
   --body "$BRIEF"
 ```
 
-For non-trivial implementation, refactor, or test-fix work, dispatch one bounded mutating slice first unless the task is tiny, sensitive, external executors are unhealthy, or a prior external result was low quality:
+For non-trivial implementation, refactor, or test-fix work, dispatch one bounded
+isolated implementation slice first unless AGPair is unavailable, unsafe, or
+already low quality for this task. Add a second external implementation or
+review/test lane only when risk, uncertainty, or verification value justifies
+the extra coordination:
 
 ```bash
 agpair task start \

@@ -1,15 +1,17 @@
 ---
 name: agpair-codex
-description: "Use when Codex should delegate non-trivial coding, refactor, test-fix, research, or review work through AGPair external CLI executors before using Codex native subagents."
+description: "Use when Codex handles non-trivial coding, refactor, test-fix, research, review, or multi-file work where AGPair external CLI agents can produce implementation candidates, alternative analysis, or verification evidence."
 ---
 
 # AGPair 3.0 for Codex
 
+IRON LAW: Non-trivial work requires an explicit routing decision. Use at least one external AGPair lane by default; add fanout only when it improves adoptable evidence more than it adds coordination cost.
+
 Default: external AGPair executor first for non-trivial work. Codex remains the controller and verifier.
 
-Actively outsource low-value, repetitive, time-consuming, or easily verifiable work through AGPair: repo scans, alternative reviews, focused test-fix attempts, multi-file mechanical edits, smoke checks, and implementation slices with clear acceptance criteria.
+Actively outsource low-value, repetitive, time-consuming, or easily verifiable work through AGPair: repo scans, alternative reviews, focused test-fix attempts, multi-file mechanical edits, smoke checks, and implementation slices with clear acceptance criteria. For non-trivial work, default to one external AGPair lane first; add parallel external lanes when independent evidence can be compared or merged safely.
 
-Use direct Codex edits for tiny local fixes, sensitive judgment-heavy work, or when AGPair is unavailable. Use Codex native subagents only after external executors are unavailable, unsuitable, or not good enough, or for narrow controller-side review/helper work.
+Use direct Codex edits for tiny local fixes, sensitive judgment-heavy work, or when AGPair is unavailable. If skipping external AGPair entirely for non-trivial work, state the skip reason before proceeding. Use Codex native subagents only after external executors are unavailable, unsuitable, or not good enough, or for narrow controller-side review/helper work.
 
 ## Normal Task
 
@@ -55,9 +57,80 @@ AGPair external-first routing applies to controller sessions. AGPair-started exe
 
 Use `agpair policy list --controller codex --json` to inspect the effective executor order, suppression, and lifecycle state. Use `agpair policy disable/enable/priority/reset` for pluggable runtime changes instead of editing source.
 
+## Routing And Fanout Decision
+
+Before doing non-trivial work directly or using native subagents, answer:
+
+1. Which external lane is most likely to produce an adoptable result?
+2. Would a second external lane reduce controller labor or improve confidence
+   enough to justify the merge/review cost?
+3. If the task mutates files, can every mutating lane use an isolated worktree
+   or a disjoint scope?
+
+If fanout has clear value, dispatch fanout. If fanout only adds coordination
+cost, use the best single external lane and continue. Do not dispatch extra
+lanes just to satisfy a numeric target.
+
+Skip AGPair entirely only when one of these is true, and state the reason:
+
+- the task is tiny or mostly mechanical;
+- the task is sensitive or depends heavily on current controller context;
+- external executors are unhealthy, unavailable, or already produced low-quality
+  output for this task;
+- safe isolation is unavailable for mutating work and a report-only external
+  lane would not help;
+- the best path is a narrow controller-side check or native helper.
+
+Recommended shapes:
+
+| Work type | Default external shape | Codex controller lanes |
+| --- | --- | --- |
+| Non-trivial research/review/diagnosis/design | 2 lanes when executors are healthy and time budget allows | `grok-cli` plus `antigravity-cli`; add `claude-code` for high-risk work |
+| Non-trivial implementation/refactor/test-fix | 1 isolated implementation lane first; add an external review/test lane or alternative implementation when risk or uncertainty warrants it | `antigravity-cli` primary; `grok-cli` or `claude-code` challenger |
+| Tiny/sensitive/context-heavy work | 0-1 lane | State the skip reason if AGPair is skipped, then work directly or use a narrow helper |
+
+Give each external lane the same goal, explicit scope, and comparable exit
+criteria. For concurrent lanes, use `--no-wait`, then `task wait` / `task watch`
+to collect evidence without burning controller turns. For one lane, normal
+`task start` waiting is fine.
+
+For code-writing work, fanout is still useful, but every mutating lane must use
+`--isolated-worktree` or a disjoint repo/worktree. Do not run multiple mutating
+executors in the controller worktree. Safe patterns:
+
+- one primary implementation lane plus one external review/test lane;
+- two alternative implementation candidates in separate isolated worktrees;
+- multiple instances of the same executor only when scopes are disjoint or each
+  instance has its own isolated worktree.
+
+Codex native subagents remain fallback, review, or narrow helper lanes after
+external executors are unsuitable, unavailable, or not good enough.
+
+Anti-patterns:
+
+- Do not use fanout as ceremony when one external lane is enough.
+- Do not run multiple mutating lanes in the controller worktree.
+- Do not keep waiting on a silent or low-quality lane after another lane has
+  produced adoptable evidence.
+- Do not treat task count as success; success is usable evidence that reduces
+  controller rework.
+
+Pre-delivery check:
+
+- [ ] Routing decision made: external lane, fanout, direct work, or native helper.
+- [ ] AGPair skip reason stated if no external lane was used for non-trivial work.
+- [ ] Every mutating external lane is isolated or disjoint.
+- [ ] `task status --json` inspected for each lane.
+- [ ] Useful evidence was accepted/adopted or explicitly rejected.
+- [ ] Final answer distinguishes external evidence from controller judgment.
+
 ## Bounded Implementation
 
-For non-trivial implementation, refactor, or test-fix work, first dispatch one bounded slice unless the task is tiny, sensitive, external executors are unhealthy, or a prior external result was low quality:
+For non-trivial implementation, refactor, or test-fix work, dispatch one bounded
+isolated implementation slice first unless AGPair is unavailable, unsafe, or
+already low quality for this task. Add a second external implementation or
+review/test lane only when risk, uncertainty, or verification value justifies
+the extra coordination:
 
 ```bash
 agpair task start \
