@@ -23,7 +23,7 @@ Prefer executors in this order:
 
 Do not request the AGPair-managed external `claude-code` executor by default; Claude Code already has native subagents and `claude-code` is suppressed for Claude Code controllers unless `--allow-self-executor` is explicitly justified.
 
-Do not route new work to Gemini. Legacy `gemini_cli` tasks may be inspected or cleaned up, but not used for new `task start` or retry dispatch.
+Only route new work to active registered executor ids. Historical task records may remain inspectable for compatibility, but they are not default dispatch targets.
 
 Use Claude Code native subagents only when AGPair is unavailable, unsuitable for the task, or an external result is not good enough. Native subagents are fallback, review, or narrow helper lanes, not the default execution lane.
 
@@ -31,15 +31,43 @@ Default executor environments are `managed-natural` for all active external CLI 
 
 AGPair external-first routing applies to controller sessions. AGPair-started executor, probe, smoke, and retry processes suppress AGPair client hooks to avoid recursive delegation, but external workers still inherit their normal CLI capabilities, skills, MCP, plugins, memory, and provider config unless an explicit diagnostic mode says otherwise.
 
+Use `agpair policy list --controller claude-code --json` to inspect the effective executor order, suppression, and lifecycle state. Use `agpair policy disable/enable/priority/reset` for pluggable runtime changes instead of editing source.
+
 ## Dispatch
+
+For ordinary tasks, send a clear natural brief. AGPair normalizes useful
+briefs and should not reject work merely because a section heading is missing.
+Do not pass placeholders like `<brief>`, `todo`, or `fix this`.
+
+For complex mutating work, prefer this structured shape because it gives the
+external executor tighter scope and gives the controller better evidence:
+
+```text
+Goal:
+State the concrete outcome.
+
+Scope:
+Allowed files/areas:
+Forbidden files/areas:
+
+Required changes:
+Describe the expected edit, or say: None. This is report-only. Do not edit files.
+
+Exit criteria:
+List required verification, report format, and expected AGPair evidence.
+```
 
 For one external task, let `task start` wait by default:
 
 ```bash
 agpair task start \
   --repo-path "$REPO" \
+  --controller claude-code \
   --executor antigravity-cli \
-  --authorization-profile local_mutating \
+  --task-kind quick_review \
+  --wait-policy lease \
+  --authorization-profile local_readonly \
+  --completion-policy report \
   --body "$BRIEF"
 ```
 
@@ -50,6 +78,8 @@ agpair task start \
   --repo-path "$REPO" \
   --controller claude-code \
   --executor antigravity-cli \
+  --task-kind implementation \
+  --wait-policy lease \
   --authorization-profile local_mutating \
   --completion-policy evidence \
   --isolated-worktree \
@@ -59,6 +89,8 @@ agpair task start \
 Use a brief with explicit allowed files, forbidden files, required changes, validation command, and exit criteria. The external worker returns `changed_files`, `validation` or `validation_not_run`, `scope_violations`, report text, and raw evidence paths. Claude Code integrates or rejects the result in the main worktree after verification.
 
 For isolated mutating evidence/commit tasks, AGPair defaults to `--dirty-snapshot tracked`: tracked staged/unstaged controller changes are copied into the executor worktree before launch. Ignored and untracked files are not copied; use `--dirty-snapshot off` when the worker should start from committed HEAD only.
+
+When `--wait-policy lease` expires and the task is still alive, detach and continue or run a native reviewer in parallel. Do not abandon a complex external task solely because it has not produced a quick final report.
 
 For parallel or background work, dispatch asynchronously and attach a low-noise watch:
 
@@ -71,9 +103,16 @@ agpair task start \
   --no-wait
 
 agpair task watch TASK-123 --json
+agpair task wait TASK-123 --json
 ```
 
+Each async `$BRIEF` must be clear enough to identify the goal, scope, allowed
+changes, and expected evidence. Use the structured shape for mutating work
+when those boundaries are known.
+
 `watch --json` emits state changes and raw evidence paths. Do not stream full executor logs into the main Claude context unless the terminal receipt or raw path needs inspection.
+
+`wait --json` reports `outcome`, `agent_result`, `recommended_action`, and whether the controller wait lease expired. Treat `controller_lease_expired` and `soft_no_progress` as background-running outcomes; the controller action for those cases is effectively `wait_background` unless the task budget has expired. Inspect `task status --json` rather than burning model turns in a polling loop.
 
 ## Workflows
 
@@ -117,7 +156,17 @@ Before reporting success:
 - read receipt and raw log paths when the claim is surprising or high-risk;
 - run the narrowest meaningful local verification.
 
-Use `protocol_result` to judge AGPair receipt quality and `adoption_result` to judge whether Claude Code can use the result. `adoptable_result=yes` means directly adoptable after normal verification; `partial` means usable with bounded controller review or minor rework; `no` means retry, switch executor, or use native subagents.
+Use `agent_result` as the controller-facing outcome. Prefer `agent_result.controller_action`: `use_result` for reports, `review_then_apply` for isolated implementation diffs, `retry_or_switch_executor` for blocked attempts, and `inspect_evidence` when the evidence needs manual inspection. `protocol_result` and `adoption_result` remain compatibility/debug surfaces; do not make low-risk protocol warnings override useful evidence.
+
+For isolated implementation or test-fix tasks, review and apply the executor diff explicitly:
+
+```bash
+agpair task diff TASK-123
+agpair task apply TASK-123 --check
+agpair task apply TASK-123
+```
+
+`task apply` leaves changes in the controller worktree for normal Claude Code review and verification. It does not auto-accept the AGPair task.
 
 After verification, close the loop:
 

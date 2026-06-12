@@ -36,6 +36,14 @@ def _print_timeout() -> str:
     return timeout
 
 
+def _model_args() -> list[str]:
+    model = (
+        os.environ.get("AGPAIR_ANTIGRAVITY_MODEL", "").strip()
+        or os.environ.get("AGPAIR_ANTIGRAVITY_CLI_MODEL", "").strip()
+    )
+    return ["--model", model] if model else []
+
+
 class AntigravityCLIExecutor(LocalCLIExecutor):
     def __init__(self, antigravity_bin: str | None = None) -> None:
         super().__init__(
@@ -53,6 +61,7 @@ class AntigravityCLIExecutor(LocalCLIExecutor):
     ) -> list[str]:
         return [
             self.bin_path,
+            *_model_args(),
             *_approval_args(),
             "--add-dir",
             repo_path,

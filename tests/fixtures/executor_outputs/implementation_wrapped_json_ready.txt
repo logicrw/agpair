@@ -1,0 +1,3 @@
+I made the requested bounded change.
+
+{"schema_version":"1.0.0","task_id":"TASK-WRAPPED","attempt_no":1,"review_round":0,"status":"ready_for_review","summary":"Implemented bounded change","payload":{"report":"Implemented the bounded change.","changed_files":["agpair/example.py"],"validation_not_run":"not run in fixture","scope_violations":[],"raw_log_path":"stdout.log","receipt_path":"receipt.json"}}

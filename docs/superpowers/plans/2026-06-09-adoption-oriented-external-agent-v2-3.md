@@ -1400,7 +1400,7 @@ Codex controller matrix:
 
 ```bash
 PYTHONPATH=. python scripts/smoke_real_executors.py \
-  --repo-path /Users/chenrongwei/Projects/agpair \
+  --repo-path <repo> \
   --controller codex \
   --executors antigravity-cli,grok-cli,claude-code \
   --timeout-seconds 300 \
@@ -1411,7 +1411,7 @@ Claude Code controller matrix:
 
 ```bash
 PYTHONPATH=. python scripts/smoke_real_executors.py \
-  --repo-path /Users/chenrongwei/Projects/agpair \
+  --repo-path <repo> \
   --controller claude-code \
   --executors antigravity-cli,grok-cli,codex \
   --timeout-seconds 300 \
@@ -1422,7 +1422,7 @@ Diagnostic matrix:
 
 ```bash
 PYTHONPATH=. python scripts/smoke_real_executors.py \
-  --repo-path /Users/chenrongwei/Projects/agpair \
+  --repo-path <repo> \
   --controller diagnostic \
   --all-registered \
   --allow-self-executor \

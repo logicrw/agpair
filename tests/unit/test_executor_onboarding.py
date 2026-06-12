@@ -69,6 +69,8 @@ def test_every_registered_executor_has_required_profile_fields() -> None:
         assert profile["default_environment_mode"] in ENVIRONMENT_MODES
         assert profile["default_skill_policy"] in SKILL_POLICIES
         assert profile["default_mcp_policy"] in MCP_POLICIES
+        assert "startup_profiles" not in profile
+        assert "default_startup_profile" not in profile
 
 
 def test_profile_noninteractive_flags_match_adapter_command(monkeypatch, tmp_path) -> None:

@@ -72,6 +72,9 @@ def test_doctor_reports_missing_bus_or_database_paths(tmp_path: Path, monkeypatc
     assert payload["supported_executor_backends"] == ["antigravity-cli", "grok-cli", "claude-code", "codex"]
     assert "gemini_cli" in payload["legacy_executor_backends"]
     assert "local_mutating" in payload["authorization_profiles"]
+    assert payload["executor_policy_path"].endswith("executors.json")
+    assert payload["executor_policy_error"] is None
+    assert payload["controller_policies"]["codex"]["suppressed_executors"] == ["codex"]
 
 
 def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch) -> None:
@@ -137,6 +140,12 @@ def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch
     assert health["codex"]["available"] is True
     assert "codex" in health
     assert "gemini_cli" not in health
+    assert payload["controller_policies"]["codex"]["selected_executor"] == "antigravity-cli"
+    assert payload["controller_policies"]["claude-code"]["eligible_executors"] == [
+        "antigravity-cli",
+        "grok-cli",
+        "codex",
+    ]
 
 
 def test_doctor_reports_claude_probe_timeout_not_auth_required(tmp_path: Path, monkeypatch) -> None:

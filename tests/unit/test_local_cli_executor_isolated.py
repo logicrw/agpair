@@ -10,7 +10,13 @@ import pytest
 
 from agpair.executors.local_cli import LocalCLIExecutor
 from agpair.executors.local_cli import WorktreeProvisionError
+from agpair.config import AppPaths
 from agpair.models import ContinuationCapability
+from agpair.storage.db import ensure_database
+from agpair.storage.journal import JournalRepository
+from agpair.storage.tasks import TaskRepository
+
+FIXTURES = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "executor_outputs"
 
 
 class DummyLocalCLIExecutor(LocalCLIExecutor):
@@ -55,6 +61,16 @@ def _init_repo(repo_path: pathlib.Path) -> None:
     (repo_path / "staged.txt").write_text("original staged\n", encoding="utf-8")
     subprocess.run(["git", "add", "tracked.txt", "staged.txt"], cwd=repo_path, check=True)
     subprocess.run(["git", "commit", "-m", "initial"], cwd=repo_path, check=True, capture_output=True)
+
+
+def _make_worktree(repo_path: pathlib.Path, worktree_path: pathlib.Path) -> None:
+    subprocess.run(["git", "worktree", "add", "--detach", str(worktree_path)], cwd=repo_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=worktree_path, check=True)
+    subprocess.run(["git", "config", "user.name", "AGPair Test"], cwd=worktree_path, check=True)
+
+
+def _git_output(repo_path: pathlib.Path, args: list[str]) -> str:
+    return subprocess.check_output(["git", "-C", str(repo_path), *args], text=True)
 
 
 def test_dispatch_creates_default_isolated_worktree_and_records_execution_path(tmp_path) -> None:
@@ -229,6 +245,13 @@ def test_dispatch_tracked_dirty_snapshot_applies_to_isolated_worktree(tmp_path) 
     assert state["dirty_snapshot_json"]["has_unstaged_diff"] is True
     assert state["dirty_snapshot_json"]["untracked_files"] == ["untracked-secret.txt"]
     assert sorted(state["start_dirty_files"]) == ["staged.txt", "tracked.txt"]
+    assert state["worker_base_created"] is True
+    assert state["worker_diff_base_reason"] == "dirty_snapshot_baseline"
+    assert state["worker_base_head"] == state["start_head"]
+    assert state["worker_base_head"] != state["original_start_head"]
+    assert subprocess.check_output(
+        ["git", "status", "--porcelain"], cwd=worktree, text=True
+    ).strip() == ""
 
 
 def test_dispatch_dirty_snapshot_off_leaves_isolated_worktree_clean(tmp_path) -> None:
@@ -248,6 +271,136 @@ def test_dispatch_dirty_snapshot_off_leaves_isolated_worktree_clean(tmp_path) ->
     worktree = pathlib.Path(dispatch.execution_repo_path)
     assert (worktree / "tracked.txt").read_text(encoding="utf-8") == "original\n"
     state = json.loads((pathlib.Path(dispatch.session_id) / "state.json").read_text(encoding="utf-8"))
+    assert state["worker_base_created"] is False
+    assert state["worker_diff_base_reason"] == "start_head"
+    assert state["worker_base_head"] == state["start_head"]
+    state = json.loads((pathlib.Path(dispatch.session_id) / "state.json").read_text(encoding="utf-8"))
     assert state["dirty_snapshot_mode"] == "off"
     assert state["dirty_snapshot_applied"] is False
     assert state["start_dirty_files"] == []
+
+
+def test_arbitrate_salvages_readonly_report_after_nonzero_exit(tmp_path) -> None:
+    executor = NoopLocalCLIExecutor()
+    temp_dir = tmp_path / "session"
+    temp_dir.mkdir()
+    (temp_dir / "stdout.log").write_text(
+        (FIXTURES / "report_after_nonzero_exit_stdout.txt").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (temp_dir / "stderr.log").write_text("process ended after report\n", encoding="utf-8")
+    state = {
+        "exit_code": 1,
+        "is_process_alive": False,
+        "has_committed": False,
+        "authorization_profile": "local_readonly",
+    }
+
+    is_done, receipt = executor._arbitrate(state, "TASK-REPORT-SALVAGE", 1, temp_dir)
+
+    assert is_done is True
+    assert receipt is not None
+    assert receipt["status"] == "EVIDENCE_PACK"
+    assert receipt["payload"]["arbitration"] == "report_salvage_after_nonzero_exit"
+    assert "Findings:" in receipt["payload"]["report"]
+
+
+def test_arbitrate_blocks_readonly_thought_only_after_nonzero_exit(tmp_path) -> None:
+    executor = NoopLocalCLIExecutor()
+    temp_dir = tmp_path / "session"
+    temp_dir.mkdir()
+    (temp_dir / "stdout.log").write_text(
+        (FIXTURES / "grok_max_turns_thought_only_stdout.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (temp_dir / "stderr.log").write_text("cancelled after max turns\n", encoding="utf-8")
+    state = {
+        "exit_code": 1,
+        "is_process_alive": False,
+        "has_committed": False,
+        "authorization_profile": "local_readonly",
+    }
+
+    is_done, receipt = executor._arbitrate(state, "TASK-THOUGHT-ONLY", 1, temp_dir)
+
+    assert is_done is True
+    assert receipt is not None
+    assert receipt["status"] == "BLOCKED"
+    assert receipt["payload"]["blocker_type"] == "executor_turn_budget_exhausted"
+    assert receipt["payload"]["recoverable"] is True
+    assert receipt["payload"]["recommended_next_action"] == "retry_same_executor_with_more_budget_or_switch_executor"
+
+
+def test_finalize_infers_isolated_worktree_changed_files_and_apply_check(tmp_path) -> None:
+    from agpair.task_terminal import finalize_executor_receipt
+
+    repo_path = tmp_path / "repo"
+    worktree_path = tmp_path / "worker"
+    _init_repo(repo_path)
+    _make_worktree(repo_path, worktree_path)
+    base = _git_output(worktree_path, ["rev-parse", "HEAD"]).strip()
+    (worktree_path / "b.txt").write_text("worker change\n", encoding="utf-8")
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    (session_dir / "stdout.log").write_text("", encoding="utf-8")
+    (session_dir / "stderr.log").write_text("", encoding="utf-8")
+    (session_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "repo_path": str(worktree_path),
+                "worker_base_head": base,
+                "start_head": base,
+                "start_dirty_files": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    paths = AppPaths.from_root(tmp_path / ".agpair")
+    ensure_database(paths.db_path)
+    tasks = TaskRepository(paths.db_path)
+    tasks.create_task(
+        task_id="TASK-INFER-WORKTREE",
+        repo_path=str(repo_path),
+        isolated_worktree=True,
+        completion_policy="evidence",
+        authorization_profile="local_mutating",
+    )
+    tasks.mark_acked(task_id="TASK-INFER-WORKTREE", session_id=str(session_dir))
+    tasks.set_execution_repo_path(task_id="TASK-INFER-WORKTREE", execution_repo_path=str(worktree_path))
+    task = tasks.get_task("TASK-INFER-WORKTREE")
+    assert task is not None
+
+    decision = finalize_executor_receipt(
+        state_root=paths.root,
+        tasks=tasks,
+        journal=JournalRepository(paths.db_path),
+        task=task,
+        raw_receipt={
+            "schema_version": "1",
+            "task_id": "TASK-INFER-WORKTREE",
+            "attempt_no": 1,
+            "review_round": 0,
+            "status": "EVIDENCE_PACK",
+            "summary": "implemented without declared changed_files",
+            "payload": {
+                "raw_log_path": str(session_dir / "stdout.log"),
+                "stderr_log_path": str(session_dir / "stderr.log"),
+                "scope_violations": [],
+                "exit_code": 0,
+            },
+        },
+        source="test",
+        message_id="msg-infer-worktree",
+    )
+
+    assert decision.ok is True
+    task_after = tasks.get_task("TASK-INFER-WORKTREE")
+    assert task_after is not None
+    receipt = json.loads(task_after.terminal_receipt_json or "{}")
+    assert receipt["payload"]["changed_files"] == ["b.txt"]
+    assert receipt["payload"]["worktree_diff"]["apply_check_ok"] is True
+    attempt = tasks.current_attempt("TASK-INFER-WORKTREE")
+    assert attempt is not None
+    adoption = json.loads(attempt.adoption_evidence_json)
+    assert adoption["agent_result"]["state"] == "needs_review"
+    assert adoption["agent_result"]["controller_action"] == "review_then_apply"

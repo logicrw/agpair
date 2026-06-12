@@ -25,6 +25,7 @@ which agpair
 ```bash
 agpair doctor
 agpair doctor --repo-path /path/to/repo
+agpair doctor --fresh --repo-path /path/to/repo
 ```
 
 Important fields:
@@ -61,9 +62,32 @@ Hooks fail open if AGPair is unavailable. They are routing hints and completion 
 agpair task start \
   --repo-path /path/to/repo \
   --executor antigravity-cli \
-  --authorization-profile local_mutating \
-  --body "Goal: fix the failing smoke test. Required evidence: run the focused test."
+  --task-kind quick_review \
+  --wait-policy lease \
+  --authorization-profile local_readonly \
+  --completion-policy report \
+  --body "Goal: review the target area. Scope: named files only. Required changes: None. This is report-only. Do not edit files. Exit criteria: return findings with evidence."
 ```
+
+For bounded implementation, refactor, or test-fix work, use an isolated
+worktree and evidence completion:
+
+```bash
+agpair task start \
+  --repo-path /path/to/repo \
+  --executor antigravity-cli \
+  --task-kind implementation \
+  --wait-policy lease \
+  --authorization-profile local_mutating \
+  --completion-policy evidence \
+  --isolated-worktree \
+  --body "Goal: make the bounded change. Scope: name allowed files. Required changes: describe edits. Exit criteria: run focused validation and report evidence."
+```
+
+`--wait-policy lease` lets the controller wait cheaply for a bounded window. If
+the executor is still running, AGPair returns a structured background-running
+result instead of forcing the controller to burn model turns polling or killing
+the task early.
 
 For async or parallel work:
 
@@ -71,8 +95,11 @@ For async or parallel work:
 agpair task start \
   --repo-path /path/to/repo \
   --executor antigravity-cli \
-  --authorization-profile local_mutating \
-  --body "Goal: ..." \
+  --task-kind quick_review \
+  --wait-policy lease \
+  --authorization-profile local_readonly \
+  --completion-policy report \
+  --body "Goal: review the target area. Scope: named files only. Required changes: None. This is report-only. Do not edit files. Exit criteria: return findings with evidence." \
   --no-wait
 
 agpair task watch TASK-123 --json
@@ -91,7 +118,23 @@ git -C /path/to/repo diff
 
 Treat `ready_for_review`, `evidence_ready`, and `committed` as review gates. The external executor has claimed progress; Codex or Claude Code still verifies diff, receipt, raw evidence paths, and tests before reporting success.
 
+In `status --json` and `wait --json`, read `agent_result.controller_action` first: reports usually say `use_result`, isolated implementation diffs usually say `review_then_apply`, and blocked attempts tell the controller to inspect, retry, or switch executor.
+
 `commit_ref` is optional unless the brief or authorization profile required a commit.
+
+For isolated code tasks, inspect and apply the worker diff explicitly:
+
+```bash
+agpair task diff TASK-123
+agpair task apply TASK-123 --check
+agpair task apply TASK-123
+```
+
+After controller verification, mark the receipt handled:
+
+```bash
+agpair task accept TASK-123 --adoptable-result yes --controller-rework none
+```
 
 ## 6. Retry An Approval Block
 
@@ -126,7 +169,11 @@ Use this order unless the task gives a better reason:
 
 For Codex controllers, next use `claude-code`; external `codex` is suppressed by default because it is the AGPair-managed Codex CLI worker. For Claude Code controllers, next use `codex`; external `claude-code` is suppressed by default because Claude Code already has native subagents. Override self-executor suppression only with `--allow-self-executor`.
 
-Do not use Gemini for new work. Legacy `gemini_cli` records may be inspected or cleaned up only.
+Historical executor records remain inspectable for compatibility. New dispatch uses active registered executor ids only.
+
+If `antigravity-cli` is healthy but `--print` tasks time out with the current
+Antigravity default model, set `AGPAIR_ANTIGRAVITY_MODEL` to a model that works
+in your CLI, for example `Gemini 3.1 Pro (Low)`.
 
 Executor onboarding, disabling, deprecation, and removal use the shared registry
 profile contract. See [Executor Lifecycle](executor-lifecycle.md).
@@ -147,4 +194,4 @@ Project-level `.claude/settings.json` or Codex hook config should be committed o
 
 ## Compatibility Note
 
-The Antigravity desktop companion extension and bridge diagnostics remain for older installations. New tasks should use `antigravity-cli`.
+Legacy companion and bridge diagnostics remain for existing installations. Current task dispatch uses the registered CLI executors listed above.

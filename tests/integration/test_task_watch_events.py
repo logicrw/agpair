@@ -28,3 +28,53 @@ def test_watch_event_references_raw_log_path_without_streaming_log_body() -> Non
 
     assert payload["raw_log_path"].endswith("stdout.log")
     assert "log_body" not in payload
+
+
+def test_watch_event_emits_signal_metadata_without_log_body() -> None:
+    previous = WatchEvent(
+        task_id="TASK-123",
+        state="acked",
+        cursor="same",
+        signal_state="silent",
+        stdout_bytes=0,
+        stderr_bytes=0,
+    )
+    current = WatchEvent(
+        task_id="TASK-123",
+        state="acked",
+        cursor="same",
+        signal_state="active_via_output",
+        controller_action="continue_waiting",
+        stdout_bytes=128,
+        stderr_bytes=0,
+        last_signal_at="2026-06-11T12:00:00+00:00",
+    )
+
+    payload = current.to_json_dict()
+
+    assert should_emit_watch_event(previous, current)
+    assert payload["signal_state"] == "active_via_output"
+    assert payload["stdout_bytes"] == 128
+    assert payload["controller_action"] == "continue_waiting"
+    assert "log_body" not in payload
+
+
+def test_watch_event_emits_agent_result_changed_without_log_body() -> None:
+    previous = WatchEvent(task_id="TASK-123", state="acked", cursor="1")
+    current = WatchEvent(
+        task_id="TASK-123",
+        state="ready_for_review",
+        cursor="2",
+        event="agent_result_changed",
+        agent_result={
+            "state": "usable",
+            "controller_action": "review_then_apply",
+        },
+    )
+
+    payload = current.to_json_dict()
+
+    assert should_emit_watch_event(previous, current)
+    assert payload["event"] == "agent_result_changed"
+    assert payload["agent_result"]["controller_action"] == "review_then_apply"
+    assert "log_body" not in payload

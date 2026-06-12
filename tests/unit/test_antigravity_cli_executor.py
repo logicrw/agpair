@@ -63,6 +63,37 @@ def test_antigravity_cli_command_honors_print_timeout_env(monkeypatch) -> None:
     assert cmd[cmd.index("--print-timeout") + 1] == "10m0s"
 
 
+def test_antigravity_cli_command_honors_model_env(monkeypatch) -> None:
+    monkeypatch.delenv("AGPAIR_ANTIGRAVITY_APPROVAL_MODE", raising=False)
+    monkeypatch.delenv("AGPAIR_ANTIGRAVITY_PRINT_TIMEOUT", raising=False)
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_MODEL", "Gemini 3.1 Pro (Low)")
+    executor = AntigravityCLIExecutor(antigravity_bin="fake-agy")
+
+    cmd = executor._build_antigravity_cmd(
+        "Goal: edit the repo",
+        "/tmp/repo",
+        pathlib.Path("/tmp/agpair"),
+    )
+
+    assert cmd[:3] == ["fake-agy", "--model", "Gemini 3.1 Pro (Low)"]
+    assert cmd[cmd.index("--print") + 1] == "Goal: edit the repo"
+
+
+def test_antigravity_cli_command_honors_legacy_model_env(monkeypatch) -> None:
+    monkeypatch.delenv("AGPAIR_ANTIGRAVITY_MODEL", raising=False)
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_CLI_MODEL", "Claude Sonnet 4.6 (Thinking)")
+    executor = AntigravityCLIExecutor(antigravity_bin="fake-agy")
+
+    cmd = executor._build_antigravity_cmd(
+        "Goal: inspect only",
+        "/tmp/repo",
+        pathlib.Path("/tmp/agpair"),
+    )
+
+    assert "--model" in cmd
+    assert cmd[cmd.index("--model") + 1] == "Claude Sonnet 4.6 (Thinking)"
+
+
 def test_antigravity_cli_rejects_invalid_print_timeout(monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_ANTIGRAVITY_PRINT_TIMEOUT", "--bad")
     executor = AntigravityCLIExecutor(antigravity_bin="fake-agy")

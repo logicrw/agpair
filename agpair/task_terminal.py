@@ -32,7 +32,13 @@ from agpair.terminal_receipts import (
     validate_structured_receipt_dict,
     validate_terminal_receipt_payload,
 )
+from agpair.terminal_arbitration import completed_report_text
 from agpair.transport import messages
+from agpair.worktree_adoption import (
+    WorktreeAdoptionError,
+    build_worktree_diff,
+    check_apply_to_controller_repo,
+)
 
 
 def finalize_executor_receipt(
@@ -82,24 +88,35 @@ def finalize_executor_receipt(
         payload["report_path"] = report_path
     receipt_path = str(attempt_dir / "receipt.json")
     payload["receipt_path"] = receipt_path
-    scope_validation = _scope_validation_payload(task, payload)
-    if scope_validation is not None:
-        payload["scope_validation"] = scope_validation
-
-    structured = validate_structured_receipt_dict(receipt, expected_task_id=task.task_id)
-    structured_ok = structured is not None
-    validation = validate_terminal_receipt_payload(str(receipt.get("status")), payload)
-    if not validation.ok:
-        structured_ok = False
-        payload["required_missing"] = list(validation.required_missing)
-    write_json(attempt_dir / "receipt.json", receipt)
-
     requested_policy = getattr(task, "completion_policy", None) or "auto"
     effective_policy = resolve_effective_task_policy(
         requested_completion_policy=requested_policy,
         authorization_profile=task.authorization_profile,
         body=original_body,
     )
+    _merge_worktree_evidence(task, payload, effective_policy.effective_completion_policy)
+    scope_validation = _scope_validation_payload(task, payload)
+    if scope_validation is not None:
+        payload["scope_validation"] = scope_validation
+    structured = validate_structured_receipt_dict(receipt, expected_task_id=task.task_id)
+    structured_ok = structured is not None
+    validation = validate_terminal_receipt_payload(
+        str(receipt.get("status")),
+        payload,
+        report_only=effective_policy.report_only,
+    )
+    if not validation.ok:
+        worktree_diff = payload.get("worktree_diff")
+        validation_only_missing = set(validation.required_missing) == {"validation"}
+        apply_check_ok = isinstance(worktree_diff, Mapping) and worktree_diff.get("apply_check_ok") is True
+        if validation_only_missing and apply_check_ok:
+            warnings = payload.get("protocol_warnings") if isinstance(payload.get("protocol_warnings"), list) else []
+            payload["protocol_warnings"] = [*warnings, "validation_missing_softened_by_apply_check"]
+        else:
+            structured_ok = False
+            payload["required_missing"] = list(validation.required_missing)
+    write_json(attempt_dir / "receipt.json", receipt)
+
     evidence_path = str(attempt_dir / "evidence.json")
     evidence_payload = {
         "task_id": task.task_id,
@@ -232,6 +249,32 @@ def _record_artifacts(tasks: TaskRepository, *, task_id: str, attempt_no: int, a
         tasks.record_artifact(task_id=task_id, attempt_no=attempt_no, artifact_type=kind, path=path)
 
 
+def _merge_worktree_evidence(task, payload: dict[str, Any], completion_policy: str) -> None:
+    if not getattr(task, "isolated_worktree", False):
+        return
+    if completion_policy not in {"evidence", "commit"}:
+        return
+    try:
+        diff = build_worktree_diff(task=task, session_state=_executor_state(task))
+        apply_check = check_apply_to_controller_repo(repo_path=task.repo_path, patch=diff.patch)
+    except WorktreeAdoptionError as exc:
+        payload["worktree_diff"] = {
+            "has_patch": False,
+            "changed_files": [],
+            "apply_check_ok": False,
+            "apply_check_reason": exc.reason,
+        }
+        return
+    payload.setdefault("changed_files", list(diff.changed_files))
+    payload["worktree_diff"] = {
+        "has_patch": bool(diff.patch.strip()),
+        "changed_files": list(diff.changed_files),
+        "apply_check_ok": apply_check.ok,
+        "apply_check_reason": apply_check.reason,
+        "stat": diff.stat,
+    }
+
+
 def _report_text_from_receipt_or_output(receipt: Mapping[str, Any], output_excerpt: str | None) -> str | None:
     payload = receipt.get("payload") if isinstance(receipt.get("payload"), Mapping) else {}
     report = payload.get("report") if isinstance(payload, Mapping) else None
@@ -256,8 +299,7 @@ def _stdout_report_text(output_excerpt: str | None) -> str | None:
     lines = text.splitlines()
     while lines and parse_structured_terminal_receipt(lines[-1].strip()) is not None:
         lines.pop()
-    report = "\n".join(lines).strip()
-    return report or None
+    return completed_report_text("\n".join(lines))
 
 
 def _int_value(value: Any) -> int | None:

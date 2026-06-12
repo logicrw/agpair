@@ -79,6 +79,8 @@ class ExecutorPolicyDecision:
     rejected_executor: str | None
     allow_self_executor: bool
     reasons: tuple[str, ...]
+    skipped_executors: tuple[dict[str, Any], ...] = ()
+    policy_sources: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -116,6 +118,7 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
             "supports_turn_budget": "no",
             "supports_streaming_json": "no",
             "default_output_mode": "print",
+            "model_env_vars": ["AGPAIR_ANTIGRAVITY_MODEL", "AGPAIR_ANTIGRAVITY_CLI_MODEL"],
             "noninteractive_flags": ["--print", "--print-timeout"],
             "isolated_auth_env_vars": [],
             "isolation_disable_env_var": None,
@@ -527,77 +530,147 @@ def _static_eligible_executors(suppressed: list[str]) -> list[str]:
     return eligible
 
 
+def _load_default_overlay():
+    from agpair.config import AppPaths
+    from agpair.executors.config import ExecutorPolicyConfigError, ExecutorPolicyManager
+
+    try:
+        return ExecutorPolicyManager(AppPaths.default().executor_policy_path).read()
+    except ExecutorPolicyConfigError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _ordered_specs_for_controller(controller_id: str, overlay) -> list[ExecutorSpec]:
+    priority = overlay.priority_for(controller_id)
+    priority_index = {executor_id: index for index, executor_id in enumerate(priority)}
+    return sorted(
+        EXECUTOR_SPECS.values(),
+        key=lambda spec: (
+            0 if spec.executor_id in priority_index else 1,
+            priority_index.get(spec.executor_id, spec.default_priority),
+            spec.default_priority,
+        ),
+    )
+
+
+def _skip_reason(
+    *,
+    spec: ExecutorSpec,
+    controller_id: str,
+    suppressed: set[str],
+    policy_disabled: set[str],
+    require_available: bool,
+    health: dict[str, dict[str, Any]],
+) -> tuple[str | None, str | None]:
+    lifecycle = lifecycle_decision(
+        executor_id=spec.executor_id,
+        lifecycle_status=spec.lifecycle_status,
+        replacement_executor=spec.replacement_executor,
+    )
+    if not spec.enabled_by_default:
+        return "executor_disabled", f"executor {spec.executor_id} is disabled by its static profile"
+    if not lifecycle.allowed_for_new_tasks:
+        return lifecycle.blocker_type, str(lifecycle.reason)
+    if spec.executor_id in suppressed:
+        return "executor_suppressed", f"{controller_id} controller suppresses external {spec.executor_id} by default [executor_suppressed]"
+    if spec.executor_id in policy_disabled:
+        return (
+            "executor_disabled_by_policy",
+            f"executor {spec.executor_id} is disabled by runtime policy for controller {controller_id} [executor_disabled_by_policy]",
+        )
+    if require_available and not health[spec.executor_id]["available"]:
+        item = health[spec.executor_id]
+        reason = item.get("last_error_excerpt")
+        if not reason:
+            reason = (
+                f"requested executor {spec.executor_id} is unavailable; install {item['binary_name']} "
+                f"or set {item['env_var']}"
+            )
+        return str(item.get("last_failure_type") or "executor_unavailable"), str(reason)
+    return None, None
+
+
 def resolve_controller_policy(
     *,
     controller: str | None = None,
     requested_executor: str | None = None,
     allow_self_executor: bool = False,
     require_available: bool = False,
+    overlay: Any | None = None,
 ) -> ExecutorPolicyDecision:
     controller_id = _controller_id(controller)
-    suppressed = list(_suppressed_executors_for_controller(controller_id, allow_self_executor=allow_self_executor))
+    active_overlay = overlay if overlay is not None else _load_default_overlay()
+    suppressed = tuple(_suppressed_executors_for_controller(controller_id, allow_self_executor=allow_self_executor))
+    suppressed_set = set(suppressed)
+    policy_disabled = set(active_overlay.disabled_for(controller_id))
     reasons: list[str] = []
     for executor_id in suppressed:
         reasons.append(f"{controller_id} controller suppresses external {executor_id} by default")
+    for executor_id in sorted(policy_disabled):
+        reasons.append(
+            f"executor {executor_id} is disabled by runtime policy for controller {controller_id} "
+            "[executor_disabled_by_policy]"
+        )
 
     requested_normalized = normalize_executor_id(requested_executor) if requested_executor else None
-    health = executor_health_snapshot(
-        run_launch_probe=require_available,
-        executor_ids=(requested_normalized,) if requested_normalized else None,
-    )
-    eligible = []
     specs_to_consider = (
         [EXECUTOR_SPECS[requested_normalized]]
         if requested_normalized
-        else sorted(EXECUTOR_SPECS.values(), key=lambda item: item.default_priority)
+        else _ordered_specs_for_controller(controller_id, active_overlay)
+    )
+    health: dict[str, dict[str, Any]] = {}
+    if require_available:
+        health = executor_health_snapshot(
+            run_launch_probe=True,
+            executor_ids=(requested_normalized,) if requested_normalized else [spec.executor_id for spec in specs_to_consider],
+        )
+    eligible: list[str] = []
+    skipped: list[dict[str, Any]] = []
+    rejected: str | None = None
+    specs_to_consider = (
+        [EXECUTOR_SPECS[requested_normalized]]
+        if requested_normalized
+        else specs_to_consider
     )
     for spec in specs_to_consider:
-        lifecycle = lifecycle_decision(
-            executor_id=spec.executor_id,
-            lifecycle_status=spec.lifecycle_status,
-            replacement_executor=spec.replacement_executor,
+        blocker_type, reason = _skip_reason(
+            spec=spec,
+            controller_id=controller_id,
+            suppressed=suppressed_set,
+            policy_disabled=policy_disabled,
+            require_available=require_available,
+            health=health,
         )
-        if not spec.enabled_by_default or not lifecycle.allowed_for_new_tasks:
-            continue
-        if spec.executor_id in suppressed:
-            continue
-        if require_available and not health[spec.executor_id]["available"]:
+        if blocker_type:
+            skipped.append(
+                {
+                    "executor_id": spec.executor_id,
+                    "blocker_type": blocker_type,
+                    "reason": reason,
+                }
+            )
+            if requested_normalized == spec.executor_id:
+                rejected = spec.executor_id
+                if reason:
+                    reasons.append(reason)
             continue
         eligible.append(spec.executor_id)
 
-    selected = requested_normalized
-    rejected = None
-    if selected and selected in suppressed:
-        rejected = selected
-        selected = None
-        reasons.append(f"requested executor {rejected} suppressed for controller {controller_id}")
-    elif selected and not health[selected]["lifecycle_allowed_for_new_tasks"]:
-        rejected = selected
-        selected = None
-        reason = str(health[rejected].get("lifecycle_reason") or f"requested executor {rejected} is not active")
-        reasons.append(reason)
-    elif selected and require_available and not health[selected]["available"]:
-        rejected = selected
-        selected = None
-        item = health[rejected]
-        reason = item.get("last_error_excerpt")
-        if not reason:
-            reason = (
-                f"requested executor {rejected} is unavailable; install {item['binary_name']} "
-                f"or set {item['env_var']}"
-            )
-        reasons.append(str(reason))
-
-    if selected is None and not eligible and requested_normalized:
-        eligible = _static_eligible_executors(suppressed)
-    if selected is None and eligible:
+    selected = requested_normalized if requested_normalized in eligible else None
+    if selected is None and not requested_normalized and eligible:
         selected = eligible[0]
+    policy_sources = {
+        "static_registry": "agpair.executors.policy.EXECUTOR_SPECS",
+        "runtime_overlay": "executor_policy_overlay",
+    }
     return ExecutorPolicyDecision(
         controller=controller_id,
         selected_executor=selected,
         eligible_executors=tuple(eligible),
-        suppressed_executors=tuple(suppressed),
+        suppressed_executors=suppressed,
         rejected_executor=rejected,
         allow_self_executor=allow_self_executor,
         reasons=tuple(reasons),
+        skipped_executors=tuple(skipped),
+        policy_sources=policy_sources,
     )

@@ -52,6 +52,18 @@ def test_malformed_success_receipt_is_rejected() -> None:
     assert "raw_log_path" in result.required_missing
 
 
+def test_report_only_evidence_pack_accepts_artifacts_without_implementation_fields() -> None:
+    payload = {
+        "raw_log_path": "/tmp/stdout.log",
+        "receipt_path": ".agpair/tasks/TASK-REPORT/attempt-1/receipt.json",
+    }
+
+    result = validate_terminal_receipt_payload("EVIDENCE_PACK", payload, report_only=True)
+
+    assert result.ok
+    assert result.required_missing == ()
+
+
 def test_approval_required_requires_authorization_delta() -> None:
     payload = {
         "blocker_type": "approval_required",
@@ -194,6 +206,20 @@ Final receipt:
     assert parsed is not None
     assert parsed.status == "EVIDENCE_PACK"
     assert parsed.payload["report"] == "No issues found"
+
+
+def test_parse_realistic_wrapped_implementation_fixture() -> None:
+    raw = (
+        Path("tests/fixtures/executor_outputs/implementation_wrapped_json_ready.txt")
+        .read_text(encoding="utf-8")
+    )
+
+    protocol = normalize_terminal_receipt(raw, expected_task_id="TASK-WRAPPED")
+
+    assert protocol.receipt is not None
+    assert protocol.receipt.status == "EVIDENCE_PACK"
+    assert protocol.receipt.payload["changed_files"] == ["agpair/example.py"]
+    assert "schema_version_alias" in protocol.warnings
 
 
 def test_parse_receipt_normalizes_ready_for_review_status_alias() -> None:

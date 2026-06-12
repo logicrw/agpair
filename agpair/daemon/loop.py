@@ -87,11 +87,16 @@ def run_once(
         timeout_seconds=timeout_seconds,
         skip_task_ids=touched_task_ids,
     )
+    budget_stuck, budget_task_ids = mark_execution_budget_expired_tasks(
+        paths,
+        current=current,
+        skip_task_ids=touched_task_ids | watchdog_task_ids,
+    )
     stuck = mark_stuck_tasks(
         paths,
         current=current,
         timeout_seconds=timeout_seconds,
-        skip_task_ids=touched_task_ids | watchdog_task_ids,
+        skip_task_ids=touched_task_ids | watchdog_task_ids | budget_task_ids,
     )
     cleaned_sessions = sweep_local_cli_sessions(paths, skip_task_ids=touched_task_ids)
     health: dict = {
@@ -102,6 +107,7 @@ def run_once(
         "auto_closed_from_repo": auto_closed,
         "workflows_advanced": workflows_advanced,
         "watchdog_recommended": watchdog_count,
+        "execution_budget_stuck": budget_stuck,
         "stuck_marked": stuck,
         "local_sessions_cleaned": cleaned_sessions,
     }
@@ -595,6 +601,8 @@ def mark_stuck_tasks(
     for task in tasks.list_stale_acked_tasks(cutoff):
         if task.task_id in excluded:
             continue
+        if task.execution_budget_seconds is not None:
+            continue
         tasks.mark_stuck(task_id=task.task_id, reason="no progress before timeout")
         tasks.recommend_retry(task_id=task.task_id, retry_count=task.retry_count)
         journal.append(task.task_id, "daemon", "stuck", "retry recommended after timeout")
@@ -602,6 +610,35 @@ def mark_stuck_tasks(
             _cleanup_local_cli_session(tasks, task)
         count += 1
     return count
+
+
+def mark_execution_budget_expired_tasks(
+    paths: AppPaths,
+    *,
+    current: datetime,
+    skip_task_ids: set[str] | None = None,
+) -> tuple[int, set[str]]:
+    tasks = TaskRepository(paths.db_path)
+    journal = JournalRepository(paths.db_path)
+    excluded = skip_task_ids or set()
+    count = 0
+    touched: set[str] = set()
+    for task in tasks.list_execution_budget_expired_candidates(to_iso(current)):
+        if task.task_id in excluded:
+            continue
+        tasks.mark_stuck(task_id=task.task_id, reason="no_progress_budget_exceeded")
+        tasks.recommend_retry(task_id=task.task_id, retry_count=task.retry_count)
+        journal.append(
+            task.task_id,
+            "daemon",
+            "execution_budget_stuck",
+            "retry recommended after execution budget exceeded",
+        )
+        if task.executor_session_id or task.antigravity_session_id:
+            _cleanup_local_cli_session(tasks, task)
+        count += 1
+        touched.add(task.task_id)
+    return count, touched
 
 
 def _cleanup_local_cli_session(tasks: TaskRepository, task) -> bool:
@@ -666,7 +703,15 @@ def mark_watchdog_tasks(
         if task.task_id in excluded:
             continue
         tasks.recommend_retry(task_id=task.task_id, retry_count=task.retry_count)
-        journal.append(task.task_id, "daemon", "watchdog_retry_recommended", "no progress after watchdog threshold")
+        if task.background_ok:
+            journal.append(
+                task.task_id,
+                "daemon",
+                "soft_no_progress_recommended",
+                "no fresh progress signal after watchdog threshold; background task not failed",
+            )
+        else:
+            journal.append(task.task_id, "daemon", "watchdog_retry_recommended", "no progress after watchdog threshold")
         count += 1
         touched.add(task.task_id)
     return count, touched

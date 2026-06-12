@@ -130,6 +130,19 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "authorization_summary" not in task_cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN authorization_summary TEXT")
         conn.commit()
+    # Migration 15b: task kind and controller wait budget defaults.
+    task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    task_wait_defaults = {
+        "task_kind": "TEXT NOT NULL DEFAULT 'generic'",
+        "wait_policy": "TEXT NOT NULL DEFAULT 'terminal'",
+        "controller_wait_seconds": "REAL",
+        "execution_budget_seconds": "REAL",
+        "background_ok": "INTEGER NOT NULL DEFAULT 0",
+    }
+    for column, ddl in task_wait_defaults.items():
+        if column not in task_cols:
+            conn.execute(f"ALTER TABLE tasks ADD COLUMN {column} {ddl}")
+    conn.commit()
 
     # Migration 16: V1.1 attempts/artifacts, normalized terminal receipt, workflow links.
     task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
@@ -234,6 +247,18 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "dirty_snapshot_applied": "INTEGER NOT NULL DEFAULT 0",
     }
     for column, ddl in attempt_defaults.items():
+        if column not in attempt_cols:
+            conn.execute(f"ALTER TABLE task_attempts ADD COLUMN {column} {ddl}")
+    conn.commit()
+    attempt_cols = {row[1] for row in conn.execute("PRAGMA table_info(task_attempts)").fetchall()}
+    attempt_wait_defaults = {
+        "task_kind": "TEXT NOT NULL DEFAULT 'generic'",
+        "wait_policy": "TEXT NOT NULL DEFAULT 'terminal'",
+        "controller_wait_seconds": "REAL",
+        "execution_budget_seconds": "REAL",
+        "background_ok": "INTEGER NOT NULL DEFAULT 0",
+    }
+    for column, ddl in attempt_wait_defaults.items():
         if column not in attempt_cols:
             conn.execute(f"ALTER TABLE task_attempts ADD COLUMN {column} {ddl}")
     conn.commit()

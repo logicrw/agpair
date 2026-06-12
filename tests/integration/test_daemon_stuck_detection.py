@@ -93,6 +93,87 @@ def test_daemon_marks_retry_recommended_before_hard_timeout(tmp_path: Path) -> N
     assert any(row.event == "watchdog_retry_recommended" for row in rows)
 
 
+def test_daemon_soft_watchdog_does_not_stuck_background_task(tmp_path: Path) -> None:
+    from agpair.daemon.loop import run_once
+    from agpair.storage.journal import JournalRepository
+
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    repo = TaskRepository(paths.db_path)
+    repo.create_task(
+        task_id="TASK-BG",
+        repo_path="/tmp/repo",
+        wait_policy="lease",
+        controller_wait_seconds=300,
+        execution_budget_seconds=3600,
+        background_ok=True,
+    )
+    repo.mark_acked(task_id="TASK-BG", session_id="session-bg")
+    old = (datetime(2026, 3, 21, 12, 0, tzinfo=UTC) - timedelta(minutes=16)).isoformat().replace("+00:00", "Z")
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute(
+            "UPDATE tasks SET last_activity_at=?, updated_at=? WHERE task_id=?",
+            (old, old, "TASK-BG"),
+        )
+        conn.commit()
+
+    run_once(
+        paths,
+        now=datetime(2026, 3, 21, 12, 0, tzinfo=UTC),
+        bus=EmptyBus(),
+        timeout_seconds=1800,
+        watchdog_seconds=900,
+    )
+
+    task = repo.get_task("TASK-BG")
+    assert task is not None
+    assert task.phase == "acked"
+    assert task.retry_recommended is True
+    rows = JournalRepository(paths.db_path).tail("TASK-BG", limit=5)
+    assert any(row.event == "soft_no_progress_recommended" for row in rows)
+
+
+def test_daemon_uses_execution_budget_for_background_stuck(tmp_path: Path) -> None:
+    from agpair.daemon.loop import run_once
+    from agpair.storage.journal import JournalRepository
+
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    repo = TaskRepository(paths.db_path)
+    repo.create_task(
+        task_id="TASK-BUDGET",
+        repo_path="/tmp/repo",
+        wait_policy="lease",
+        controller_wait_seconds=300,
+        execution_budget_seconds=600,
+        background_ok=True,
+    )
+    repo.mark_acked(task_id="TASK-BUDGET", session_id="session-budget")
+    created = (datetime(2026, 3, 21, 12, 0, tzinfo=UTC) - timedelta(minutes=11)).isoformat().replace("+00:00", "Z")
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute(
+            "UPDATE tasks SET created_at=?, last_activity_at=?, updated_at=? WHERE task_id=?",
+            (created, created, created, "TASK-BUDGET"),
+        )
+        conn.commit()
+
+    run_once(
+        paths,
+        now=datetime(2026, 3, 21, 12, 0, tzinfo=UTC),
+        bus=EmptyBus(),
+        timeout_seconds=1800,
+        watchdog_seconds=900,
+    )
+
+    task = repo.get_task("TASK-BUDGET")
+    assert task is not None
+    assert task.phase == "stuck"
+    assert task.stuck_reason == "no_progress_budget_exceeded"
+    assert task.retry_recommended is True
+    rows = JournalRepository(paths.db_path).tail("TASK-BUDGET", limit=5)
+    assert any(row.event == "execution_budget_stuck" for row in rows)
+
+
 def test_daemon_does_not_mark_stuck_on_same_tick_as_soft_watchdog(tmp_path: Path) -> None:
     from agpair.daemon.loop import run_once
 

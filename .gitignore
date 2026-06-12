@@ -16,4 +16,5 @@ companion-extension/*.vsix
 .omx/
 .firecrawl/
 docs/goals/**/.goalbuddy-board/
+docs/goals/**/state.yaml
 docs/goals/agpair-executor-reliability-v2-1/

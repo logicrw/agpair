@@ -180,7 +180,8 @@ def test_non_active_lifecycle_states_are_not_eligible_for_new_dispatch(monkeypat
 
     decision = resolve_controller_policy(requested_executor="grok-cli")
     assert decision.rejected_executor == "grok-cli"
-    assert decision.selected_executor == "antigravity-cli"
+    assert decision.selected_executor is None
+    assert decision.eligible_executors == ()
     assert status in decision.reasons[-1]
 
     blocker = executor_start_blocker("grok-cli")

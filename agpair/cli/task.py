@@ -41,7 +41,16 @@ from agpair.models import (
     authorization_profile_summary,
     validate_authorization_profile,
 )
-from agpair.runtime_liveness import LivenessState, classify_liveness, effective_no_progress_seconds, is_bootstrap_noise, is_task_live
+from agpair.runtime_liveness import (
+    LivenessState,
+    build_signal_summary,
+    classify_liveness,
+    effective_no_progress_seconds,
+    is_bootstrap_noise,
+    is_task_live,
+    recommend_controller_action,
+)
+from agpair.task_brief import TaskBriefError, normalize_task_brief
 from agpair.terminal_receipts import (
     blocked_failure_context_from_receipt,
     committed_result_from_receipt,
@@ -54,6 +63,13 @@ from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskNotFoundError, TaskRepository
 from agpair.storage.waiters import WaiterRepository
 from agpair.targets import TargetManager
+from agpair.wait_policy import WaitBudget, resolve_wait_budget
+from agpair.worktree_adoption import (
+    WorktreeAdoptionError,
+    apply_to_controller_repo,
+    build_worktree_diff,
+    check_apply_to_controller_repo,
+)
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -458,24 +474,42 @@ def _attempt_protocol_adoption_payload(paths: AppPaths, task_id: str) -> dict:
         return {
             "protocol_result": None,
             "adoption_result": None,
+            "agent_result": None,
         }
     warnings = _json_value(attempt.protocol_warnings_json, [])
     errors = _json_value(attempt.protocol_errors_json, [])
     adoption = _json_value(attempt.adoption_evidence_json, {})
     if isinstance(adoption, dict):
         adoption.setdefault("adoptable_result", attempt.adoptable_result)
+    else:
+        adoption = {
+            "adoptable_result": attempt.adoptable_result,
+            "blockers": [],
+            "warnings": [],
+            "evidence": {},
+        }
+    agent_result = adoption.get("agent_result")
+    if not isinstance(agent_result, dict):
+        adoptable_result = str(adoption.get("adoptable_result") or attempt.adoptable_result or "unknown")
+        blockers = adoption.get("blockers") if isinstance(adoption.get("blockers"), list) else []
+        soft_warnings = adoption.get("warnings") if isinstance(adoption.get("warnings"), list) else []
+        state = "blocked" if adoptable_result == "no" else "usable" if adoptable_result == "yes" else "needs_review"
+        agent_result = {
+            "state": state,
+            "controller_action": "retry_or_switch_executor" if state == "blocked" else "inspect_evidence",
+            "summary": "Compatibility fallback derived from adoption_result.",
+            "hard_blockers": blockers,
+            "soft_warnings": soft_warnings,
+        }
+        adoption["agent_result"] = agent_result
     return {
         "protocol_result": {
             "ok": not bool(errors),
             "warnings": warnings if isinstance(warnings, list) else [],
             "errors": errors if isinstance(errors, list) else [],
         },
-        "adoption_result": adoption if isinstance(adoption, dict) else {
-            "adoptable_result": attempt.adoptable_result,
-            "blockers": [],
-            "warnings": [],
-            "evidence": {},
-        },
+        "adoption_result": adoption,
+        "agent_result": agent_result,
     }
 
 
@@ -508,6 +542,38 @@ def _resolve_dirty_snapshot_mode(
     ):
         return "tracked"
     return "off"
+
+
+def _resolve_cli_wait_budget(
+    *,
+    task_kind: str | None,
+    wait_policy: str | None,
+    controller_wait_seconds: float | None,
+    execution_budget_seconds: float | None,
+    background_ok: bool | None,
+    authorization_profile: str,
+    completion_policy: str,
+) -> tuple[WaitBudget, str]:
+    try:
+        budget = resolve_wait_budget(
+            task_kind=task_kind,
+            wait_policy=wait_policy,
+            controller_wait_seconds=controller_wait_seconds,
+            execution_budget_seconds=execution_budget_seconds,
+            background_ok=background_ok,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    resolved_completion_policy = completion_policy
+    if budget.task_kind in {"implementation", "test_fix"}:
+        if authorization_profile == "local_readonly":
+            raise typer.BadParameter(
+                f"--task-kind {budget.task_kind} requires a mutating authorization profile; "
+                "use local_mutating or choose a review/report task kind"
+            )
+        if completion_policy == "auto":
+            resolved_completion_policy = "evidence"
+    return budget, resolved_completion_policy
 
 
 def _dirty_snapshot_from_attempt(attempt) -> dict:
@@ -618,12 +684,55 @@ def _executor_state_payload(task, attempt=None) -> dict:
             "applied": bool(raw.get("dirty_snapshot_applied")),
             "snapshot": snapshot or (base_dirty_snapshot or {}).get("snapshot", {}),
             "start_head": raw.get("start_head"),
+            "original_start_head": raw.get("original_start_head"),
+            "worker_base_head": raw.get("worker_base_head"),
+            "worker_base_created": bool(raw.get("worker_base_created")),
+            "worker_diff_base_reason": raw.get("worker_diff_base_reason"),
             "current_head": raw.get("current_head"),
             "start_dirty_files": start_dirty if isinstance(start_dirty, list) else [],
             "is_worktree_dirty": bool(raw.get("is_worktree_dirty")),
             "repo_path": raw.get("repo_path"),
         },
     }
+
+
+def _session_state_for_task(task) -> dict:
+    def fallback_from_execution_repo() -> dict | None:
+        if not task.execution_repo_path:
+            return None
+        try:
+            base_head = subprocess.check_output(
+                ["git", "-C", task.execution_repo_path, "rev-parse", "HEAD"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except subprocess.SubprocessError:
+            base_head = ""
+        return {
+            "repo_path": task.execution_repo_path,
+            "worker_base_head": base_head,
+            "worker_diff_base_reason": "execution_repo_head_fallback",
+        }
+
+    session_id = task.executor_session_id or task.antigravity_session_id
+    if not session_id:
+        fallback = fallback_from_execution_repo()
+        if fallback is not None:
+            return fallback
+        raise WorktreeAdoptionError("session_missing", "Task has no executor session.")
+    state_path = Path(str(session_id)) / "state.json"
+    try:
+        raw = json.loads(state_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        fallback = fallback_from_execution_repo()
+        if fallback is not None:
+            return fallback
+        raise WorktreeAdoptionError("session_state_missing", f"Executor session state is missing: {state_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise WorktreeAdoptionError("session_state_invalid", f"Executor session state is invalid: {state_path}") from exc
+    if not isinstance(raw, dict):
+        raise WorktreeAdoptionError("session_state_invalid", f"Executor session state is invalid: {state_path}")
+    return raw
 
 
 def _watch_progress_payload(payload: dict) -> dict:
@@ -686,6 +795,11 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         if task.phase == "acked"
         else None
     )
+    signal_summary = build_signal_summary(
+        task,
+        freshness_seconds=no_progress_threshold_seconds,
+    )
+    controller_action = recommend_controller_action(task, signal_summary)
     waiters = WaiterRepository(paths.db_path)
     waiter = waiters.get_active_waiter(task.task_id)
     terminal_receipt = _latest_terminal_receipt(paths, task.task_id, task.terminal_receipt_json) if task.phase in TERMINAL_PHASES else None
@@ -720,6 +834,13 @@ def build_task_payload(paths: AppPaths, task) -> dict:
     current_attempt = TaskRepository(paths.db_path).current_attempt(task.task_id)
     protocol_adoption_payload = _attempt_protocol_adoption_payload(paths, task.task_id)
     executor_state_payload = _executor_state_payload(task, current_attempt)
+    agent_result_payload = protocol_adoption_payload.get("agent_result")
+    if (
+        task.phase in TERMINAL_PHASES
+        and isinstance(agent_result_payload, dict)
+        and isinstance(agent_result_payload.get("controller_action"), str)
+    ):
+        controller_action = agent_result_payload["controller_action"]
 
     return {
         "task_id": task.task_id,
@@ -752,6 +873,11 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "retry_count": task.retry_count,
         "authorization_profile": task.authorization_profile,
         "authorization_summary": task.authorization_summary,
+        "task_kind": task.task_kind,
+        "wait_policy": task.wait_policy,
+        "controller_wait_seconds": task.controller_wait_seconds,
+        "execution_budget_seconds": task.execution_budget_seconds,
+        "background_ok": task.background_ok,
         "retry_recommended": task.retry_recommended,
         "no_progress_threshold_seconds": no_progress_threshold_seconds,
         "stuck_reason": task.stuck_reason,
@@ -776,6 +902,8 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "terminal_source": task.terminal_source,
         "is_approved": task.is_approved,
         "liveness_state": liveness.value if liveness is not None else None,
+        "signal_state": signal_summary.to_dict(),
+        "controller_action": controller_action,
         "waiter": _waiter_payload(waiter),
         "terminal_receipt": terminal_receipt,
         "committed_result": committed_result,
@@ -922,7 +1050,11 @@ def _cancel_bridge_task(*, task_id: str, attempt_no: int, repo_path: str | None,
 # Common option factories
 # ---------------------------------------------------------------------------
 
-_WAIT_OPTION = typer.Option(True, "--wait/--no-wait", help="Wait for a terminal phase after dispatch (default: on).")
+_WAIT_OPTION = typer.Option(
+    True,
+    "--wait/--no-wait",
+    help="Wait for a terminal phase after dispatch (default: on). Tune with --interval-seconds and --timeout-seconds.",
+)
 _INTERVAL_OPTION = typer.Option(DEFAULT_INTERVAL_SECONDS, "--interval-seconds", help="Seconds between status polls during wait.")
 _TIMEOUT_OPTION = typer.Option(DEFAULT_TIMEOUT_SECONDS, "--timeout-seconds", help="Maximum seconds to wait before timing out.")
 _JSON_OPTION = typer.Option(False, "--json", help="Emit machine-readable JSON.")
@@ -947,41 +1079,41 @@ Describe the report, diff, tests, or receipt needed for controller verification.
 # task start
 # ---------------------------------------------------------------------------
 
-def _validate_task_body(body: str) -> None:
-    trimmed = body.strip()
-    if not trimmed:
-        typer.echo("Refused: task body is empty.", err=True)
-        raise typer.Exit(code=1)
-
-    lower_body = trimmed.lower()
-    placeholders = {"bar", "foo", "todo", "fix this", "test"}
-    if trimmed.lower() in placeholders or len(trimmed) < 15:
-        typer.echo("Refused: task body looks like a trivial placeholder.", err=True)
-        raise typer.Exit(code=1)
-
-    required_sections = ["goal", "scope", "required changes", "exit criteria"]
-    missing = [s for s in required_sections if s not in lower_body]
-    if missing:
-        typer.echo(
-            f"Refused: task body is missing key structural sections: {', '.join(missing)}\n\n"
-            f"{_MINIMUM_TASK_BODY_TEMPLATE}",
-            err=True,
+def _normalize_task_body_for_cli(
+    *,
+    body: str,
+    authorization_profile: str,
+    completion_policy: str,
+) -> tuple[str, list[str]]:
+    try:
+        brief = normalize_task_brief(
+            body=body,
+            authorization_profile=authorization_profile,
+            completion_policy=completion_policy,
         )
+    except TaskBriefError as exc:
+        typer.echo(f"Refused: {exc}\n\n{_MINIMUM_TASK_BODY_TEMPLATE}", err=True)
         raise typer.Exit(code=1)
+    return brief.normalized_body, list(brief.warnings)
 
 
 
-@app.command("start")
+@app.command("start", help="Start a task. Wait controls: --wait/--no-wait, --interval-seconds, --timeout-seconds.")
 def start_task(
-    repo_path: str | None = typer.Option(None, "--repo-path"),
+    repo_path: str | None = typer.Option(None, "--repo-path", "--repo"),
     target: str | None = typer.Option(None, "--target", help="Target alias (alternative to --repo-path)."),
-    body: str | None = typer.Option(None, "--body"),
+    body: str | None = typer.Option(None, "--body", "--prompt"),
     body_file: Path | None = typer.Option(None, "--body-file", exists=True, readable=True, help="Read the task body from a Markdown/text file."),
     task_id: str | None = typer.Option(None, "--task-id"),
     idempotency_key: str | None = typer.Option(None, "--idempotency-key"),
     executor: str | None = typer.Option(None, "--executor", help=f"Executor backend to run the task ({', '.join(supported_executor_ids())})."),
     controller: str = typer.Option("generic", "--controller", help="Controller id for executor-suppression policy."),
     completion_policy: str = typer.Option("auto", "--completion-policy", help="Completion policy: auto, evidence, report, or commit."),
+    task_kind: str | None = typer.Option(None, "--task-kind", help="Task kind: quick_review, deep_review, implementation, test_fix, research, smoke, or generic."),
+    wait_policy: str | None = typer.Option(None, "--wait-policy", help="Wait policy: terminal, lease, background, or strict."),
+    controller_wait_seconds: float | None = typer.Option(None, "--controller-wait-seconds", min=0, help="Controller wait lease in seconds."),
+    execution_budget_seconds: float | None = typer.Option(None, "--execution-budget-seconds", min=1, help="Hard execution budget in seconds."),
+    background_ok: bool | None = typer.Option(None, "--background-ok/--no-background-ok", help="Whether lease expiry may detach while the executor continues."),
     allow_self_executor: bool = typer.Option(False, "--allow-self-executor", help="Permit controller to delegate to the same external CLI."),
     authorization_profile: str = typer.Option("local_mutating", "--authorization-profile", help="Dispatch-time authorization profile."),
     depends_on: str | None = typer.Option(None, "--depends-on", help="JSON array of task IDs this task depends on."),
@@ -998,6 +1130,7 @@ def start_task(
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
 ) -> None:
+    """Start a task. Wait controls: --wait/--no-wait, --interval-seconds, --timeout-seconds."""
     from agpair.executors import get_executor, is_local_cli_backend
     from agpair.executors.local_cli import WorktreeProvisionError, resolve_worktree_root
     from agpair.targets import resolve_repo_path
@@ -1015,15 +1148,34 @@ def start_task(
             "nested_delegation_blocked: external executors may not start nested AGPair tasks by default; "
             "pass --allow-nested-delegation only for an explicitly bounded orchestration task"
         )
-    _validate_task_body(body)
     try:
         normalized_authorization_profile = validate_authorization_profile(authorization_profile)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+    wait_budget, resolved_completion_policy_request = _resolve_cli_wait_budget(
+        task_kind=task_kind,
+        wait_policy=wait_policy,
+        controller_wait_seconds=controller_wait_seconds,
+        execution_budget_seconds=execution_budget_seconds,
+        background_ok=background_ok,
+        authorization_profile=normalized_authorization_profile,
+        completion_policy=completion_policy,
+    )
+    body, auto_structured_missing_sections = _normalize_task_body_for_cli(
+        body=body,
+        authorization_profile=normalized_authorization_profile,
+        completion_policy=resolved_completion_policy_request,
+    )
+    if auto_structured_missing_sections:
+        typer.echo(
+            "Auto-structured task body: added missing sections "
+            f"({', '.join(auto_structured_missing_sections)}).",
+            err=True,
+        )
     normalized_authorization_summary = authorization_profile_summary(normalized_authorization_profile)
     try:
         effective_policy = resolve_effective_task_policy(
-            requested_completion_policy=completion_policy,
+            requested_completion_policy=resolved_completion_policy_request,
             authorization_profile=normalized_authorization_profile,
             body=body,
             controller=controller,
@@ -1136,7 +1288,12 @@ def start_task(
             broad_repo_path_override=allow_broad_repo_path,
             authorization_profile=normalized_authorization_profile,
             authorization_summary=normalized_authorization_summary,
-            completion_policy=completion_policy,
+            completion_policy=resolved_completion_policy_request,
+            task_kind=wait_budget.task_kind,
+            wait_policy=wait_budget.wait_policy,
+            controller_wait_seconds=wait_budget.controller_wait_seconds,
+            execution_budget_seconds=wait_budget.execution_budget_seconds,
+            background_ok=wait_budget.background_ok,
             effective_policy_json=json.dumps(effective_policy.to_dict(), ensure_ascii=False, sort_keys=True),
             environment_mode=environment.environment_mode,
             environment_mode_source=environment.environment_mode_source,
@@ -1317,6 +1474,11 @@ def task_status(
     typer.echo(f"provider_session_id: {payload['provider_session_id']}")
     typer.echo(f"attempt_no: {payload['attempt_no']}")
     typer.echo(f"retry_count: {payload['retry_count']}")
+    typer.echo(f"task_kind: {payload['task_kind']}")
+    typer.echo(f"wait_policy: {payload['wait_policy']}")
+    typer.echo(f"controller_wait_seconds: {payload['controller_wait_seconds']}")
+    typer.echo(f"execution_budget_seconds: {payload['execution_budget_seconds']}")
+    typer.echo(f"background_ok: {payload['background_ok']}")
     typer.echo(f"retry_recommended: {payload['retry_recommended']}")
     typer.echo(f"no_progress_threshold_seconds: {payload['no_progress_threshold_seconds']}")
     typer.echo(f"stuck_reason: {payload['stuck_reason']}")
@@ -1359,6 +1521,8 @@ def task_status(
     typer.echo(f"is_approved: {payload['is_approved']}")
     if payload["liveness_state"] is not None:
         typer.echo(f"liveness_state: {payload['liveness_state']}")
+    typer.echo(f"signal_state: {json.dumps(payload['signal_state'], ensure_ascii=False, sort_keys=True)}")
+    typer.echo(f"controller_action: {payload['controller_action']}")
     terminal_receipt = payload["terminal_receipt"]
     if terminal_receipt is not None:
         typer.echo(f"terminal_receipt_schema_version: {terminal_receipt['schema_version']}")
@@ -1524,6 +1688,7 @@ def abandon_task(
     reason: str = typer.Option("abandoned locally", "--reason"),
     force: bool = typer.Option(False, "--force", help="Bypass liveness and waiter guards."),
 ) -> None:
+    """Retry a task. Wait controls: --wait/--no-wait, --interval-seconds, --timeout-seconds."""
     from agpair.executors import get_executor, is_local_cli_backend
 
     paths = _paths()
@@ -1738,11 +1903,15 @@ def wait_task(
 
     if not json_output:
         typer.echo(f"Waiting for task {task_id} to reach a terminal phase …")
+    task_before_wait = tasks.get_task(task_id)
     result = wait_for_terminal_phase(
         paths.db_path,
         task_id,
         interval_seconds=interval_seconds,
         timeout_seconds=timeout_seconds,
+        controller_wait_seconds=task_before_wait.controller_wait_seconds if task_before_wait else None,
+        background_ok=bool(task_before_wait.background_ok) if task_before_wait else False,
+        strict_watchdog=(task_before_wait.wait_policy in {"terminal", "strict"}) if task_before_wait else True,
         waiter_command="task_wait",
     )
 
@@ -1752,6 +1921,17 @@ def wait_task(
         task_payload = build_task_payload(paths, current_task) if current_task is not None else None
         failure_context = task_payload["failure_context"] if task_payload is not None else None
         blocker_type = failure_context["blocker_type"] if failure_context else None
+        agent_result = task_payload.get("agent_result") if task_payload is not None else None
+        agent_action = (
+            agent_result.get("controller_action")
+            if result.phase in TERMINAL_PHASES
+            and isinstance(agent_result, dict)
+            and isinstance(agent_result.get("controller_action"), str)
+            else None
+        )
+        recommended_action = agent_action or result.recommended_action or (
+            task_payload.get("controller_action") if task_payload is not None else None
+        )
         _emit_json(
             {
                 "ok": code == 0,
@@ -1760,6 +1940,17 @@ def wait_task(
                 "a2a_state_hint": a2a_state_hint_from_phase(result.phase, blocker_type=blocker_type),
                 "timed_out": result.timed_out,
                 "watchdog_triggered": result.watchdog_triggered,
+                "outcome": result.outcome,
+                "controller_lease_expired": result.controller_lease_expired,
+                "agent_result": agent_result,
+                "recommended_action": recommended_action,
+                "status_command": f"agpair task status {task_id} --json",
+                "evidence_commands": [
+                    f"agpair task logs {task_id} --include-executor-output",
+                    f"agpair task diff {task_id}",
+                    f"agpair task apply {task_id} --check",
+                ],
+                "background_ok": bool(current_task.background_ok) if current_task is not None else False,
                 "exit_code": code,
                 "task": task_payload,
                 "committed_result": task_payload["committed_result"] if task_payload is not None else None,
@@ -1768,6 +1959,20 @@ def wait_task(
         )
         if code != 0:
             raise typer.Exit(code=code)
+        return
+
+    if result.controller_lease_expired:
+        typer.echo(
+            f"Controller wait lease expired for task {task_id}; task remains backgrounded.\n"
+            f"Use: agpair task watch {task_id} or agpair task wait {task_id}"
+        )
+        return
+
+    if result.outcome == "soft_no_progress":
+        typer.echo(
+            f"Task {task_id} has no fresh progress signal yet; task remains backgrounded.\n"
+            f"Inspect logs or continue watching with: agpair task watch {task_id}"
+        )
         return
 
     if result.watchdog_triggered:
@@ -1860,9 +2065,16 @@ def watch_task(
         is_terminal = current_phase in TERMINAL_PHASES
 
         payload = build_task_payload(paths, task)
+        progress_payload = _watch_progress_payload(payload)
+        signal_payload = payload.get("signal_state") if isinstance(payload.get("signal_state"), dict) else {}
+        soft_no_progress = (
+            watchdog
+            and bool(task.background_ok)
+            and task.wait_policy not in {"terminal", "strict"}
+        )
 
         # state tuple for deduplication:
-        # (phase, heartbeat, workspace_activity, terminal_receipt, live output, cursor)
+        # (phase, heartbeat, workspace_activity, terminal_receipt, live output, signal, action, cursor)
         # Note: terminal_receipt and active artifacts are parsed dicts or None.
         event_cursor = f"{task.updated_at}:{task.phase}:{task.attempt_no}"
         active_artifact_state = (
@@ -1876,6 +2088,11 @@ def watch_task(
             payload["last_workspace_activity_at"],
             json.dumps(payload.get("terminal_receipt"), sort_keys=True) if payload.get("terminal_receipt") else None,
             active_artifact_state,
+            signal_payload.get("state"),
+            signal_payload.get("stdout_bytes"),
+            signal_payload.get("stderr_bytes"),
+            signal_payload.get("last_signal_at"),
+            payload.get("controller_action"),
             event_cursor,
         )
 
@@ -1891,6 +2108,11 @@ def watch_task(
                 current_state[1] != last_emitted_state[1]
                 or current_state[2] != last_emitted_state[2]
                 or current_state[4] != last_emitted_state[4]
+                or current_state[5] != last_emitted_state[5]
+                or current_state[6] != last_emitted_state[6]
+                or current_state[7] != last_emitted_state[7]
+                or current_state[8] != last_emitted_state[8]
+                or current_state[9] != last_emitted_state[9]
             )
 
         now_mono = time.monotonic()
@@ -1903,22 +2125,30 @@ def watch_task(
         if initial_cursor and event_cursor == initial_cursor and not watchdog and not timed_out and not is_terminal:
             changed = False
 
-        if changed or watchdog or timed_out or is_terminal:
+        if changed or (watchdog and not soft_no_progress) or timed_out or is_terminal:
+            agent_result = payload.get("agent_result") if isinstance(payload.get("agent_result"), dict) else None
             event_type = "status_update"
-            progress_payload = _watch_progress_payload(payload)
-            if watchdog:
+            event_name = event_type
+            if soft_no_progress:
+                event_type = "soft_no_progress"
+                event_name = event_type
+            elif watchdog:
                 event_type = "watchdog"
+                event_name = event_type
             elif timed_out:
                 event_type = "timeout"
+                event_name = event_type
             elif is_terminal:
                 event_type = "terminal"
+                event_name = "agent_result_changed" if agent_result else event_type
             elif payload.get("active_attempt_artifacts") and current_phase == "acked":
                 event_type = "artifact_progress"
+                event_name = event_type
 
             if json_output:
                 typer.echo(json.dumps({
                     "event_type": event_type,
-                    "event": event_type,
+                    "event": event_name,
                     "task_id": task_id,
                     "phase": current_phase,
                     "timestamp": datetime.now(UTC).isoformat(),
@@ -1937,6 +2167,10 @@ def watch_task(
                     "active_attempt_artifacts": payload.get("active_attempt_artifacts"),
                     "last_executor_output_at": payload.get("last_executor_output_at"),
                     "no_progress_threshold_seconds": payload.get("no_progress_threshold_seconds"),
+                    "signal_state": payload.get("signal_state"),
+                    "controller_action": payload.get("controller_action"),
+                    "agent_result": agent_result,
+                    "outcome": "soft_no_progress" if soft_no_progress else None,
                     **progress_payload,
                     "payload": payload,
                 }, ensure_ascii=False))
@@ -1960,7 +2194,13 @@ def watch_task(
                         summary = payload["terminal_receipt"].get("summary", "No summary")
                         typer.echo(f"  -> Terminal receipt received: {summary}")
 
-                if watchdog:
+                if soft_no_progress:
+                    typer.echo(
+                        f"Soft no-progress: task {task_id} is still running in background. "
+                        f"Inspect logs or keep watching.",
+                        err=True,
+                    )
+                elif watchdog:
                     typer.echo(
                         f"Watchdog: task {task_id} is flagged for retry and silent.\n"
                         f"Run: agpair task retry {task_id}",
@@ -1977,10 +2217,158 @@ def watch_task(
                 code = exit_code_for_dispatch(WaitResult(phase=current_phase, timed_out=False))
                 raise typer.Exit(code=code)
 
-            if watchdog or timed_out:
+            if (watchdog and not soft_no_progress) or timed_out:
                 raise typer.Exit(code=1)
 
         time.sleep(interval_seconds)
+
+
+def _emit_worktree_error(
+    *,
+    task_id: str,
+    error: str,
+    message: str,
+    json_output: bool,
+    stderr: str = "",
+) -> None:
+    if json_output:
+        _emit_json(
+            {
+                "ok": False,
+                "task_id": task_id,
+                "error": error,
+                "reason": message,
+                "stderr": stderr,
+            }
+        )
+    else:
+        detail = f": {stderr}" if stderr else ""
+        typer.echo(f"{error}: {message}{detail}", err=True)
+
+
+@app.command("diff")
+def diff_task(
+    task_id: str,
+    stat_only: bool = typer.Option(False, "--stat", help="Show only diff stat."),
+    json_output: bool = _JSON_OPTION,
+) -> None:
+    """Show the worker diff for an isolated worktree task."""
+    paths = _paths()
+    tasks = TaskRepository(paths.db_path)
+    task = tasks.get_task(task_id)
+    if task is None:
+        if json_output:
+            _emit_json(_not_found_payload(task_id))
+        else:
+            typer.echo(f"task not found: {task_id}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        diff = build_worktree_diff(task=task, session_state=_session_state_for_task(task))
+    except WorktreeAdoptionError as exc:
+        _emit_worktree_error(task_id=task_id, error=exc.reason, message=str(exc), json_output=json_output)
+        raise typer.Exit(code=1)
+
+    if json_output:
+        _emit_json(
+            {
+                "ok": True,
+                "task_id": task_id,
+                "base_ref": diff.base_ref,
+                "execution_repo_path": diff.execution_repo_path,
+                "changed_files": list(diff.changed_files),
+                "stat": diff.stat,
+                "patch_path": None,
+                "has_patch": bool(diff.patch.strip()),
+            }
+        )
+        return
+    output = diff.stat if stat_only else diff.patch
+    typer.echo(output, nl=not output.endswith("\n"))
+
+
+@app.command("apply")
+def apply_task(
+    task_id: str,
+    check: bool = typer.Option(False, "--check", help="Only check whether the worker diff applies cleanly."),
+    force: bool = typer.Option(False, "--force", help="Bypass phase/adoptable-result guards."),
+    json_output: bool = _JSON_OPTION,
+) -> None:
+    """Apply an isolated worker diff to the controller repository."""
+    paths = _paths()
+    tasks = TaskRepository(paths.db_path)
+    task = tasks.get_task(task_id)
+    if task is None:
+        if json_output:
+            _emit_json(_not_found_payload(task_id))
+        else:
+            typer.echo(f"task not found: {task_id}", err=True)
+        raise typer.Exit(code=1)
+    if task.phase not in {"ready_for_review", "evidence_ready"} and not force:
+        _emit_worktree_error(
+            task_id=task_id,
+            error="phase_not_applyable",
+            message="Task must be ready_for_review or evidence_ready before apply; pass --force to override.",
+            json_output=json_output,
+        )
+        raise typer.Exit(code=1)
+    attempt = tasks.current_attempt(task_id)
+    if attempt is not None and attempt.adoptable_result == "no" and not force:
+        _emit_worktree_error(
+            task_id=task_id,
+            error="adoptable_result_no",
+            message="Current attempt is marked adoptable_result=no; pass --force to override.",
+            json_output=json_output,
+        )
+        raise typer.Exit(code=1)
+    try:
+        diff = build_worktree_diff(task=task, session_state=_session_state_for_task(task))
+    except WorktreeAdoptionError as exc:
+        _emit_worktree_error(task_id=task_id, error=exc.reason, message=str(exc), json_output=json_output)
+        raise typer.Exit(code=1)
+    if not diff.patch.strip():
+        _emit_worktree_error(
+            task_id=task_id,
+            error="diff_missing",
+            message="No worker diff is available for this task.",
+            json_output=json_output,
+        )
+        raise typer.Exit(code=1)
+
+    result = (
+        check_apply_to_controller_repo(repo_path=task.repo_path, patch=diff.patch)
+        if check
+        else apply_to_controller_repo(repo_path=task.repo_path, patch=diff.patch)
+    )
+    if not result.ok:
+        _emit_worktree_error(
+            task_id=task_id,
+            error=result.reason or "apply_failed",
+            message="Worker diff does not apply cleanly.",
+            json_output=json_output,
+            stderr=result.stderr,
+        )
+        raise typer.Exit(code=1)
+    if not check:
+        JournalRepository(paths.db_path).append(
+            task_id,
+            "controller",
+            "controller_applied_diff",
+            json.dumps({"changed_files": list(diff.changed_files)}, ensure_ascii=False, sort_keys=True),
+        )
+    payload = {
+        "ok": True,
+        "task_id": task_id,
+        "check": check,
+        "base_ref": diff.base_ref,
+        "changed_files": list(diff.changed_files),
+        "stat": diff.stat,
+        "applied": not check,
+    }
+    if json_output:
+        _emit_json(payload)
+        return
+    action = "Apply check passed" if check else "Applied worker diff"
+    typer.echo(f"{action}: {', '.join(diff.changed_files) or 'no files'}")
 
 
 # ---------------------------------------------------------------------------
@@ -2125,13 +2513,18 @@ def _build_retry_from_block_body(
     )
 
 
-@app.command("retry")
+@app.command("retry", help="Retry a task. Wait controls: --wait/--no-wait, --interval-seconds, --timeout-seconds.")
 def retry_task(
     task_id: str,
-    body: str | None = typer.Option(None, "--body"),
+    body: str | None = typer.Option(None, "--body", "--prompt"),
     from_block: bool = typer.Option(False, "--from-block", help="Build a new attempt from structured blocked context."),
     authorization_profile: str | None = typer.Option(None, "--authorization-profile", help="Authorization profile for the new attempt."),
     completion_policy: str | None = typer.Option(None, "--completion-policy", help="Completion policy for the new attempt."),
+    task_kind: str | None = typer.Option(None, "--task-kind", help="Task kind for the new attempt."),
+    wait_policy: str | None = typer.Option(None, "--wait-policy", help="Wait policy for the new attempt: terminal, lease, background, or strict."),
+    controller_wait_seconds: float | None = typer.Option(None, "--controller-wait-seconds", min=0, help="Controller wait lease in seconds."),
+    execution_budget_seconds: float | None = typer.Option(None, "--execution-budget-seconds", min=1, help="Hard execution budget in seconds."),
+    background_ok: bool | None = typer.Option(None, "--background-ok/--no-background-ok", help="Whether lease expiry may detach while the executor continues."),
     dirty_snapshot: str | None = typer.Option(None, "--dirty-snapshot", help="Dirty worktree snapshot mode for the new attempt: off or tracked."),
     controller: str = typer.Option("generic", "--controller", help="Controller id for executor-suppression policy."),
     executor: str | None = typer.Option(None, "--executor", help=f"Executor backend for the new attempt ({', '.join(supported_executor_ids())})."),
@@ -2193,6 +2586,44 @@ def retry_task(
     )
     next_authorization_summary = authorization_profile_summary(next_authorization_profile)
     next_completion_policy = completion_policy or task.completion_policy
+    wait_override_requested = any(
+        value is not None
+        for value in (
+            task_kind,
+            wait_policy,
+            controller_wait_seconds,
+            execution_budget_seconds,
+            background_ok,
+        )
+    )
+    if wait_override_requested:
+        try:
+            retry_wait_budget = resolve_wait_budget(
+                task_kind=task_kind or task.task_kind,
+                wait_policy=wait_policy or task.wait_policy,
+                controller_wait_seconds=(
+                    controller_wait_seconds
+                    if controller_wait_seconds is not None
+                    else task.controller_wait_seconds
+                ),
+                execution_budget_seconds=(
+                    execution_budget_seconds
+                    if execution_budget_seconds is not None
+                    else task.execution_budget_seconds
+                ),
+                background_ok=background_ok if background_ok is not None else task.background_ok,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        if retry_wait_budget.task_kind in {"implementation", "test_fix"}:
+            if next_authorization_profile == "local_readonly":
+                raise typer.BadParameter(
+                    f"--task-kind {retry_wait_budget.task_kind} requires a mutating authorization profile; "
+                    "use local_mutating or choose a review/report task kind"
+                )
+            if next_completion_policy == "auto":
+                next_completion_policy = "evidence"
+    explicit_retry_body = body is not None
     retry_body = body or (
         _build_retry_from_block_body(
             paths=paths,
@@ -2206,6 +2637,18 @@ def retry_task(
         if from_block
         else f"Fresh retry requested for {task.task_id} attempt {next_attempt}"
     )
+    if explicit_retry_body:
+        retry_body, auto_structured_missing_sections = _normalize_task_body_for_cli(
+            body=retry_body,
+            authorization_profile=next_authorization_profile,
+            completion_policy=next_completion_policy,
+        )
+        if auto_structured_missing_sections:
+            typer.echo(
+                "Auto-structured retry body: added missing sections "
+                f"({', '.join(auto_structured_missing_sections)}).",
+                err=True,
+            )
     try:
         next_effective_policy = resolve_effective_task_policy(
             requested_completion_policy=next_completion_policy,
@@ -2259,6 +2702,11 @@ def retry_task(
             authorization_profile=next_authorization_profile,
             authorization_summary=next_authorization_summary,
             completion_policy=next_completion_policy,
+            task_kind=task_kind,
+            wait_policy=wait_policy,
+            controller_wait_seconds=controller_wait_seconds,
+            execution_budget_seconds=execution_budget_seconds,
+            background_ok=background_ok,
             effective_policy_json=json.dumps(next_effective_policy.to_dict(), ensure_ascii=False, sort_keys=True),
             environment_mode=next_environment.environment_mode,
             environment_mode_source=next_environment.environment_mode_source,
@@ -2298,6 +2746,11 @@ def retry_task(
             authorization_profile=next_authorization_profile,
             authorization_summary=next_authorization_summary,
             completion_policy=next_completion_policy,
+            task_kind=task_kind,
+            wait_policy=wait_policy,
+            controller_wait_seconds=controller_wait_seconds,
+            execution_budget_seconds=execution_budget_seconds,
+            background_ok=background_ok,
             effective_policy_json=json.dumps(next_effective_policy.to_dict(), ensure_ascii=False, sort_keys=True),
             environment_mode=next_environment.environment_mode,
             environment_mode_source=next_environment.environment_mode_source,

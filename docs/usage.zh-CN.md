@@ -130,7 +130,12 @@ agpair daemon run --once --force
 ```bash
 agpair task start \
   --repo-path /absolute/path/to/repo \
-  --body "Goal: ..."
+  --task-kind implementation \
+  --wait-policy lease \
+  --authorization-profile local_mutating \
+  --completion-policy evidence \
+  --isolated-worktree \
+  --body "Goal: 修复 smoke 问题。Scope: 只处理相关仓库文件。Required changes: 做最小代码或测试改动。Exit criteria: 运行聚焦测试并返回证据。"
 ```
 
 如果要显式使用默认外部 CLI executor：
@@ -139,9 +144,17 @@ agpair task start \
 agpair task start \
   --executor antigravity-cli \
   --repo-path /absolute/path/to/repo \
-  --authorization-profile local_mutating \
-  --body "Goal: ..."
+  --task-kind quick_review \
+  --wait-policy lease \
+  --authorization-profile local_readonly \
+  --completion-policy report \
+  --body "Goal: 审查指定区域。Scope: 仅限已点名文件。Required changes: None. This is report-only. Do not edit files. Exit criteria: 返回带证据的结论。"
 ```
+
+推荐写法仍然是 `--repo-path`、`--body` 和 `local_readonly` 这类完整 profile。
+`task start` 兼容 `--repo`、`--prompt`、`readonly` 等常见别名，也会把过短 body
+自动补成结构化任务体；这些只是兜底，controller skill 仍应直接发送完整的
+`Goal` / `Scope` / `Required changes` / `Exit criteria` 合同。
 
 `--repo-path` 应该指向具体项目目录。AGPair 默认拒绝文件系统根目录、用户 home 目录，以及用户 home 上层目录，因为外部 executor 可能扫到私人日志、缓存和无关项目。如果确实要这么做，显式传 `--allow-broad-repo-path`；该 override 会写入 task，并在 `task status` 中可见。
 
@@ -151,6 +164,8 @@ agpair task start \
 agpair task start \
   --executor antigravity-cli \
   --repo-path /absolute/path/to/repo \
+  --task-kind implementation \
+  --wait-policy lease \
   --authorization-profile local_mutating \
   --completion-policy evidence \
   --isolated-worktree \
@@ -166,7 +181,7 @@ isolated 的 mutating evidence/commit 任务默认是 `--dirty-snapshot tracked`
 - `claude-code`：AGPair 管理的外部 Claude Code CLI executor
 - `codex`：AGPair 管理的外部 Codex CLI executor
 
-`gemini_cli` 只保留历史任务可读性。新的 `task start` 和 `task retry` 都不会再派给 Gemini。
+历史 executor 记录仍可为兼容性读取。新的 `task start` 和 `task retry` 只使用 active registered executor id。
 
 当你省略 `--executor` 时，解析顺序是：
 
@@ -207,12 +222,15 @@ probe、smoke 和 retry 进程会被标记为 internal，让 Codex / Claude hook
   旧别名：`AGPAIR_ANTIGRAVITY_CLI`
 - `AGPAIR_ANTIGRAVITY_APPROVAL_MODE=default|yolo`
   默认：`yolo`
+- `AGPAIR_ANTIGRAVITY_MODEL="Gemini 3.1 Pro (Low)"`
+  可选；当 Antigravity 默认模型在 `--print` 模式超时时使用。
+  旧别名：`AGPAIR_ANTIGRAVITY_CLI_MODEL`
 - `AGPAIR_ANTIGRAVITY_PRINT_TIMEOUT=30m0s`
 - `AGPAIR_GROK_CLI_BIN=/absolute/path/to/grok`
   旧别名：`AGPAIR_GROK_CLI`
 - `AGPAIR_GROK_OUTPUT_FORMAT=json|streaming-json`
   默认：`json`
-- `AGPAIR_GROK_MAX_TURNS=6`
+- `AGPAIR_GROK_MAX_TURNS=12`
   默认值刻意收紧，适合 AGPair 后台 bounded 任务；只有明确的大任务才建议调高。
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
   旧别名：`AGPAIR_CLAUDE_CODE_CLI`
@@ -261,13 +279,13 @@ probe、smoke 和 retry 进程会被标记为 internal，让 Codex / Claude hook
 registry profile 为准，测试会要求 profile 声明的非交互和隔离 flag 与 adapter
 默认命令保持一致。
 
-默认情况下，`task start` **会阻塞**直到任务进入终态。
+`generic` 任务默认会等到终态；带 `--task-kind` 的任务会使用对应 wait policy。
 要立即返回：
 
 ```bash
 agpair task start \
   --repo-path /absolute/path/to/repo \
-  --body "Goal: ..." \
+  --body "Goal: 做一次快速审查。Scope: 仅限已点名文件。Required changes: None. This is report-only. Do not edit files. Exit criteria: 返回带证据的结论。" \
   --no-wait
 ```
 
@@ -277,7 +295,7 @@ agpair task start \
 agpair task start \
   --task-id TASK-001 \
   --repo-path /absolute/path/to/repo \
-  --body "Goal: ..."
+  --body "Goal: 运行 smoke 检查。Scope: 只处理相关仓库文件。Required changes: None. This is report-only. Do not edit files. Exit criteria: 返回命令输出和证据。"
 ```
 
 ### Completion policy
@@ -291,6 +309,42 @@ agpair task start \
 
 `local_readonly` 以及明确写了 `Required changes: none`、`no changes`、`无`、
 `禁止写入` 的任务，应按 report/evidence 语义验收，不能因为没有 commit 就被阻塞。
+
+### Task kind 和 wait policy
+
+`--task-kind` 用来让主控选择合适的默认等待预算和执行预算：
+
+| Task kind | 默认 wait | 主控 lease | 硬预算 |
+| --- | --- | ---: | ---: |
+| `quick_review` | `lease` | 120s | 900s |
+| `deep_review` | `lease` | 240s | 1800s |
+| `implementation` | `lease` | 300s | 3600s |
+| `test_fix` | `lease` | 300s | 3600s |
+| `research` | `lease` | 300s | 5400s |
+| `smoke` | `strict` | 300s | 600s |
+| `generic` | `terminal` | 无 | 无 |
+
+`--wait-policy lease` 会让主控在有界窗口里低噪等待。如果 executor 仍在运行，
+AGPair 会返回结构化的 background-running 结果，而不是让主控浪费模型轮次轮询，
+或过早杀掉任务。`terminal` 和 `strict` 保留旧语义：timeout、watchdog 和终态失败
+都会让命令失败。
+
+所有发单命令（`start`、`retry`）支持：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--task-kind` | `generic` | `quick_review`、`deep_review`、`implementation`、`test_fix`、`research`、`smoke` 或 `generic` |
+| `--wait-policy` | 由 task-kind 决定 | `terminal`、`lease`、`background` 或 `strict` |
+| `--controller-wait-seconds` | 由 task-kind 决定 | 主控等待多久后可以得到 background-running 结果 |
+| `--execution-budget-seconds` | 由 task-kind 决定 | daemon 标记 stuck 前的硬执行预算 |
+| `--background-ok / --no-background-ok` | 由 task-kind 决定 | lease 到期时是否允许 executor 继续在后台跑 |
+| `--wait / --no-wait` | `--wait` | 发单后等待，或立即返回 |
+| `--interval-seconds` | `5` | 本地轮询间隔 |
+| `--timeout-seconds` | `3600` | terminal/strict wait 的本地最长等待时间 |
+
+`implementation` 和 `test_fix` 任务会把 `--completion-policy auto` 默认解析为
+`evidence`。代码写入任务仍应显式传 `--isolated-worktree`，避免 worker 静默修改主控
+正在使用的 worktree。
 
 ### 任务元数据（编排提示）
 
@@ -330,6 +384,33 @@ agpair task status TASK-001 --json
 （如果可用）、stdout/stderr 路径、日志大小、最后输出时间、小段 tail
 excerpt、liveness state、effective completion policy 和精确 blocker metadata。
 完整 raw logs 默认留在磁盘上，只有显式请求才读取。
+
+## 5.1 审查并采纳 isolated 代码改动
+
+对于 isolated 的 implementation 或 test-fix 任务，先看 executor diff，再触碰主控
+worktree：
+
+```bash
+agpair task diff TASK-001
+agpair task diff TASK-001 --stat
+agpair task diff TASK-001 --json
+```
+
+然后检查这个 diff 是否能干净应用到主控 repo：
+
+```bash
+agpair task apply TASK-001 --check
+```
+
+如果检查通过且主控认可这个方案，再应用 diff：
+
+```bash
+agpair task apply TASK-001
+```
+
+`task apply` 使用 isolated worker 的 baseline，会排除主控 dirty snapshot baseline，
+并把改动以未 staged 状态留在主控 worktree，方便正常 review 和测试。它不会自动
+accept AGPair 任务；只有主控验证完成后才运行 `task accept`。
 
 ---
 
@@ -422,8 +503,8 @@ AGPair 管理的 hooks：
 ### 如何判断 AGPair 是否真的有价值
 
 不要把 dispatch 成功或进程还活着当成价值。重点看 completion rate、
-adoptable-result rate（`yes` 和可用的 `partial`）、time-to-first-useful-signal、
-fallback rate、controller rework rate，以及 abandoned/no-progress rate。主要入口是
+可用 `agent_result` rate、time-to-first-useful-signal、fallback rate、
+controller rework rate，以及 abandoned/no-progress rate。主要入口是
 `agpair task status --json`、`agpair task list --json` 和
 `scripts/smoke_real_executors.py`。
 
@@ -499,24 +580,27 @@ agpair task wait TASK-001
 agpair task wait TASK-001 --timeout-seconds 600 --interval-seconds 10
 ```
 
-退出码 `0` 表示成功（`ready_for_review` / `evidence_ready` / `committed`），`1` 表示失败（`blocked` / `stuck` / `abandoned` / 超时 / **watchdog**）。
+退出码 `0` 可以表示终态成功，也可以表示允许后台继续的 lease outcome。用
+`--json` 查看 `outcome`、`agent_result`、`controller_lease_expired`、
+`recommended_action` 和 `background_ok`。终态任务优先看
+`agent_result.controller_action`：报告通常是 `use_result`，隔离实现 diff 通常是
+`review_then_apply`，后台继续等待可理解为 `wait_background`。
+
+退出码 `1` 表示终态失败、strict timeout / watchdog、任务不存在，或当前 wait
+outcome 不允许后台继续。
 
 现在对于“repo 里其实已经有 commit，但最终 terminal receipt 没回来”的部分 `evidence_ready` 任务，系统可以基于强 repo 证据自动收口。遇到这类情况时，优先查看 `task status --json` / `inspect --json`，而不是默认手动 `abandon`。
 
-当 daemon watchdog 触发（任务仍为 `acked` 但 `retry_recommended=true`）时，
-`task wait` 和默认自动等待会提前退出并提示你执行 `agpair task retry <TASK_ID>`。
+当 terminal/strict watchdog 触发时，`task wait` 和默认自动等待会提前退出并提示
+你执行 `agpair task retry <TASK_ID>`。对于 `background_ok=true` 的 lease 任务，
+`soft_no_progress` 表示应查看 `task status --json`、稍后 watch，或让 executor 在
+后台继续。
 
 ---
 
 ## 11. 自动等待选项
 
-所有发单命令（`start`、`retry`）支持：
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--wait / --no-wait` | `--wait` | 发单后等待终态 |
-| `--interval-seconds` | `5` | 轮询间隔（秒） |
-| `--timeout-seconds` | `3600` | 最大等待时长，故意 > daemon stuck 超时（1800s） |
+所有发单命令（`start`、`retry`）使用上文的 task-kind 和 wait-policy 控制。
 
 `status`、`logs`、`wait` 命令**不**带 `--wait/--no-wait`。
 
@@ -547,8 +631,9 @@ Workflow `ready_for_review` 表示 AGPair 已生成 evidence pack 等待主控�
 
 - daemon 不会自动发 semantic message
 - daemon 不会自动帮你 fresh retry
-- `acked` 太久没动静时，会先把 `retry_recommended=true`
-- `task wait` 和自动等待在 watchdog 标记后会提前退出（code 1），而不是盲等到硬超时
+- soft no-progress 后可能建议 retry
+- terminal/strict wait 会在 watchdog 后提前失败，而不是盲等到硬超时
+- `background_ok=true` 的 lease wait 会返回结构化 background-running outcome，同时 executor 继续运行
 - 只有到了硬超时，才会标成 `stuck`
 
 ## 14. Executor 生命周期
@@ -568,7 +653,7 @@ Code 原生 subagent。
 
 - 跑目标测试和完整 unit/integration suite。
 - 跑 controller matrix 的真实 smoke，要求 `all_success=true`，且每个尝试过的
-  executor 都是无 blocker 的 `adoptable_result=yes` 或可用的 `partial`；smoke report 只留本地。
+  executor 都有可用的 `agent_result.state` 和 `agent_result.controller_action`；smoke report 只留本地。
 - 跑 `git diff --check`。
 - 检查 `git status --short --untracked-files=all`。
 - 不要提交 `.agpair/`、`~/.agpair`、raw executor logs、本地 receipts、session transcripts、个人 Codex/Claude 配置或生成的 hook debug 输出。
@@ -581,12 +666,13 @@ Code 原生 subagent。
 
 对真实任务，建议顺序是：
 
-1. `agpair doctor --repo-path <repo>`
+1. `agpair doctor --fresh --repo-path <repo>`
 2. `agpair daemon status`
-3. `agpair task start ...`（默认会等到终态）
+3. `agpair task start ... --task-kind quick_review ...` 或 `--task-kind implementation --isolated-worktree ...`
 4. `agpair task status <TASK_ID>` 或 `agpair task list`
-5. `agpair task logs <TASK_ID>`
-6. 只选一个：
+5. 代码任务先运行 `agpair task diff <TASK_ID>` 和 `agpair task apply <TASK_ID> --check`
+6. `agpair task logs <TASK_ID>`（需要 raw 证据时）
+7. 只选一个：
    - `retry`
    - `abandon`（仅本地清理）
-7. 再看一次 `status` 和 `logs`
+8. 验证后 `agpair task accept <TASK_ID> --adoptable-result yes --controller-rework none`

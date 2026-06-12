@@ -150,8 +150,12 @@ def build_doctor_report(
         if not health["available"]
     ]
 
+    controller_policies, executor_policy_error = _build_controller_policies()
+
     report = {
         "config_root": str(paths.root),
+        "executor_policy_path": str(paths.executor_policy_path),
+        "executor_policy_error": executor_policy_error,
         "db_path": str(paths.db_path),
         "db_exists": db_exists,
         "db_error": db_error,
@@ -174,6 +178,7 @@ def build_doctor_report(
         "available_executor_backends": available_executor_backends,
         "missing_executor_backends": missing_executor_backends,
         "executor_cli_health": executor_cli_health,
+        "controller_policies": controller_policies,
         "authorization_profiles": list(VALID_AUTHORIZATION_PROFILES),
         "desktop_reader_conflict": desktop_reader_conflict is not None,
         "desktop_reader_conflict_detail": desktop_reader_conflict,
@@ -216,6 +221,19 @@ def _is_cli_available(binary: str) -> bool:
         path = Path(binary).expanduser()
         return path.exists() and os.access(path, os.X_OK)
     return shutil.which(binary) is not None
+
+
+def _build_controller_policies() -> tuple[dict[str, dict[str, object]], str | None]:
+    from agpair.executors.config import ExecutorPolicyConfigError
+    from agpair.executors.policy import resolve_controller_policy
+
+    policies: dict[str, dict[str, object]] = {}
+    try:
+        for controller in ("generic", "codex", "claude-code"):
+            policies[controller] = resolve_controller_policy(controller=controller).to_dict()
+    except (ExecutorPolicyConfigError, ValueError) as exc:
+        return policies, str(exc)
+    return policies, None
 
 
 def _build_executor_cli_health(*, run_launch_probe: bool = False) -> dict[str, dict[str, object]]:

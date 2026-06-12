@@ -6,7 +6,7 @@
 
 [中文说明](README.zh-CN.md) | [Getting Started](docs/getting-started.en.md) | [Command Reference](docs/usage.md)
 
-AGPair is an external-agent-first control plane for Codex and Claude Code.
+AGPair is a local task lifecycle and evidence layer that lets Codex or Claude Code delegate bounded work to external CLI agents, then wait, verify, adopt, retry, or fall back with structured evidence.
 
 Controllers plan and verify. AGPair dispatches external CLI executors, persists task state, waits cheaply, validates structured receipts, and supports state-aware retry when an executor blocks.
 
@@ -22,7 +22,7 @@ Controller-aware routing suppresses self-executors by default: Codex controllers
 
 Operationally, `codex` is the external Codex CLI worker for Claude Code controllers. Codex controllers should use native Codex subagents as their fallback/review lane. `claude-code` is the external Claude Code worker for Codex controllers. Claude Code controllers should use native Claude Code subagents as their fallback/review lane.
 
-Gemini is not used for new work. Legacy `gemini_cli` records can still be inspected or cleaned up.
+Historical executor records remain inspectable for compatibility. New dispatch uses the active executor ids above.
 
 Default executor environments are managed-natural for every active external CLI executor: AGPair manages task boundaries, receipts, logs, status, retry, and verification evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config. Controller suppression handles self-executor avoidance; executor launch configuration is not special-cased.
 
@@ -43,6 +43,14 @@ Make the CLI available to your controller:
 ```bash
 ln -sf "$PWD/.venv/bin/agpair" ~/.local/bin/agpair
 agpair doctor
+agpair doctor --fresh --repo-path /path/to/repo
+```
+
+If Antigravity CLI print mode times out with the current default model, select
+a known-good Antigravity model for AGPair-launched workers:
+
+```bash
+export AGPAIR_ANTIGRAVITY_MODEL="Gemini 3.1 Pro (Low)"
 ```
 
 Start a task. `task start` waits by default:
@@ -50,9 +58,12 @@ Start a task. `task start` waits by default:
 ```bash
 agpair task start \
   --executor antigravity-cli \
-  --authorization-profile local_mutating \
+  --task-kind quick_review \
+  --wait-policy lease \
+  --authorization-profile local_readonly \
+  --completion-policy report \
   --repo-path /path/to/repo \
-  --body "Goal: fix the failing smoke test. Required evidence: run the focused test."
+  --body "Goal: review the target area. Scope: named files only. Required changes: None. This is report-only. Do not edit files. Exit criteria: return findings with evidence."
 ```
 
 For async or parallel work, dispatch and watch state changes:
@@ -60,9 +71,12 @@ For async or parallel work, dispatch and watch state changes:
 ```bash
 agpair task start \
   --executor antigravity-cli \
-  --authorization-profile local_mutating \
+  --task-kind quick_review \
+  --wait-policy lease \
+  --authorization-profile local_readonly \
+  --completion-policy report \
   --repo-path /path/to/repo \
-  --body "Goal: ..." \
+  --body "Goal: review the target area. Scope: named files only. Required changes: None. This is report-only. Do not edit files. Exit criteria: return findings with evidence." \
   --no-wait
 
 agpair task watch TASK-123 --json
@@ -75,12 +89,29 @@ For implementation/refactor/test-fix slices, use an isolated worktree with evide
 ```bash
 agpair task start \
   --executor antigravity-cli \
+  --task-kind implementation \
+  --wait-policy lease \
   --authorization-profile local_mutating \
   --completion-policy evidence \
   --isolated-worktree \
   --repo-path /path/to/repo \
   --body "Goal: make the bounded change. Scope: name allowed files. Required changes: describe edits. Exit criteria: focused validation."
 ```
+
+`--wait-policy lease` lets the controller wait cheaply for a bounded window. If the executor is still running, AGPair returns a structured background-running result instead of forcing the controller to burn model turns polling or killing the task early.
+
+Review and adopt isolated code changes explicitly:
+
+```bash
+agpair task diff TASK-123
+agpair task apply TASK-123 --check
+agpair task apply TASK-123
+```
+
+Canonical examples use `--repo-path`, `--body`, and full profile names such as
+`local_readonly`. `task start` also accepts compatibility aliases like `--repo`,
+`--prompt`, and `readonly`, and auto-structures short bodies as a safety net.
+Do not rely on aliases or one-line bodies in controller skills.
 
 For isolated mutating evidence/commit tasks, AGPair snapshots tracked staged/unstaged changes into the executor worktree by default. It does not copy ignored or untracked files; pass `--dirty-snapshot off` to require a clean committed baseline.
 
@@ -156,9 +187,9 @@ V1 does not pause a running executor for live approval. Out-of-scope work should
 
 ## Review Gate
 
-`ready_for_review`, `evidence_ready`, and `committed` are not automatic success. The controller must inspect the AGPair status, git diff/commit evidence, receipts, raw log paths when needed, and run the relevant verification before reporting completion. Real executor smoke also requires `all_success=true` and `adoptable_result=yes` or `partial` without blockers for each attempted executor; dispatch or phase success alone is not enough.
+`ready_for_review`, `evidence_ready`, and `committed` are not automatic success. The controller must inspect `agent_result`, git diff/commit evidence, receipts, raw log paths when needed, and run the relevant verification before reporting completion. Real executor smoke also requires `all_success=true`, a usable `agent_result.state`, and `agent_result.controller_action` such as `use_result` or `review_then_apply` for each attempted executor; dispatch or phase success alone is not enough.
 
-Useful value metrics are completion rate, adoptable-result rate, time to first useful signal, fallback rate, controller rework rate, and abandoned/no-progress rate. Use `task status --json`, `task list --json`, and `scripts/smoke_real_executors.py` to inspect those fields.
+Useful value metrics are completion rate, usable `agent_result` rate, time to first useful signal, fallback rate, controller rework rate, and abandoned/no-progress rate. Use `task status --json`, `task list --json`, and `scripts/smoke_real_executors.py` to inspect those fields.
 
 After the controller accepts the evidence, mark the task accepted so Stop hooks do not keep blocking on the same receipt:
 
@@ -230,7 +261,7 @@ AGPair is not a semantic controller. The AI controller still owns planning, scop
 
 ## Compatibility
 
-The repository still contains the Antigravity desktop companion extension and legacy bridge diagnostics for existing installations. The current recommended path for new work is the `antigravity-cli` executor, not the IDE bridge.
+The repository keeps legacy companion and bridge diagnostics for existing installations. Current task dispatch uses the registered CLI executors listed in the current model.
 
 ## License
 

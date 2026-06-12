@@ -112,7 +112,12 @@ agpair daemon stop
 ```bash
 agpair task start \
   --repo-path /absolute/path/to/repo \
-  --body "Goal: implement the smoke fix and show evidence."
+  --task-kind implementation \
+  --wait-policy lease \
+  --authorization-profile local_mutating \
+  --completion-policy evidence \
+  --isolated-worktree \
+  --body "Goal: implement the smoke fix. Scope: focused repo files only. Required changes: make the smallest code/test change needed. Exit criteria: run the focused test and show evidence."
 ```
 
 To explicitly use the default external CLI backend:
@@ -121,9 +126,18 @@ To explicitly use the default external CLI backend:
 agpair task start \
   --executor antigravity-cli \
   --repo-path /absolute/path/to/repo \
-  --authorization-profile local_mutating \
-  --body "Goal: ..."
+  --task-kind quick_review \
+  --wait-policy lease \
+  --authorization-profile local_readonly \
+  --completion-policy report \
+  --body "Goal: inspect the target area. Scope: named files only. Required changes: None. This is report-only. Do not edit files. Exit criteria: return findings with evidence."
 ```
+
+Canonical examples use `--repo-path`, `--body`, and full profile names such as
+`local_readonly`. `task start` accepts compatibility aliases like `--repo`,
+`--prompt`, and `readonly`, and auto-structures short bodies as a safety net.
+Controller skills should still send the full `Goal` / `Scope` /
+`Required changes` / `Exit criteria` contract directly.
 
 Use a focused project directory for `--repo-path`. AGPair refuses filesystem
 roots, the user home directory, and paths above the user home by default because
@@ -138,6 +152,8 @@ an isolated worktree:
 agpair task start \
   --executor antigravity-cli \
   --repo-path /absolute/path/to/repo \
+  --task-kind implementation \
+  --wait-policy lease \
   --authorization-profile local_mutating \
   --completion-policy evidence \
   --isolated-worktree \
@@ -156,7 +172,8 @@ Other new-task executor ids are:
 - `claude-code`: AGPair-managed external Claude Code CLI executor
 - `codex`: AGPair-managed external Codex CLI executor
 
-`gemini_cli` is legacy-read-only for historical tasks. New `task start` and `task retry` dispatches reject Gemini.
+Historical executor records remain readable for compatibility. New `task start`
+and `task retry` dispatches use active registered executor ids only.
 
 Executor resolution order when `--executor` is omitted:
 
@@ -201,12 +218,15 @@ Local CLI approval modes can be adjusted with environment variables:
   Legacy alias: `AGPAIR_ANTIGRAVITY_CLI`
 - `AGPAIR_ANTIGRAVITY_APPROVAL_MODE=default|yolo`
   Default: `yolo`
+- `AGPAIR_ANTIGRAVITY_MODEL="Gemini 3.1 Pro (Low)"`
+  Optional; use when the Antigravity default model times out in `--print` mode.
+  Legacy alias: `AGPAIR_ANTIGRAVITY_CLI_MODEL`
 - `AGPAIR_ANTIGRAVITY_PRINT_TIMEOUT=30m0s`
 - `AGPAIR_GROK_CLI_BIN=/absolute/path/to/grok`
   Legacy alias: `AGPAIR_GROK_CLI`
 - `AGPAIR_GROK_OUTPUT_FORMAT=json|streaming-json`
   Default: `json`
-- `AGPAIR_GROK_MAX_TURNS=6`
+- `AGPAIR_GROK_MAX_TURNS=12`
   Default is intentionally bounded for AGPair background tasks; raise it only for larger explicitly scoped work.
 - `AGPAIR_CLAUDE_CODE_BIN=/absolute/path/to/claude`
   Legacy alias: `AGPAIR_CLAUDE_CODE_CLI`
@@ -270,13 +290,52 @@ Not every task needs a commit. Completion policy owns terminal semantics:
 
 `local_readonly` and briefs that explicitly say `Required changes: none`, `no changes`, or `禁止写入` should use report/evidence semantics. They must not be blocked just because no commit was created.
 
-By default, `task start` blocks until the task reaches a terminal phase.
+### Task kind and wait policy
+
+`--task-kind` gives the controller a simple way to choose the right default
+wait and execution budget:
+
+| Task kind | Default wait | Controller lease | Hard budget |
+| --- | --- | ---: | ---: |
+| `quick_review` | `lease` | 120s | 900s |
+| `deep_review` | `lease` | 240s | 1800s |
+| `implementation` | `lease` | 300s | 3600s |
+| `test_fix` | `lease` | 300s | 3600s |
+| `research` | `lease` | 300s | 5400s |
+| `smoke` | `strict` | 300s | 600s |
+| `generic` | `terminal` | none | none |
+
+`--wait-policy lease` lets the controller wait cheaply for a bounded window. If
+the executor is still running, AGPair returns a structured background-running
+result instead of forcing the controller to burn model turns polling or killing
+the task early. `terminal` and `strict` keep the older behavior: timeout,
+watchdog, and terminal failure are command failures.
+
+All dispatching commands (`start`, `retry`) accept:
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--task-kind` | `generic` | One of `quick_review`, `deep_review`, `implementation`, `test_fix`, `research`, `smoke`, or `generic` |
+| `--wait-policy` | task-kind default | `terminal`, `lease`, `background`, or `strict` |
+| `--controller-wait-seconds` | task-kind default | controller wait lease before a background-running return |
+| `--execution-budget-seconds` | task-kind default | hard execution budget before daemon marks the task stuck |
+| `--background-ok / --no-background-ok` | task-kind default | whether lease expiry can detach while the executor continues |
+| `--wait / --no-wait` | `--wait` | wait after dispatch or return immediately |
+| `--interval-seconds` | `5` | local polling interval in seconds |
+| `--timeout-seconds` | `3600` | maximum local wait duration for terminal/strict waits |
+
+For implementation and test-fix tasks, AGPair defaults `--completion-policy auto`
+to `evidence`. You still pass `--isolated-worktree` explicitly for mutating code
+work so the worker cannot silently edit the controller's active worktree.
+
+With `generic` tasks, `task start` still blocks until the task reaches a
+terminal phase unless `--no-wait` is provided.
 To return immediately after dispatch:
 
 ```bash
 agpair task start \
   --repo-path /absolute/path/to/repo \
-  --body "Goal: ..." \
+  --body "Goal: run a quick review. Scope: named files only. Required changes: None. This is report-only. Do not edit files. Exit criteria: return findings with evidence." \
   --no-wait
 ```
 
@@ -286,7 +345,7 @@ You may also provide your own id:
 agpair task start \
   --task-id TASK-SMOKE-001 \
   --repo-path /absolute/path/to/repo \
-  --body "Goal: ..."
+  --body "Goal: run a smoke check. Scope: focused repo files only. Required changes: None. This is report-only. Do not edit files. Exit criteria: return command output and evidence."
 ```
 
 ### Task metadata and worktree isolation
@@ -304,13 +363,11 @@ parallel and isolated execution.
 
 **Parallelism recommendation:** Always parallelize across worktrees, not inside one worktree.
 
-All task-changing commands support the same wait controls:
-
-| Option | Default | Meaning |
-|--------|---------|---------|
-| `--wait / --no-wait` | `--wait` | wait for a terminal phase after dispatch |
-| `--interval-seconds` | `5` | local polling interval in seconds |
-| `--timeout-seconds` | `3600` | max wait time; intentionally longer than daemon stuck timeout |
+Use `task wait --json` when a controller needs a machine-readable outcome after
+dispatch. Lease-based waits may return `controller_lease_expired` or
+`soft_no_progress` with `recommended_action` while the executor remains alive.
+Terminal waits include `agent_result`; use its `controller_action` (`use_result`,
+`review_then_apply`, or retry/switch actions) as the low-friction handoff signal.
 
 ### Inspect a task
 
@@ -326,6 +383,34 @@ agpair task logs TASK-SMOKE-001 --raw stderr
 pid when available, stdout/stderr paths, log sizes, last output time, small tail
 excerpts, liveness state, effective completion policy, and precise blocker
 metadata. Full raw logs stay on disk unless explicitly requested.
+
+### Review and apply isolated code changes
+
+For isolated implementation or test-fix tasks, inspect the executor diff before
+touching the controller worktree:
+
+```bash
+agpair task diff TASK-SMOKE-001
+agpair task diff TASK-SMOKE-001 --stat
+agpair task diff TASK-SMOKE-001 --json
+```
+
+Then check whether the diff applies cleanly to the controller repo:
+
+```bash
+agpair task apply TASK-SMOKE-001 --check
+```
+
+If the check is clean and the controller accepts the approach, apply the diff:
+
+```bash
+agpair task apply TASK-SMOKE-001
+```
+
+`task apply` uses the isolated worker's baseline, excludes the controller dirty
+snapshot baseline, and leaves the applied changes unstaged in the controller
+worktree for normal review and tests. It does not mark the AGPair task accepted;
+run `task accept` only after controller verification.
 
 ### Fresh retry
 
@@ -441,8 +526,8 @@ hooks. AGPair refuses to overwrite a non-AGPair skill at that path.
 ### How to judge AGPair value
 
 Do not treat dispatch or process liveness as value. Track completion rate,
-adoptable-result rate (`yes` and useful `partial`), time to first useful signal,
-fallback rate, controller rework rate, and abandoned/no-progress rate. The main
+usable `agent_result` rate, time to first useful signal, fallback rate,
+controller rework rate, and abandoned/no-progress rate. The main
 surfaces are `agpair task status --json`, `agpair task list --json`, and
 `scripts/smoke_real_executors.py`.
 
@@ -470,24 +555,25 @@ agpair task wait TASK-SMOKE-001
 agpair task wait TASK-SMOKE-001 --timeout-seconds 600 --interval-seconds 10
 ```
 
-Exit code `0` means success (`ready_for_review` / `evidence_ready` / `committed`).
-Exit code `1` means `blocked`, `stuck`, `abandoned`, timeout, or **watchdog** (the
-daemon flagged `retry_recommended=true` while the task was still `acked`).
+Exit code `0` can mean terminal success, or a background-running lease outcome
+when the task permits background continuation. Use `--json` to read `outcome`,
+`agent_result`, `controller_lease_expired`, `recommended_action`, and
+`background_ok`.
+
+Exit code `1` means terminal failure, strict timeout/watchdog failure, missing
+task, or a lease outcome that does not permit background continuation.
 
 Some `evidence_ready` tasks can now auto-close when strong repo-side commit evidence exists but a final terminal receipt never arrived. In that case, inspect `task status --json` / `inspect --json` before manually abandoning the task.
 
-When the watchdog triggers, the message will tell you to run
-`agpair task retry <TASK_ID>`.
+When terminal/strict watchdog handling triggers, the message will tell you to
+run `agpair task retry <TASK_ID>`. For lease-based tasks with
+`background_ok=true`, `soft_no_progress` means inspect `task status --json`,
+watch later, or detach while the executor continues.
 
 ### Auto-wait options
 
-All dispatching commands (`start`, `retry`) accept:
-
-| Flag | Default | Notes |
-|------|---------|-------|
-| `--wait / --no-wait` | `--wait` | Wait for terminal phase after dispatch |
-| `--interval-seconds` | `5` | Seconds between status polls |
-| `--timeout-seconds` | `3600` | Maximum wait duration (intentionally > daemon stuck timeout of 1800s) |
+All dispatching commands (`start`, `retry`) use the task-kind and wait-policy
+controls described above.
 
 `status`, `logs`, and `wait` do **not** have `--wait/--no-wait`.
 
@@ -517,8 +603,9 @@ Workflow `ready_for_review` means AGPair has an evidence pack for controller ver
 - invalid continuation targets fail closed
 - daemon does not send semantic messages
 - daemon does not auto-create fresh retries
-- daemon sets `retry_recommended=true` after a soft watchdog window before the hard stuck timeout
-- `task wait` and default auto-wait exit early (code 1) when the watchdog flags `retry_recommended=true` on an acked task, rather than blind-waiting until the hard timeout
+- daemon can recommend retry after a soft no-progress window before the hard stuck timeout
+- terminal/strict waits fail early on watchdog instead of blind-waiting until the hard timeout
+- lease waits with `background_ok=true` return structured background-running outcomes while the executor continues
 
 If transport dispatch fails:
 - the CLI exits with code `1`
@@ -542,8 +629,8 @@ Before publishing or opening a PR:
 
 - Run the targeted tests plus the full unit/integration suite.
 - Run real smoke for the controller matrix, require `all_success=true` plus
-  blocker-free `adoptable_result=yes` or useful `partial` for each attempted
-  executor, and keep smoke reports local.
+  usable `agent_result.state` and `agent_result.controller_action` for each
+  attempted executor, and keep smoke reports local.
 - Run `git diff --check`.
 - Inspect `git status --short --untracked-files=all`.
 - Do not stage `.agpair/`, `~/.agpair`, raw executor logs, local receipts, session transcripts, personal Codex/Claude config, or generated hook debug output.

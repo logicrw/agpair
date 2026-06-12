@@ -66,8 +66,28 @@ class WaitResult:
     """Outcome of a wait operation."""
 
     phase: str
-    timed_out: bool
+    timed_out: bool = False
     watchdog_triggered: bool = False
+    outcome: str = ""
+    controller_lease_expired: bool = False
+    recommended_action: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.outcome:
+            return
+        if self.timed_out:
+            outcome = "strict_timeout"
+        elif self.watchdog_triggered:
+            outcome = "terminal_failure"
+        elif self.phase in DISPATCH_SUCCESS_PHASES:
+            outcome = "terminal_success"
+        elif self.phase in FAILURE_PHASES:
+            outcome = "terminal_failure"
+        elif self.phase == "unknown":
+            outcome = "missing_task"
+        else:
+            outcome = "terminal_failure"
+        object.__setattr__(self, "outcome", outcome)
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +204,9 @@ def wait_for_terminal_phase(
     *,
     interval_seconds: float = DEFAULT_INTERVAL_SECONDS,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    controller_wait_seconds: float | None = None,
+    background_ok: bool = False,
+    strict_watchdog: bool = True,
     terminal_phases: frozenset[str] = TERMINAL_PHASES,
     heartbeat_silence_seconds: float = DEFAULT_HEARTBEAT_SILENCE_SECONDS,
     waiter_command: str = "task_wait",
@@ -230,7 +253,13 @@ def wait_for_terminal_phase(
     tasks = TaskRepository(db_path)
     waiters = WaiterRepository(db_path)
     journal = JournalRepository(db_path)
-    deadline = clock.time() + timeout_seconds  # type: ignore[union-attr]
+    started_at = clock.time()  # type: ignore[union-attr]
+    deadline = started_at + timeout_seconds
+    lease_deadline = (
+        started_at + controller_wait_seconds
+        if controller_wait_seconds is not None and controller_wait_seconds >= 0
+        else None
+    )
 
     # --- Register waiter ---------------------------------------------------
     waiter = None
@@ -245,10 +274,26 @@ def wait_for_terminal_phase(
             task = tasks.get_task(task_id)
             current_phase = task.phase if task else "unknown"
 
+            if task is None:
+                if waiter:
+                    waiters.finalize(waiter.waiter_id, outcome="missing_task")
+                return WaitResult(
+                    phase="unknown",
+                    outcome="missing_task",
+                    recommended_action="inspect_task_id",
+                )
+
             if current_phase in terminal_phases:
                 if waiter:
                     waiters.finalize(waiter.waiter_id, outcome=f"phase:{current_phase}")
-                return WaitResult(phase=current_phase, timed_out=False)
+                return WaitResult(
+                    phase=current_phase,
+                    outcome=(
+                        "terminal_success"
+                        if current_phase in DISPATCH_SUCCESS_PHASES
+                        else "terminal_failure"
+                    ),
+                )
 
             # --- Inline executor poll (daemon-free close) ---
             session_id = (task.executor_session_id or task.antigravity_session_id) if task else None
@@ -260,21 +305,58 @@ def wait_for_terminal_phase(
                 if current_phase in terminal_phases:
                     if waiter:
                         waiters.finalize(waiter.waiter_id, outcome=f"phase:{current_phase}")
-                    return WaitResult(phase=current_phase, timed_out=False)
+                    return WaitResult(
+                        phase=current_phase,
+                        outcome=(
+                            "terminal_success"
+                            if current_phase in DISPATCH_SUCCESS_PHASES
+                            else "terminal_failure"
+                        ),
+                    )
 
             if is_watchdog_triggered(task, heartbeat_silence_seconds, utcnow_fn):
+                if background_ok and not strict_watchdog:
+                    if waiter:
+                        waiters.finalize(waiter.waiter_id, outcome="soft_no_progress")
+                    return WaitResult(
+                        phase=current_phase,
+                        watchdog_triggered=True,
+                        outcome="soft_no_progress",
+                        recommended_action="inspect_logs_or_continue_background",
+                    )
                 if waiter:
                     waiters.finalize(waiter.waiter_id, outcome="watchdog")
                 return WaitResult(
                     phase=current_phase,
-                    timed_out=False,
                     watchdog_triggered=True,
+                    outcome="terminal_failure",
+                    recommended_action="retry_or_switch_executor",
+                )
+
+            if (
+                background_ok
+                and lease_deadline is not None
+                and current_phase == "acked"
+                and clock.time() >= lease_deadline  # type: ignore[union-attr]
+            ):
+                if waiter:
+                    waiters.finalize(waiter.waiter_id, outcome="controller_lease_expired")
+                return WaitResult(
+                    phase=current_phase,
+                    outcome="controller_lease_expired",
+                    controller_lease_expired=True,
+                    recommended_action="detach_and_continue",
                 )
 
             if clock.time() >= deadline:  # type: ignore[union-attr]
                 if waiter:
                     waiters.finalize(waiter.waiter_id, outcome="timeout")
-                return WaitResult(phase=current_phase, timed_out=True)
+                return WaitResult(
+                    phase=current_phase,
+                    timed_out=True,
+                    outcome="strict_timeout",
+                    recommended_action="retry_or_switch_executor",
+                )
 
             # Update poll timestamp before sleeping
             if waiter:
@@ -298,6 +380,15 @@ def wait_for_terminal_phase(
 
 def exit_code_for_dispatch(result: WaitResult) -> int:
     """Return 0 for success, 1 for failure/timeout/watchdog (dispatch commands)."""
+    if result.outcome in {
+        "controller_lease_expired",
+        "soft_no_progress",
+        "background_started",
+        "terminal_success",
+    }:
+        return 0
+    if result.outcome in {"missing_task", "strict_timeout", "terminal_failure"}:
+        return 1
     if result.timed_out or result.watchdog_triggered:
         return 1
     return 0 if result.phase in DISPATCH_SUCCESS_PHASES else 1
@@ -336,15 +427,40 @@ def maybe_auto_wait(
     if not wait:
         return
 
+    task = TaskRepository(db_path).get_task(task_id)
+    if task and task.wait_policy == "background":
+        typer.echo(
+            f"Task {task_id} started in background. "
+            f"Use: agpair task watch {task_id} or agpair task wait {task_id}"
+        )
+        return
+
     typer.echo(f"Waiting for task {task_id} to reach a terminal phase …")
     result = wait_for_terminal_phase(
         db_path,
         task_id,
         interval_seconds=interval_seconds,
         timeout_seconds=timeout_seconds,
+        controller_wait_seconds=task.controller_wait_seconds if task else None,
+        background_ok=bool(task.background_ok) if task else False,
+        strict_watchdog=(task.wait_policy in {"terminal", "strict"}) if task else True,
         terminal_phases=terminal_phases,
         waiter_command=waiter_command,
     )
+
+    if result.controller_lease_expired:
+        typer.echo(
+            f"Controller wait lease expired for task {task_id}; task remains backgrounded. "
+            f"Use: agpair task watch {task_id} or agpair task wait {task_id}"
+        )
+        return
+
+    if result.outcome == "soft_no_progress":
+        typer.echo(
+            f"Task {task_id} has no fresh progress signal yet; task remains backgrounded. "
+            f"Inspect logs or continue watching with: agpair task watch {task_id}"
+        )
+        return
 
     if result.watchdog_triggered:
         typer.echo(

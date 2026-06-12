@@ -25,6 +25,7 @@ which agpair
 ```bash
 agpair doctor
 agpair doctor --repo-path /path/to/repo
+agpair doctor --fresh --repo-path /path/to/repo
 ```
 
 重点看：
@@ -61,9 +62,31 @@ AGPair 不可用时 hook 会 fail open。它们只是路由提示和结束护栏
 agpair task start \
   --repo-path /path/to/repo \
   --executor antigravity-cli \
-  --authorization-profile local_mutating \
-  --body "Goal: 修复失败的 smoke test。Required evidence: 运行聚焦测试。"
+  --task-kind quick_review \
+  --wait-policy lease \
+  --authorization-profile local_readonly \
+  --completion-policy report \
+  --body "Goal: 审查指定区域。Scope: 仅限已点名文件。Required changes: None. This is report-only. Do not edit files. Exit criteria: 返回带证据的中文结论。"
 ```
+
+实现、重构、修测试这类有边界的写代码任务，用 isolated worktree 和 evidence
+completion：
+
+```bash
+agpair task start \
+  --repo-path /path/to/repo \
+  --executor antigravity-cli \
+  --task-kind implementation \
+  --wait-policy lease \
+  --authorization-profile local_mutating \
+  --completion-policy evidence \
+  --isolated-worktree \
+  --body "Goal: 做一个有边界的修改。Scope: 写清允许文件。Required changes: 写清要改什么。Exit criteria: 跑聚焦验证并返回证据。"
+```
+
+`--wait-policy lease` 会让主控在有界窗口里低噪等待。如果 executor 仍在运行，
+AGPair 会返回结构化的 background-running 结果，而不是让主控浪费模型轮次轮询，
+或过早杀掉任务。
 
 异步或并行任务：
 
@@ -71,8 +94,11 @@ agpair task start \
 agpair task start \
   --repo-path /path/to/repo \
   --executor antigravity-cli \
-  --authorization-profile local_mutating \
-  --body "Goal: ..." \
+  --task-kind quick_review \
+  --wait-policy lease \
+  --authorization-profile local_readonly \
+  --completion-policy report \
+  --body "Goal: 审查指定区域。Scope: 仅限已点名文件。Required changes: None. This is report-only. Do not edit files. Exit criteria: 返回带证据的结论。" \
   --no-wait
 
 agpair task watch TASK-123 --json
@@ -91,7 +117,23 @@ git -C /path/to/repo diff
 
 `ready_for_review`、`evidence_ready`、`committed` 都只是验收门。外部 executor 声称完成后，Codex 或 Claude Code 仍要检查 diff、receipt、raw evidence path 和测试证据，再报告成功。
 
+在 `status --json` 和 `wait --json` 里，先看 `agent_result.controller_action`：报告任务通常是 `use_result`，隔离实现 diff 通常是 `review_then_apply`，blocked attempt 会提示主控检查、重试或切换 executor。
+
 除非 brief 或授权 profile 明确要求提交，`commit_ref` 是可选字段。
+
+isolated 代码任务需要显式查看并应用 worker diff：
+
+```bash
+agpair task diff TASK-123
+agpair task apply TASK-123 --check
+agpair task apply TASK-123
+```
+
+主控验证通过后，标记这个 receipt 已处理：
+
+```bash
+agpair task accept TASK-123 --adoptable-result yes --controller-rework none
+```
 
 ## 6. 处理授权阻塞
 
@@ -126,7 +168,11 @@ agpair workflow watch WF-ABC123DEF456 --json
 
 Codex 主控之后用 `claude-code`；外部 `codex` 默认被抑制，因为它是 AGPair 管理的 Codex CLI worker。Claude Code 主控之后用 `codex`；外部 `claude-code` 默认被抑制，因为 Claude Code 已有原生 subagent。只有明确需要时才用 `--allow-self-executor` 覆盖。
 
-新任务不要使用 Gemini。历史 `gemini_cli` 记录只用于检查或清理。
+历史 executor 记录仍可为兼容性读取。新任务只使用 active registered executor id。
+
+如果 `antigravity-cli` 健康，但当前 Antigravity 默认模型在 `--print` 任务中超时，
+设置 `AGPAIR_ANTIGRAVITY_MODEL` 为本机 CLI 已验证可用的模型，例如
+`Gemini 3.1 Pro (Low)`。
 
 新增、禁用、弃用或移除 executor 时，走共享 registry profile contract。详见
 [Executor Lifecycle](executor-lifecycle.md)。
@@ -147,4 +193,4 @@ Codex 主控之后用 `claude-code`；外部 `codex` 默认被抑制，因为它
 
 ## 兼容性说明
 
-Antigravity 桌面端 companion extension 和 bridge 诊断仍保留给旧安装使用。新任务应使用 `antigravity-cli`。
+旧 companion 和 bridge 诊断仍保留给已有安装读取。当前任务派发使用上面列出的注册 CLI executor。

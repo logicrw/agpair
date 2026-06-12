@@ -4,6 +4,7 @@ from unittest import mock
 
 from agpair.executors.local_cli import (
     LocalCLIExecutor,
+    _classify_executor_error,
     _get_process_start_time,
     _is_process_alive,
     _looks_waiting_for_input,
@@ -123,6 +124,69 @@ def test_dispatch_injects_execution_repository_root(tmp_path):
     assert "Noninteractive execution requirements" in prompt
     assert "do not wait for human confirmation" in prompt
     assert "only claim changed files, validation, or success after observing actual file state" in prompt
+
+
+def test_executor_error_classification_treats_max_turns_as_recoverable() -> None:
+    blocker_type, recoverable, recommended_next_action = _classify_executor_error(
+        "stderr tail: plugin noise\nError: max turns reached"
+    )
+
+    assert blocker_type == "executor_turn_budget_exhausted"
+    assert recoverable is True
+    assert recommended_next_action == "retry_same_executor_with_more_budget_or_switch_executor"
+
+
+def test_executor_error_classification_treats_cancelled_after_max_turns_as_recoverable() -> None:
+    blocker_type, recoverable, recommended_next_action = _classify_executor_error(
+        "cancelled after max turns"
+    )
+
+    assert blocker_type == "executor_turn_budget_exhausted"
+    assert recoverable is True
+    assert recommended_next_action == "retry_same_executor_with_more_budget_or_switch_executor"
+
+
+def test_error_summary_prioritizes_terminal_error_over_plugin_noise(tmp_path) -> None:
+    executor = DummyLocalCLIExecutor()
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "stderr.log").write_text(
+        "\n".join(
+            [
+                "INFO plugin discovered name=backend-tools",
+                "INFO plugin discovered name=research-tools",
+                "INFO plugin discovered name=problem-solving-tools",
+                "Error: max turns reached",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = executor._extract_error_summary(session)
+
+    assert "Error: max turns reached" in summary
+    assert "plugin discovered" not in summary
+
+
+def test_error_summary_prioritizes_stdout_error_over_progress_noise(tmp_path) -> None:
+    executor = DummyLocalCLIExecutor()
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "stdout.log").write_text(
+        "\n".join(
+            [
+                "Reading files",
+                "Checking implementation",
+                "Error: max turns reached",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = executor._extract_error_summary(session)
+
+    assert "Error: max turns reached" in summary
+    assert "Reading files" not in summary
 
 
 def test_dispatch_injects_authorization_and_structured_receipt_contract(tmp_path):
@@ -336,6 +400,84 @@ def test_poll_classifies_executor_auth_failure(tmp_path):
     assert state.receipt["payload"]["recommended_next_action"] == "repair_executor_auth"
 
 
+def test_poll_report_only_success_exit_salvages_completed_stdout_report(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "authorization_profile": "local_readonly",
+                "repo_path": None,
+                "is_process_alive": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "rc.txt").write_text("0", encoding="utf-8")
+    (tmp_path / "stdout.log").write_text("结论：报告任务完成，可以采纳。\n", encoding="utf-8")
+
+    state = executor.poll("TASK-LOCAL-REPORT-ZERO", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is True
+    assert state.receipt["status"] == "EVIDENCE_PACK"
+    assert state.receipt["payload"]["report"] == "结论：报告任务完成，可以采纳。"
+    assert state.receipt["payload"]["arbitration"] == "report_salvage_after_zero_exit"
+
+
+def test_poll_report_only_success_exit_blocks_antigravity_print_timeout(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "authorization_profile": "local_readonly",
+                "repo_path": None,
+                "is_process_alive": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "rc.txt").write_text("0", encoding="utf-8")
+    (tmp_path / "stdout.log").write_text("Error: timed out waiting for response\n", encoding="utf-8")
+
+    state = executor.poll("TASK-LOCAL-REPORT-TIMEOUT", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is True
+    assert state.receipt["status"] == "BLOCKED"
+    assert state.receipt["payload"]["blocker_type"] == "executor_response_timeout"
+    assert state.receipt["payload"]["recoverable"] is True
+    assert state.receipt["payload"]["recommended_next_action"] == "retry_same_executor_or_switch_executor"
+
+
+def test_poll_report_only_success_exit_blocks_missing_stdout_report(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    (tmp_path / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "authorization_profile": "local_readonly",
+                "repo_path": None,
+                "is_process_alive": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "rc.txt").write_text("0", encoding="utf-8")
+    (tmp_path / "stdout.log").write_text("", encoding="utf-8")
+
+    state = executor.poll("TASK-LOCAL-REPORT-EMPTY", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is True
+    assert state.receipt["status"] == "BLOCKED"
+    assert state.receipt["payload"]["blocker_type"] == "report_output_missing"
+    assert state.receipt["payload"]["authorization_profile"] == "local_readonly"
+    assert state.receipt["payload"]["recoverable"] is True
+    assert state.receipt["payload"]["recommended_next_action"] == "retry_same_executor_or_switch_executor"
+
+
 def test_poll_report_only_process_crash_reports_missing_report_not_commit(tmp_path):
     executor = DummyLocalCLIExecutor()
     (tmp_path / "state.json").write_text(
@@ -362,6 +504,8 @@ def test_poll_report_only_process_crash_reports_missing_report_not_commit(tmp_pa
     assert "commit" not in state.receipt["summary"].lower()
     assert state.receipt["payload"]["blocker_type"] == "report_output_missing"
     assert state.receipt["payload"]["authorization_profile"] == "local_readonly"
+    assert state.receipt["payload"]["recoverable"] is True
+    assert state.receipt["payload"]["recommended_next_action"] == "retry_same_executor_or_switch_executor"
 
 
 def test_poll_mutating_process_crash_mentions_commit_evidence(tmp_path):
@@ -390,6 +534,8 @@ def test_poll_mutating_process_crash_mentions_commit_evidence(tmp_path):
     assert "commit evidence" in state.receipt["summary"]
     assert state.receipt["payload"]["blocker_type"] == "terminal_receipt_missing"
     assert state.receipt["payload"]["authorization_profile"] == "local_mutating"
+    assert state.receipt["payload"]["recoverable"] is True
+    assert state.receipt["payload"]["recommended_next_action"] == "retry_same_executor_or_switch_executor"
 
 
 def test_poll_returns_evidence_pack_for_success_exit_without_commit_when_commit_evidence_available(tmp_path):

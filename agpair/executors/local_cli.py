@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import pathlib
-import re
 import shlex
 import shutil
 import signal
@@ -14,6 +13,11 @@ import tempfile
 import time
 from typing import Callable
 
+from agpair.executor_errors import (
+    classify_executor_error as _classify_executor_error,
+    looks_waiting_for_input as _looks_waiting_for_input,
+    prioritize_error_lines,
+)
 from agpair.internal_context import build_internal_executor_env
 from agpair.executors.base import DispatchResult, ExecutorAdapter, TaskState
 from agpair.models import (
@@ -27,6 +31,7 @@ from agpair.terminal_receipts import (
     parse_structured_terminal_receipt,
     validate_terminal_receipt_payload,
 )
+from agpair.terminal_arbitration import completed_report_text
 
 logger = logging.getLogger(__name__)
 
@@ -448,6 +453,50 @@ def _apply_dirty_snapshot(execution_repo_path: str, snapshot: dict[str, object])
     return applied
 
 
+def _prepare_worker_diff_baseline(
+    *,
+    execution_repo_path: str,
+    task_id: str,
+    dirty_snapshot_applied: bool,
+    start_head: str | None,
+) -> tuple[str | None, bool, str]:
+    if not dirty_snapshot_applied:
+        return start_head, False, "start_head"
+    if not _git_status_porcelain(execution_repo_path):
+        return start_head, False, "start_head"
+    try:
+        subprocess.run(
+            ["git", "-C", execution_repo_path, "add", "-A"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                execution_repo_path,
+                "-c",
+                "user.name=AGPair",
+                "-c",
+                "user.email=agpair@local.invalid",
+                "commit",
+                "-m",
+                f"AGPair baseline snapshot {task_id}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise WorktreeProvisionError(
+            f"dirty_snapshot_baseline_failed: {detail or exc}"
+        ) from exc
+    worker_base_head = _git_head(execution_repo_path) or start_head
+    return worker_base_head, bool(worker_base_head and worker_base_head != start_head), "dirty_snapshot_baseline"
+
+
 def _seconds_since(iso_str: str) -> float:
     from datetime import datetime, timezone
     try:
@@ -463,40 +512,6 @@ def _strip_ansi(text: str) -> str:
     """移除 ANSI escape codes。"""
     import re
     return re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
-
-
-def _classify_executor_error(summary: str) -> tuple[str, bool, str | None]:
-    normalized = summary.lower()
-    if _looks_waiting_for_input(normalized):
-        return "executor_waiting_for_input", True, "switch_executor_or_retry_with_noninteractive_flags"
-    if "usage limit" in normalized or "purchase more credits" in normalized or "quota" in normalized:
-        return "executor_quota_exhausted", True, "wait_or_switch_executor"
-    if (
-        "invalid_grant" in normalized
-        or "tokenrefreshfailed" in normalized
-        or "auth(" in normalized
-        or "not authenticated" in normalized
-    ):
-        return "executor_auth_failed", False, "repair_executor_auth"
-    return "execution_error", False, "inspect_logs"
-
-
-_WAITING_FOR_INPUT_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bpress\s+enter\s+to\s+continue\b", re.IGNORECASE),
-    re.compile(r"\bdo\s+you\s+want\s+to\s+(proceed|continue)\b", re.IGNORECASE),
-    re.compile(r"\b(approve|confirm|continue)\?\s*(\[[^\]]*y[^\]]*n[^\]]*\]|\([^\)]*y[^\)]*n[^\)]*\))?", re.IGNORECASE),
-    re.compile(r"\bwaiting\s+for\s+(user\s+)?input\b", re.IGNORECASE),
-    re.compile(r"\brequires\s+(human\s+)?confirmation\b", re.IGNORECASE),
-    re.compile(r"\bapproval\s+required\b", re.IGNORECASE),
-)
-
-
-def _looks_waiting_for_input(text: str) -> bool:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    for line in lines[-40:]:
-        if any(pattern.search(line) for pattern in _WAITING_FOR_INPUT_PATTERNS):
-            return True
-    return False
 
 
 def _reap_child_process(pid: int | None) -> None:
@@ -575,8 +590,8 @@ def _body_with_task_contract(
         "Structured terminal receipt JSON requirements:\n"
         "- Print the requested report or conclusion directly to stdout; do not only save it to an external file, local brain, or link.\n"
         "- The final output line must be one single-line JSON terminal receipt object with schema_version, task_id, attempt_no, review_round, status, summary, and payload.\n"
-        "- For report-only tasks, include the report text in payload.report when possible.\n"
-        "- When work is ready for controller verification, claim `ready_for_review` only with changed_files, validation or validation_not_run, scope_violations, raw_log_path, and receipt_path.\n"
+        "- For report-only tasks, include the report text in payload.report; changed_files, validation, and scope_violations are not required.\n"
+        "- For implementation or test-fix tasks, claim `ready_for_review` only with changed_files, validation or validation_not_run, scope_violations, raw_log_path, and receipt_path.\n"
         "- When blocked by missing permission, return blocker_type `approval_required` with requested_authorization_profile, requested_actions, authorization_delta, request_reason, risk_assessment, safe_to_retry, and raw_log_path.\n\n"
     )
     return contract + body
@@ -653,8 +668,15 @@ class LocalCLIExecutor(ExecutorAdapter):
                 )
             dirty_snapshot_applied = _apply_dirty_snapshot(execution_repo_path, dirty_snapshot)
 
-        start_head = _git_head(execution_repo_path)
+        original_start_head = _git_head(execution_repo_path)
         start_dirty_files = changed_files_from_git_status(execution_repo_path)
+        worker_base_head, worker_base_created, worker_diff_base_reason = _prepare_worker_diff_baseline(
+            execution_repo_path=execution_repo_path,
+            task_id=task_id,
+            dirty_snapshot_applied=dirty_snapshot_applied,
+            start_head=original_start_head,
+        )
+        start_head = worker_base_head or original_start_head
         contracted_body = _body_with_task_contract(
             task_id,
             body,
@@ -719,7 +741,11 @@ sys.exit(rc)
             "pgid": None,
             "started_at": _now_iso(),
             "repo_path": execution_repo_path,
+            "original_start_head": original_start_head,
             "start_head": start_head,
+            "worker_base_head": worker_base_head,
+            "worker_base_created": worker_base_created,
+            "worker_diff_base_reason": worker_diff_base_reason,
             "start_dirty_files": list(start_dirty_files),
             "current_head": None,
             "exit_code": None,
@@ -986,7 +1012,11 @@ sys.exit(rc)
         payload.setdefault("raw_log_path", str(temp_dir / "stdout.log"))
         payload.setdefault("stderr_log_path", str(temp_dir / "stderr.log"))
         payload.setdefault("receipt_path", str(temp_dir / "receipt.json"))
-        validation = validate_terminal_receipt_payload(structured.status, payload)
+        validation = validate_terminal_receipt_payload(
+            structured.status,
+            payload,
+            report_only=str(state.get("authorization_profile") or "") == "local_readonly",
+        )
         scope_violations = payload.get("scope_violations")
         if (
             structured.status in {"COMMITTED", "EVIDENCE_PACK"}
@@ -1048,7 +1078,7 @@ sys.exit(rc)
             lines = stderr_file.read_text(encoding="utf-8").strip().splitlines()
             clean_lines = [_strip_ansi(l) for l in lines[-20:] if l.strip()]
             if clean_lines:
-                summary_parts.append("stderr: " + "\n".join(clean_lines[-5:]))
+                summary_parts.append("stderr: " + "\n".join(prioritize_error_lines(clean_lines, max_lines=5)))
 
         # 3. stdout
         stdout_file = temp_dir / "stdout.log"
@@ -1056,7 +1086,7 @@ sys.exit(rc)
             lines = stdout_file.read_text(encoding="utf-8").strip().splitlines()
             clean_lines = [_strip_ansi(l) for l in lines[-5:] if l.strip()]
             if clean_lines:
-                summary_parts.append("stdout: " + "\n".join(clean_lines[-3:]))
+                summary_parts.append("stdout: " + "\n".join(prioritize_error_lines(clean_lines, max_lines=3)))
 
         return "\n".join(summary_parts)[:max_chars] or "No output captured"
 
@@ -1089,8 +1119,11 @@ sys.exit(rc)
             if structured_result is not None:
                 return structured_result
             if exit_code == 0:
+                authorization_profile = str(state.get("authorization_profile") or "local_mutating")
                 events_count = self._count_events(temp_dir)
                 summary = self._extract_final_summary(temp_dir) or "Task finished successfully"
+                stdout_file = temp_dir / "stdout.log"
+                stdout_text = stdout_file.read_text(encoding="utf-8", errors="replace") if stdout_file.exists() else ""
                 if has_committed:
                     state["final_summary"] = summary
                     state["error_summary"] = None
@@ -1105,6 +1138,56 @@ sys.exit(rc)
                         "receipt_path": str(temp_dir / "receipt.json"),
                     }
                     return True, self._make_receipt(task_id, attempt_no, "COMMITTED", summary, payload)
+                if authorization_profile == "local_readonly":
+                    stdout_report = completed_report_text(stdout_text)
+                    if stdout_report:
+                        summary = self._extract_final_summary(temp_dir) or "Executor produced a report"
+                        state["final_summary"] = summary
+                        state["error_summary"] = None
+                        return True, self._make_receipt(
+                            task_id,
+                            attempt_no,
+                            "EVIDENCE_PACK",
+                            summary,
+                            {
+                                "exit_code": 0,
+                                "arbitration": "report_salvage_after_zero_exit",
+                                "report": stdout_report,
+                                "changed_files": [],
+                                "scope_violations": [],
+                                "validation_not_run": "report salvaged from stdout after zero exit",
+                                **self._raw_log_payload(temp_dir),
+                                "receipt_path": str(temp_dir / "receipt.json"),
+                            },
+                        )
+                    error_summary = self._extract_error_summary(temp_dir)
+                    blocker_type, recoverable, recommended_next_action = _classify_executor_error(error_summary)
+                    if blocker_type == "execution_error":
+                        blocker_type = "report_output_missing"
+                        recoverable = True
+                        recommended_next_action = "retry_same_executor_or_switch_executor"
+                    summary = (
+                        error_summary
+                        if error_summary and error_summary != "No output captured"
+                        else "Executor exited without producing a completed report"
+                    )
+                    state["final_summary"] = None
+                    state["error_summary"] = summary
+                    return True, self._make_receipt(
+                        task_id,
+                        attempt_no,
+                        "BLOCKED",
+                        summary,
+                        {
+                            "exit_code": 0,
+                            "blocker_type": blocker_type,
+                            "authorization_profile": authorization_profile,
+                            "recoverable": recoverable,
+                            "recommended_next_action": recommended_next_action,
+                            **self._raw_log_payload(temp_dir),
+                            "receipt_path": str(temp_dir / "receipt.json"),
+                        },
+                    )
                 state["final_summary"] = summary
                 state["error_summary"] = None
                 return True, self._make_receipt(
@@ -1123,6 +1206,31 @@ sys.exit(rc)
                     },
                 )
             else:
+                authorization_profile = str(state.get("authorization_profile") or "local_mutating")
+                stdout_file = temp_dir / "stdout.log"
+                stdout_report = completed_report_text(
+                    stdout_file.read_text(encoding="utf-8", errors="replace") if stdout_file.exists() else ""
+                )
+                if authorization_profile == "local_readonly" and stdout_report:
+                    summary = self._extract_final_summary(temp_dir) or "Executor produced a report before non-zero exit"
+                    state["final_summary"] = summary
+                    state["error_summary"] = None
+                    return True, self._make_receipt(
+                        task_id,
+                        attempt_no,
+                        "EVIDENCE_PACK",
+                        summary,
+                        {
+                            "exit_code": exit_code,
+                            "arbitration": "report_salvage_after_nonzero_exit",
+                            "report": stdout_report,
+                            "changed_files": [],
+                            "scope_violations": [],
+                            "validation_not_run": "report salvaged from stdout after non-zero exit",
+                            **self._raw_log_payload(temp_dir),
+                            "receipt_path": str(temp_dir / "receipt.json"),
+                        },
+                    )
                 summary = self._extract_error_summary(temp_dir)
                 blocker_type, recoverable, recommended_next_action = _classify_executor_error(summary)
                 state["final_summary"] = None
@@ -1202,6 +1310,8 @@ sys.exit(rc)
                         "exit_code": -1,
                         "blocker_type": blocker_type,
                         "authorization_profile": authorization_profile,
+                        "recoverable": True,
+                        "recommended_next_action": "retry_same_executor_or_switch_executor",
                         **self._raw_log_payload(temp_dir),
                         "receipt_path": str(temp_dir / "receipt.json"),
                     },

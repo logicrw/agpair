@@ -106,6 +106,8 @@ def _receipt_payload_has_missing_artifact_path(payload: Mapping[str, Any]) -> bo
 def validate_terminal_receipt_payload(
     kind: str,
     payload: Mapping[str, Any],
+    *,
+    report_only: bool = False,
 ) -> ReceiptValidationResult:
     if kind == "BLOCKED" and payload.get("blocker_type") == "approval_required":
         required = (
@@ -118,6 +120,13 @@ def validate_terminal_receipt_payload(
             "raw_log_path",
         )
     elif kind in {"COMMITTED", "EVIDENCE_PACK"} or payload.get("claimed_state") == "ready_for_review":
+        if report_only:
+            required = (
+                "raw_log_path",
+                "receipt_path",
+            )
+            missing = tuple(field for field in required if field not in payload)
+            return ReceiptValidationResult(ok=not missing, required_missing=missing)
         required = (
             "changed_files",
             "scope_violations",

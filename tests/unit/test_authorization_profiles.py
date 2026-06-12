@@ -17,6 +17,15 @@ def test_known_authorization_profiles_are_accepted() -> None:
     assert validate_authorization_profile("external_network") == "external_network"
 
 
+def test_common_authorization_profile_aliases_are_accepted() -> None:
+    assert validate_authorization_profile("readonly") == "local_readonly"
+    assert validate_authorization_profile("read-only") == "local_readonly"
+    assert validate_authorization_profile("local-readonly") == "local_readonly"
+    assert validate_authorization_profile("mutating") == "local_mutating"
+    assert validate_authorization_profile("test-heavy") == "local_test_heavy"
+    assert validate_authorization_profile("network") == "external_network"
+
+
 def test_unknown_authorization_profile_is_rejected() -> None:
     with pytest.raises(ValueError, match="authorization profile"):
         validate_authorization_profile("prod_root")

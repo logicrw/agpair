@@ -24,6 +24,7 @@ from agpair.executors.registry import registered_executor_ids
 TERMINAL_OK_PHASES = {"ready_for_review", "evidence_ready", "committed"}
 TERMINAL_FAILURE_PHASES = {"blocked", "stuck", "abandoned"}
 TERMINAL_PHASES = TERMINAL_OK_PHASES | TERMINAL_FAILURE_PHASES
+VALID_SCENARIOS = {"report_smoke", "implementation_smoke"}
 
 
 def _run(cmd: list[str], *, cwd: str | Path | None = None, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
@@ -134,7 +135,45 @@ def _cleanup_root_for_execution_path(execution_path: Path) -> Path:
     return execution_path
 
 
-def _body_for_executor(executor_id: str, controller: str, task_id: str, worktree_path: Path) -> str:
+def _body_for_executor(
+    executor_id: str,
+    controller: str,
+    task_id: str,
+    worktree_path: Path,
+    scenario: str,
+) -> str:
+    if scenario == "report_smoke":
+        receipt = {
+            "schema_version": "1",
+            "task_id": task_id,
+            "attempt_no": 1,
+            "review_round": 0,
+            "status": "EVIDENCE_PACK",
+            "summary": "Report-only smoke completed",
+            "payload": {
+                "claimed_state": "ready_for_review",
+                "changed_files": [],
+                "validation_not_run": "report-only real executor smoke",
+                "scope_violations": [],
+                "report": f"{executor_id} report smoke completed for {task_id}",
+                "raw_log_path": "stdout.log",
+                "receipt_path": "terminal",
+            },
+        }
+        return (
+            "Goal: Report-only smoke. Verify that this AGPair executor can return AGPair-compatible report evidence.\n"
+            f"Scope: Work only inside this disposable AGPair git worktree: {worktree_path}\n"
+            "Do not access user home, private logs, credentials, browser state, or unrelated paths.\n"
+            "Required changes: None. This is report-only. Do not edit files.\n"
+            "Do not inspect the repository, run tests, start subagents, browse the web, or search outside this smoke task.\n"
+            "Exit criteria: Print a concise report sentence, then print this exact one-line AGPair terminal receipt JSON as the final output line:\n"
+            f"{json.dumps(receipt, ensure_ascii=False, separators=(',', ':'))}\n\n"
+            f"Task id: {task_id}\n"
+            f"Executor under test: {executor_id}\n"
+            f"Controller under test: {controller}\n"
+            f"Scenario under test: {scenario}\n"
+        )
+
     target_file = f"tests/fixtures/external_executor_smoke/{_slug(executor_id)}.smoke"
     receipt = {
         "schema_version": "1",
@@ -167,6 +206,7 @@ def _body_for_executor(executor_id: str, controller: str, task_id: str, worktree
         f"Task id: {task_id}\n"
         f"Executor under test: {executor_id}\n"
         f"Controller under test: {controller}\n"
+        f"Scenario under test: {scenario}\n"
     )
 
 
@@ -214,22 +254,64 @@ def _fallback_suggestion(failure_class: str | None) -> str | None:
         return None
     if failure_class in {"executor_suppressed", "executor_unavailable", "executor_auth_required"}:
         return "switch_executor_or_use_controller_native_subagent"
-    if failure_class in {"terminal_receipt_missing", "changed_files_not_present", "report_missing"}:
+    if failure_class == "executor_quota_exhausted":
+        return "wait_for_quota_or_switch_executor"
+    if failure_class in {
+        "terminal_receipt_missing",
+        "changed_files_not_present",
+        "changed_files_missing",
+        "report_missing",
+        "diff_missing",
+        "evidence_output_missing",
+    }:
         return "retry_bounded_slice_or_switch_executor"
-    if failure_class == "no_progress_timeout":
-        return "abandon_and_switch_executor"
+    if failure_class == "apply_conflict":
+        return "inspect_diff_then_rework_or_retry"
+    if failure_class == "no_progress_budget_exceeded":
+        return "inspect_status_then_retry_or_switch_executor"
     return "inspect_artifacts_then_retry_or_fallback"
 
 
 def _value_metric_defaults(adoptable_result: str, failure_class: str | None) -> dict[str, Any]:
+    agent_result = _agent_result_payload(
+        adoptable_result=adoptable_result,
+        failure_class=failure_class,
+        require_changed_files=True,
+    )
     return {
         "adoptable_result": adoptable_result,
         "adoptable": adoptable_result in {"yes", "partial"},
+        "agent_result": agent_result,
+        "controller_action": agent_result["controller_action"],
         "time_to_first_useful_signal_seconds": None,
         "fallback_suggestion": _fallback_suggestion(failure_class),
         "controller_rework": "none" if adoptable_result == "yes" else "unknown",
         "protocol_warnings": [],
         "failure_class": failure_class,
+    }
+
+
+def _agent_result_payload(
+    *,
+    adoptable_result: str,
+    failure_class: str | None,
+    require_changed_files: bool,
+) -> dict[str, Any]:
+    if adoptable_result == "no":
+        return {
+            "state": "blocked",
+            "controller_action": "retry_or_switch_executor",
+            "summary": failure_class or "Executor result is not adoptable.",
+            "hard_blockers": [failure_class] if failure_class else [],
+            "soft_warnings": [],
+        }
+    state = "usable" if adoptable_result == "yes" else "needs_review"
+    return {
+        "state": state,
+        "controller_action": "review_then_apply" if require_changed_files else "use_result",
+        "summary": "Executor result is usable for controller verification.",
+        "hard_blockers": [],
+        "soft_warnings": [],
     }
 
 
@@ -249,7 +331,13 @@ def _executor_runtime_metadata(executor_id: str, health: dict[str, Any] | None =
     return metadata
 
 
-def _adoption_evidence(*, status_payload: dict[str, Any] | None, worktree_path: Path) -> dict[str, Any]:
+def _adoption_evidence(
+    *,
+    status_payload: dict[str, Any] | None,
+    worktree_path: Path,
+    require_changed_files: bool,
+    extra_blockers: list[str] | None = None,
+) -> dict[str, Any]:
     receipt, receipt_payload = _terminal_receipt_payload(status_payload)
     changed_files, present_changed_files = _changed_file_evidence(
         worktree_path,
@@ -263,9 +351,9 @@ def _adoption_evidence(*, status_payload: dict[str, Any] | None, worktree_path: 
     blockers: list[str] = []
     if receipt is None:
         blockers.append("terminal_receipt_missing")
-    if not changed_files:
+    if require_changed_files and not changed_files:
         blockers.append("changed_files_missing")
-    elif len(present_changed_files) != len(changed_files):
+    elif changed_files and len(present_changed_files) != len(changed_files):
         blockers.append("changed_files_not_present")
     if not (isinstance(report_text, str) and report_text.strip()) and not report_path:
         blockers.append("report_missing")
@@ -278,6 +366,7 @@ def _adoption_evidence(*, status_payload: dict[str, Any] | None, worktree_path: 
         else []
     )
     status_adoption = status_payload.get("adoption_result") if status_payload else None
+    status_agent_result = status_payload.get("agent_result") if status_payload else None
     raw_status_adoptable_result = (
         status_adoption.get("adoptable_result")
         if isinstance(status_adoption, dict)
@@ -289,7 +378,11 @@ def _adoption_evidence(*, status_payload: dict[str, Any] | None, worktree_path: 
         if isinstance(status_adoption, dict) and isinstance(status_adoption.get("blockers"), list)
         else []
     )
-    adoption_blockers = status_blockers if status_adoptable_result else blockers
+    adoption_blockers = list(status_blockers if status_adoptable_result else blockers)
+    if extra_blockers:
+        for blocker in extra_blockers:
+            if blocker and blocker not in adoption_blockers:
+                adoption_blockers.append(blocker)
     adoptable_result = (
         status_adoptable_result
         if status_adoptable_result in {"yes", "partial", "no", "unknown"}
@@ -315,10 +408,23 @@ def _adoption_evidence(*, status_payload: dict[str, Any] | None, worktree_path: 
     )
     is_adoptable = adoptable_result in {"yes", "partial"} and not adoption_blockers
     failure_class = None if is_adoptable else (adoption_blockers[0] if adoption_blockers else "not_adoptable")
+    if not isinstance(status_agent_result, dict) and isinstance(status_adoption, dict):
+        status_agent_result = status_adoption.get("agent_result")
+    agent_result = (
+        status_agent_result
+        if isinstance(status_agent_result, dict)
+        else _agent_result_payload(
+            adoptable_result=adoptable_result,
+            failure_class=failure_class,
+            require_changed_files=require_changed_files,
+        )
+    )
 
     return {
         "adoptable_result": adoptable_result,
         "adoptable": is_adoptable,
+        "agent_result": agent_result,
+        "controller_action": agent_result.get("controller_action"),
         "adoption_blockers": adoption_blockers,
         "controller_rework": controller_rework,
         "protocol_warnings": protocol_warnings,
@@ -526,7 +632,7 @@ def _wait_for_status(
                 "phase": status_payload.get("phase") if status_payload else None,
                 "timed_out": False,
                 "watchdog_triggered": True,
-                "blocker_type": "no_progress_timeout",
+                "blocker_type": "no_progress_budget_exceeded",
                 "reason": reason,
                 "terminate_detail": terminate_detail,
                 "abandon_returncode": abandon.returncode,
@@ -555,6 +661,7 @@ def _executor_result(
     repo_path: Path,
     controller: str,
     executor_id: str,
+    scenario: str,
     allow_self_executor: bool,
     timeout_seconds: float,
     interval_seconds: float,
@@ -573,7 +680,9 @@ def _executor_result(
         )
     except ValueError as exc:
         return {
+            "executor": executor_id,
             "executor_id": executor_id,
+            "scenario": scenario,
             "outcome": "blocked",
             "blocker_type": "invalid_executor",
             "reason": str(exc),
@@ -583,21 +692,33 @@ def _executor_result(
         }
     if decision.rejected_executor:
         health = executor_health_snapshot(run_launch_probe=True).get(executor_id, {})
+        skipped = next(
+            (item for item in decision.skipped_executors if item.get("executor_id") == decision.rejected_executor),
+            {},
+        )
+        blocker_type = skipped.get("blocker_type") or health.get("last_failure_type") or "executor_suppressed"
         return {
+            "executor": executor_id,
             "executor_id": executor_id,
+            "scenario": scenario,
             "outcome": "blocked",
-            "blocker_type": health.get("last_failure_type") or "executor_suppressed",
-            "reason": decision.reasons[-1] if decision.reasons else "executor rejected by controller policy",
+            "blocker_type": blocker_type,
+            "reason": skipped.get("reason") or (decision.reasons[-1] if decision.reasons else "executor rejected by controller policy"),
             "controller_policy": decision.to_dict(),
             "health": health,
             "attempted": False,
             **_executor_runtime_metadata(executor_id, health),
-            **_value_metric_defaults("no", health.get("last_failure_type") or "executor_suppressed"),
+            **_value_metric_defaults("no", str(blocker_type)),
         }
 
-    task_id = f"TASK-SMOKE-{_slug(controller)[:8].upper()}-{_slug(executor_id).replace('-', '')[:10].upper()}-{run_id[-6:]}"
+    task_id = (
+        f"TASK-SMOKE-{_slug(controller)[:8].upper()}-"
+        f"{_slug(scenario).replace('-', '')[:8].upper()}-"
+        f"{_slug(executor_id).replace('-', '')[:10].upper()}-{run_id[-6:]}"
+    )
     expected_execution_path = _expected_isolated_execution_path(repo_path, task_id)
     cleanup_target = expected_execution_path
+    is_implementation = scenario == "implementation_smoke"
 
     start_cmd = [
         sys.executable,
@@ -611,15 +732,19 @@ def _executor_result(
         policy_controller,
         "--executor",
         executor_id,
+        "--task-kind",
+        "implementation" if is_implementation else "quick_review",
+        "--wait-policy",
+        "lease",
         "--completion-policy",
-        "evidence",
+        "evidence" if is_implementation else "report",
         "--authorization-profile",
-        "local_mutating",
+        "local_mutating" if is_implementation else "local_readonly",
         "--isolated-worktree",
         "--task-id",
         task_id,
         "--body",
-        _body_for_executor(executor_id, policy_controller, task_id, expected_execution_path),
+        _body_for_executor(executor_id, policy_controller, task_id, expected_execution_path, scenario),
         "--no-wait",
     ]
     if dirty_snapshot != "default":
@@ -651,7 +776,9 @@ def _executor_result(
         if start.returncode != 0:
             health = executor_health_snapshot().get(executor_id, {})
             result_payload = {
+                "executor": executor_id,
                 "executor_id": executor_id,
+                "scenario": scenario,
                 "task_id": task_id,
                 "outcome": "blocked",
                 "blocker_type": "task_start_timeout" if start.returncode == 124 else "task_start_failed",
@@ -685,10 +812,80 @@ def _executor_result(
         outcome = "ready_for_review" if phase in TERMINAL_OK_PHASES else "blocked"
         if wait_returncode != 0 and phase not in TERMINAL_OK_PHASES:
             outcome = "blocked"
-        adoption = _adoption_evidence(status_payload=status_payload, worktree_path=execution_path)
+        git_status_short = _run(
+            ["git", "-C", str(execution_path), "status", "--short", "--untracked-files=all"],
+            timeout=30,
+        ).stdout
+        git_diff_name_status = _run(["git", "-C", str(execution_path), "diff", "--name-status"], timeout=30).stdout
+        diff_payload: dict[str, Any] | None = None
+        apply_check_payload: dict[str, Any] | None = None
+        diff_available = False
+        apply_check_ok: bool | None = None
+        scenario_blockers: list[str] = []
+        if is_implementation and phase in TERMINAL_OK_PHASES:
+            diff_proc = _run(
+                [
+                    sys.executable,
+                    "-m",
+                    "agpair.cli.app",
+                    "task",
+                    "diff",
+                    task_id,
+                    "--json",
+                ],
+                cwd=PROJECT_ROOT,
+                timeout=30,
+            )
+            diff_payload = _parse_json_output(diff_proc.stdout) or {
+                "ok": False,
+                "reason": (diff_proc.stderr or diff_proc.stdout).strip(),
+                "returncode": diff_proc.returncode,
+            }
+            diff_available = (
+                diff_proc.returncode == 0
+                and bool(diff_payload.get("ok"))
+                and bool(diff_payload.get("has_patch"))
+                and bool(diff_payload.get("changed_files"))
+            )
+            if not diff_available:
+                scenario_blockers.append("diff_missing")
+            apply_proc = _run(
+                [
+                    sys.executable,
+                    "-m",
+                    "agpair.cli.app",
+                    "task",
+                    "apply",
+                    task_id,
+                    "--check",
+                    "--json",
+                ],
+                cwd=PROJECT_ROOT,
+                timeout=30,
+            )
+            apply_check_payload = _parse_json_output(apply_proc.stdout) or {
+                "ok": False,
+                "reason": (apply_proc.stderr or apply_proc.stdout).strip(),
+                "returncode": apply_proc.returncode,
+            }
+            apply_check_ok = apply_proc.returncode == 0 and bool(apply_check_payload.get("ok"))
+            if not apply_check_ok and "diff_missing" not in scenario_blockers:
+                scenario_blockers.append(str(apply_check_payload.get("error") or "apply_conflict"))
+        elif not is_implementation:
+            diff_available = bool(git_status_short.strip())
+            apply_check_ok = None
+            if diff_available:
+                scenario_blockers.append("unexpected_report_diff")
+
+        adoption = _adoption_evidence(
+            status_payload=status_payload,
+            worktree_path=execution_path,
+            require_changed_files=is_implementation,
+            extra_blockers=scenario_blockers,
+        )
         if outcome == "ready_for_review" and not adoption["adoptable"]:
             outcome = "blocked"
-            blocker_type = blocker_type or "adoptable_result_missing"
+            blocker_type = blocker_type or adoption.get("failure_class") or "adoptable_result_missing"
         if blocker_type and not adoption["adoptable"]:
             adoption = {
                 **adoption,
@@ -697,7 +894,9 @@ def _executor_result(
             }
         health = executor_health_snapshot().get(executor_id, {})
         result_payload = {
+            "executor": executor_id,
             "executor_id": executor_id,
+            "scenario": scenario,
             "task_id": task_id,
             "outcome": outcome,
             "blocker_type": blocker_type,
@@ -705,11 +904,12 @@ def _executor_result(
             "attempted": True,
             "worktree_path": str(cleanup_target),
             "execution_repo_path": str(execution_path),
-            "git_status_short": _run(
-                ["git", "-C", str(execution_path), "status", "--short", "--untracked-files=all"],
-                timeout=30,
-            ).stdout,
-            "git_diff_name_status": _run(["git", "-C", str(execution_path), "diff", "--name-status"], timeout=30).stdout,
+            "git_status_short": git_status_short,
+            "git_diff_name_status": git_diff_name_status,
+            "diff_available": diff_available,
+            "apply_check_ok": apply_check_ok,
+            "diff_payload": diff_payload,
+            "apply_check_payload": apply_check_payload,
             "controller_policy": decision.to_dict(),
             "health": health,
             "start_returncode": start.returncode,
@@ -717,7 +917,15 @@ def _executor_result(
             "status_returncode": status.returncode,
             **_executor_runtime_metadata(executor_id, health),
             "wait_payload": wait_payload,
+            "controller_wait_outcome": (
+                (wait_payload.get("last_wait_payload") or {}).get("outcome")
+                if isinstance(wait_payload.get("last_wait_payload"), dict)
+                else None
+            )
+            or wait_payload.get("outcome")
+            or ("terminal_success" if phase in TERMINAL_OK_PHASES else None),
             "time_to_first_useful_signal_seconds": wait_payload.get("time_to_first_useful_signal_seconds"),
+            "time_to_first_signal_seconds": wait_payload.get("time_to_first_useful_signal_seconds"),
             "status": status_payload,
             "artifacts": _artifact_summary(status_payload),
             **adoption,
@@ -742,6 +950,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run AGPair external executor smoke checks.")
     parser.add_argument("--repo-path", required=True)
     parser.add_argument("--controller", default="generic")
+    parser.add_argument("--scenario", choices=sorted(VALID_SCENARIOS), default="implementation_smoke")
     parser.add_argument("--executors", help="Comma-separated executor ids.")
     parser.add_argument("--all-registered", action="store_true")
     parser.add_argument("--allow-self-executor", action="store_true")
@@ -760,12 +969,26 @@ def main(argv: list[str] | None = None) -> int:
     repo_path = Path(args.repo_path).expanduser().resolve()
     _ensure_git_repo(repo_path)
     run_id = f"smoke-{_slug(args.controller)}-{_timestamp()}"
+    registered_executor_list = list(registered_executor_ids())
+    policy_expected_executors: list[str] | None = None
+    policy_suppressed_executors: list[str] = []
     if args.all_registered:
-        executor_ids = list(registered_executor_ids())
+        selection_mode = "all_registered"
+        executor_ids = list(registered_executor_list)
     elif args.executors:
+        selection_mode = "explicit"
         executor_ids = [item.strip() for item in args.executors.split(",") if item.strip()]
     else:
-        raise SystemExit("pass --executors or --all-registered")
+        selection_mode = "controller_policy"
+        policy_controller = "generic" if args.controller == "diagnostic" else args.controller
+        decision = resolve_controller_policy(
+            controller=policy_controller,
+            allow_self_executor=args.allow_self_executor,
+            require_available=False,
+        )
+        executor_ids = list(decision.eligible_executors)
+        policy_expected_executors = list(decision.eligible_executors)
+        policy_suppressed_executors = list(decision.suppressed_executors)
     if not executor_ids:
         raise SystemExit("no executors selected")
 
@@ -774,6 +997,7 @@ def main(argv: list[str] | None = None) -> int:
             repo_path=repo_path,
             controller=args.controller,
             executor_id=executor_id,
+            scenario=args.scenario,
             allow_self_executor=args.allow_self_executor,
             timeout_seconds=args.timeout_seconds,
             interval_seconds=args.interval_seconds,
@@ -789,7 +1013,12 @@ def main(argv: list[str] | None = None) -> int:
         "run_id": run_id,
         "repo_path": str(repo_path),
         "controller": args.controller,
+        "scenario": args.scenario,
         "executors": executor_ids,
+        "selection_mode": selection_mode,
+        "registered_executors": registered_executor_list,
+        "policy_expected_executors": policy_expected_executors,
+        "policy_suppressed_executors": policy_suppressed_executors,
         "allow_self_executor": args.allow_self_executor,
         "all_registered": args.all_registered,
         "timeout_seconds": args.timeout_seconds,
@@ -798,6 +1027,7 @@ def main(argv: list[str] | None = None) -> int:
         "results": results,
     }
     report["harness_completed"] = True
+    report["all_selected_attempted"] = all(result.get("attempted") is True for result in results)
     report["all_success"] = all(result.get("adoptable") is True for result in results)
     report_path = repo_path / ".agpair" / "smoke" / "reports" / f"{run_id}.json"
     report["report_path"] = str(report_path)

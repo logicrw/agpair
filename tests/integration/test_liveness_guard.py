@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import click
 from datetime import UTC, datetime, timedelta
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -24,7 +25,13 @@ from typer.testing import CliRunner
 from agpair.cli.app import app
 from agpair.config import AppPaths
 from agpair.models import TaskRecord
-from agpair.runtime_liveness import LivenessState, classify_liveness, is_task_live
+from agpair.runtime_liveness import (
+    LivenessState,
+    build_signal_summary,
+    classify_liveness,
+    is_task_live,
+    recommend_controller_action,
+)
 from agpair.storage.db import connect, ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
@@ -162,6 +169,55 @@ def test_classify_active_via_both(tmp_path: Path) -> None:
     task = repo.get_task("TASK-LG1")
     assert classify_liveness(task) == LivenessState.active_via_both
     assert is_task_live(task) is True
+
+
+def test_signal_summary_reports_output_metadata_without_log_body(tmp_path: Path) -> None:
+    repo = _seed_acked_task(tmp_path)
+    task = repo.get_task("TASK-LG1")
+    assert task is not None
+    session_dir = Path(task.executor_session_id or "")
+    session_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = session_dir / "stdout.log"
+    stdout_path.write_text("useful progress\n", encoding="utf-8")
+    signal_time = datetime(2026, 3, 24, 11, 59, tzinfo=UTC)
+    os.utime(stdout_path, (signal_time.timestamp(), signal_time.timestamp()))
+
+    signal = build_signal_summary(
+        task,
+        now=datetime(2026, 3, 24, 12, 0, tzinfo=UTC),
+        freshness_seconds=300,
+    )
+
+    assert signal.state == LivenessState.active_via_output.value
+    assert signal.last_signal_type == "stdout"
+    assert signal.stdout_bytes == len("useful progress\n")
+    assert signal.stderr_bytes == 0
+    assert signal.controller_silence_seconds == 60
+
+
+def test_recommend_controller_action_detaches_live_background_task(tmp_path: Path) -> None:
+    repo = _seed_acked_task(tmp_path)
+    with sqlite3.connect(_make_paths(tmp_path).db_path) as conn:
+        conn.execute(
+            "UPDATE tasks SET wait_policy=?, controller_wait_seconds=?, execution_budget_seconds=?, background_ok=? WHERE task_id=?",
+            ("lease", 30, 3600, 1, "TASK-LG1"),
+        )
+        conn.commit()
+    repo.update_workspace_activity(
+        task_id="TASK-LG1",
+        activity_at=datetime(2026, 3, 24, 11, 59, tzinfo=UTC).isoformat(),
+    )
+    task = repo.get_task("TASK-LG1")
+    assert task is not None
+
+    signal = build_signal_summary(
+        task,
+        now=datetime(2026, 3, 24, 12, 0, tzinfo=UTC),
+        freshness_seconds=300,
+    )
+
+    assert signal.state == LivenessState.active_via_workspace.value
+    assert recommend_controller_action(task, signal) == "detach_and_continue"
 
 
 def test_classify_stale_signals_are_silent(tmp_path: Path) -> None:
@@ -640,6 +696,29 @@ def test_task_status_shows_silent_liveness_for_acked(tmp_path: Path, monkeypatch
     result = CliRunner().invoke(app, ["task", "status", "TASK-LG1"])
     assert result.exit_code == 0
     assert "liveness_state: silent" in result.stdout
+
+
+def test_task_status_json_includes_signal_state_and_controller_action(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _seed_acked_task(tmp_path)
+    with sqlite3.connect(_make_paths(tmp_path).db_path) as conn:
+        conn.execute(
+            "UPDATE tasks SET wait_policy=?, controller_wait_seconds=?, execution_budget_seconds=?, background_ok=? WHERE task_id=?",
+            ("lease", 30, 3600, 1, "TASK-LG1"),
+        )
+        conn.commit()
+    repo.update_workspace_activity(
+        task_id="TASK-LG1",
+        activity_at=datetime.now(UTC).isoformat(),
+    )
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-LG1", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["signal_state"]["state"] == "active_via_workspace"
+    assert payload["signal_state"]["last_signal_type"] == "workspace"
+    assert payload["controller_action"] == "continue_waiting"
 
 
 def test_task_status_no_liveness_for_non_acked(tmp_path: Path, monkeypatch) -> None:

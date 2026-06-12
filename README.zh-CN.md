@@ -6,7 +6,7 @@
 
 [English](README.md) | [新手教程](docs/getting-started-zh.md) | [命令参考](docs/usage.zh-CN.md)
 
-AGPair 是给 Codex 和 Claude Code 使用的 external-agent-first 控制面。
+AGPair 是一个本地任务生命周期和证据层，让 Codex 或 Claude Code 把有边界的工作委派给外部 CLI agent，然后用结构化证据等待、验收、采纳、retry 或 fallback。
 
 主控 agent 负责规划和验收。AGPair 负责把任务派给外部 CLI executor、持久化任务状态、低噪等待、校验结构化 receipt，并在 executor 阻塞时支持带上下文的 retry。
 
@@ -22,7 +22,7 @@ AGPair 是给 Codex 和 Claude Code 使用的 external-agent-first 控制面。
 
 实际分工是：`codex` 是给 Claude Code 主控使用的外部 Codex CLI worker；Codex 主控自己的 fallback / review lane 应使用 Codex 原生 subagent。`claude-code` 是给 Codex 主控使用的外部 Claude Code worker；Claude Code 主控自己的 fallback / review lane 应使用 Claude Code 原生 subagent。
 
-新任务不再使用 Gemini。历史 `gemini_cli` 记录仍可检查或清理。
+历史 executor 记录仍可为兼容性读取。新任务只使用上面的 active executor id。
 
 所有 active 外部 CLI executor 默认都使用 `managed-natural`。AGPair 负责任务边界、
 receipt、日志、status、retry 和验收证据；外部 CLI 继续使用它正常启动时的
@@ -48,6 +48,14 @@ python3 -m pip install -e '.[dev]'
 ```bash
 ln -sf "$PWD/.venv/bin/agpair" ~/.local/bin/agpair
 agpair doctor
+agpair doctor --fresh --repo-path /path/to/repo
+```
+
+如果 Antigravity CLI 的 print 模式在当前默认模型下超时，可以为 AGPair 启动的
+worker 指定一个已验证可用的 Antigravity 模型：
+
+```bash
+export AGPAIR_ANTIGRAVITY_MODEL="Gemini 3.1 Pro (Low)"
 ```
 
 派发任务。`task start` 默认会等待终态：
@@ -55,9 +63,12 @@ agpair doctor
 ```bash
 agpair task start \
   --executor antigravity-cli \
-  --authorization-profile local_mutating \
+  --task-kind quick_review \
+  --wait-policy lease \
+  --authorization-profile local_readonly \
+  --completion-policy report \
   --repo-path /path/to/repo \
-  --body "Goal: 修复失败的 smoke test。Required evidence: 运行聚焦测试。"
+  --body "Goal: 审查指定区域。Scope: 仅限已点名文件。Required changes: None. This is report-only. Do not edit files. Exit criteria: 返回带证据的中文结论。"
 ```
 
 异步或并行任务使用低噪 watch：
@@ -65,9 +76,12 @@ agpair task start \
 ```bash
 agpair task start \
   --executor antigravity-cli \
-  --authorization-profile local_mutating \
+  --task-kind quick_review \
+  --wait-policy lease \
+  --authorization-profile local_readonly \
+  --completion-policy report \
   --repo-path /path/to/repo \
-  --body "Goal: ..." \
+  --body "Goal: 审查指定区域。Scope: 仅限已点名文件。Required changes: None. This is report-only. Do not edit files. Exit criteria: 返回带证据的中文结论。" \
   --no-wait
 
 agpair task watch TASK-123 --json
@@ -80,12 +94,28 @@ agpair task watch TASK-123 --json
 ```bash
 agpair task start \
   --executor antigravity-cli \
+  --task-kind implementation \
+  --wait-policy lease \
   --authorization-profile local_mutating \
   --completion-policy evidence \
   --isolated-worktree \
   --repo-path /path/to/repo \
   --body "Goal: 做一个有边界的修改。Scope: 写清允许文件。Required changes: 写清要改什么。Exit criteria: 跑聚焦验证。"
 ```
+
+`--wait-policy lease` 会让主控在有界窗口里低噪等待。如果 executor 仍在运行，AGPair 会返回结构化的 background-running 结果，而不是让主控浪费模型轮次轮询，或过早杀掉任务。
+
+isolated 代码改动需要显式 review 和采纳：
+
+```bash
+agpair task diff TASK-123
+agpair task apply TASK-123 --check
+agpair task apply TASK-123
+```
+
+推荐写法仍然是 `--repo-path`、`--body` 和 `local_readonly` 这类完整 profile。
+`task start` 兼容 `--repo`、`--prompt`、`readonly` 等常见别名，也会把过短 body
+自动补成结构化任务体；这些只是兜底，不应该成为 controller skill 的默认写法。
 
 isolated 的 mutating evidence/commit 任务默认会把 tracked 的 staged/unstaged 改动同步到 executor worktree；不会复制 ignored 或 untracked 文件。需要强制干净基线时传 `--dirty-snapshot off`。
 
@@ -158,9 +188,9 @@ V1 不做“运行中暂停等待授权”。越界时 executor 应返回 `block
 
 ## 验收门
 
-`ready_for_review`、`evidence_ready`、`committed` 都不是自动成功。主控必须检查 AGPair 状态、git diff/commit 证据、receipt、必要时的 raw log 路径，并运行相应验证后才能报告完成。真实 executor smoke 也必须看到 `all_success=true`，且每个尝试过的 executor 都是无 blocker 的 `adoptable_result=yes` 或 `partial`；只 dispatch 成功或只进入成功 phase 不算通过。
+`ready_for_review`、`evidence_ready`、`committed` 都不是自动成功。主控必须检查 `agent_result`、git diff/commit 证据、receipt、必要时的 raw log 路径，并运行相应验证后才能报告完成。真实 executor smoke 也必须看到 `all_success=true`，且每个尝试过的 executor 都有可用的 `agent_result.state` 和 `agent_result.controller_action`，例如 `use_result` 或 `review_then_apply`；只 dispatch 成功或只进入成功 phase 不算通过。
 
-判断 AGPair 是否真的有价值，主要看 completion rate、adoptable-result rate、time-to-first-useful-signal、fallback rate、controller rework rate，以及 abandoned/no-progress rate。用 `task status --json`、`task list --json` 和 `scripts/smoke_real_executors.py` 看这些字段。
+判断 AGPair 是否真的有价值，主要看 completion rate、可用 `agent_result` rate、time-to-first-useful-signal、fallback rate、controller rework rate，以及 abandoned/no-progress rate。用 `task status --json`、`task list --json` 和 `scripts/smoke_real_executors.py` 看这些字段。
 
 主控验收 evidence 后，用下面的命令标记任务已接受，避免 Stop hook 对同一个 receipt 反复阻塞：
 
@@ -232,7 +262,7 @@ AGPair 不是语义控制器。规划、范围决策、review 和最终验证仍
 
 ## 兼容性
 
-仓库仍保留 Antigravity 桌面端 companion extension 和旧 bridge 诊断，用于已有安装。新任务推荐路径是 `antigravity-cli` executor，不是 IDE bridge。
+仓库仍保留旧 companion 和 bridge 诊断，供已有安装读取。当前任务派发使用“当前模型”中列出的注册 CLI executor。
 
 ## License
 

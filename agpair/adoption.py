@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
+from agpair.agent_result import AgentResult, blocking_protocol_warnings, unique
 from agpair.completion import EffectiveTaskPolicy
 
 AdoptableResult = Literal["yes", "partial", "no", "unknown"]
@@ -24,6 +25,8 @@ class AdoptionEvidence:
     has_scope_violations: bool = False
     has_commit: bool = False
     has_diff: bool = False
+    has_apply_check: bool = False
+    apply_check_passed: bool = False
     controller_rework_required: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -37,13 +40,85 @@ class AdoptionDecision:
     warnings: tuple[str, ...] = ()
     evidence: AdoptionEvidence = AdoptionEvidence()
     controller_rework: ControllerRework = "unknown"
+    agent_result: AgentResult | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        payload = asdict(self)
-        payload["blockers"] = list(self.blockers)
-        payload["warnings"] = list(self.warnings)
-        payload["evidence"] = self.evidence.to_dict()
+        payload: dict[str, Any] = {
+            "adoptable_result": self.adoptable_result,
+            "blockers": list(self.blockers),
+            "warnings": list(self.warnings),
+            "evidence": self.evidence.to_dict(),
+            "controller_rework": self.controller_rework,
+        }
+        if self.agent_result is not None:
+            payload["agent_result"] = self.agent_result.to_dict()
         return payload
+
+
+def _agent_result_for_decision(
+    *,
+    adoptable_result: AdoptableResult,
+    blockers: tuple[str, ...],
+    warnings: tuple[str, ...],
+    evidence: AdoptionEvidence,
+    controller_rework: ControllerRework,
+    policy: str,
+) -> AgentResult:
+    hard_blockers = unique(blockers)
+    soft_warnings = unique(warnings)
+    has_code_evidence = evidence.has_changed_files or evidence.has_diff or evidence.has_commit
+    if adoptable_result == "no":
+        return AgentResult(
+            state="blocked",
+            controller_action="retry_or_switch_executor",
+            summary="Executor result is missing required usable evidence or reported a blocker.",
+            hard_blockers=hard_blockers,
+            soft_warnings=soft_warnings,
+        )
+    if adoptable_result == "partial" or controller_rework in {"major", "redone"}:
+        action = "review_then_apply" if has_code_evidence else "use_result" if evidence.has_report else "inspect_evidence"
+        return AgentResult(
+            state="needs_review",
+            controller_action=action,
+            summary="Executor result contains useful evidence but needs controller review before adoption.",
+            hard_blockers=hard_blockers,
+            soft_warnings=soft_warnings,
+        )
+    action = "use_result" if policy == "report" or (evidence.has_report and not has_code_evidence) else "review_then_apply"
+    return AgentResult(
+        state="usable",
+        controller_action=action,
+        summary="Executor result is usable with normal controller verification.",
+        hard_blockers=(),
+        soft_warnings=soft_warnings,
+    )
+
+
+def _make_decision(
+    adoptable_result: AdoptableResult,
+    blockers: tuple[str, ...],
+    warnings: tuple[str, ...],
+    evidence: AdoptionEvidence,
+    controller_rework: ControllerRework,
+    policy: str,
+) -> AdoptionDecision:
+    normalized_blockers = unique(blockers)
+    normalized_warnings = unique(warnings)
+    return AdoptionDecision(
+        adoptable_result,
+        normalized_blockers,
+        normalized_warnings,
+        evidence,
+        controller_rework,
+        _agent_result_for_decision(
+            adoptable_result=adoptable_result,
+            blockers=normalized_blockers,
+            warnings=normalized_warnings,
+            evidence=evidence,
+            controller_rework=controller_rework,
+            policy=policy,
+        ),
+    )
 
 
 def derive_adoption_decision(
@@ -64,7 +139,10 @@ def derive_adoption_decision(
     if not isinstance(payload, Mapping):
         payload = {}
 
+    worktree_diff = payload.get("worktree_diff")
     changed_files = _changed_files(payload.get("changed_files"))
+    if not changed_files and isinstance(worktree_diff, Mapping):
+        changed_files = _changed_files(worktree_diff.get("changed_files"))
     scope_violations = payload.get("scope_violations")
     scope_payload = scope_validation if isinstance(scope_validation, Mapping) else None
     has_undeclared_changes = _non_empty_list(scope_payload, "undeclared_changed_files")
@@ -84,6 +162,12 @@ def derive_adoption_decision(
     has_validation = bool(payload.get("validation")) or bool(payload.get("validation_not_run"))
     has_commit = bool(_string_value(payload.get("commit_ref")) or _string_value(payload.get("commit")) or _string_value(payload.get("commit_sha")))
     has_diff = bool((git_status_summary or "").strip())
+    has_apply_check = isinstance(worktree_diff, Mapping) and "apply_check_ok" in worktree_diff
+    apply_check_passed = bool(worktree_diff.get("apply_check_ok")) if isinstance(worktree_diff, Mapping) else False
+    apply_check_reason = _string_value(worktree_diff.get("apply_check_reason")) if isinstance(worktree_diff, Mapping) else None
+    has_worktree_patch = bool(worktree_diff.get("has_patch")) if isinstance(worktree_diff, Mapping) else False
+    if has_worktree_patch:
+        has_diff = True
     if changed_files_present is not None:
         present_changed_files = bool(changed_files_present)
     elif scope_payload is not None:
@@ -104,50 +188,57 @@ def derive_adoption_decision(
         has_scope_violations=has_scope_violations,
         has_commit=has_commit,
         has_diff=has_diff,
+        has_apply_check=has_apply_check,
+        apply_check_passed=apply_check_passed,
         controller_rework_required=controller_rework in {"minor", "major", "redone"},
     )
-    warnings = tuple(dict.fromkeys(protocol_warnings))
+    warnings = unique(tuple(protocol_warnings))
+    blocking_warnings = blocking_protocol_warnings(warnings)
     blockers: list[str] = []
     if protocol_errors:
         blockers.append("protocol_errors")
+    policy = effective_policy.effective_completion_policy
     receipt_status = _string_value(receipt.get("status") if isinstance(receipt, Mapping) else None).upper()
     blocker_type = _string_value(payload.get("blocker_type"))
     if receipt_status == "BLOCKED" or blocker_type:
         blockers.append(blocker_type or "blocked_terminal_result")
-        return AdoptionDecision("no", tuple(dict.fromkeys(blockers)), warnings, evidence, controller_rework)
+        return _make_decision("no", tuple(blockers), warnings, evidence, controller_rework, policy)
 
-    policy = effective_policy.effective_completion_policy
     if policy == "report":
         if not has_report:
             blockers.append("report_missing")
-            return AdoptionDecision("no", tuple(blockers), warnings, evidence, controller_rework)
+            return _make_decision("no", tuple(blockers), warnings, evidence, controller_rework, policy)
         if blockers:
-            return AdoptionDecision("partial", tuple(blockers), warnings, evidence, controller_rework)
-        result: AdoptableResult = "partial" if warnings or not has_receipt else "yes"
-        return AdoptionDecision(result, (), warnings, evidence, controller_rework)
+            return _make_decision("partial", tuple(blockers), warnings, evidence, controller_rework, policy)
+        result: AdoptableResult = "yes" if has_receipt else "partial"
+        return _make_decision(result, (), warnings, evidence, controller_rework, policy)
 
     if policy == "commit":
         _append_scope_blockers(blockers, evidence)
         if has_commit:
-            result: AdoptableResult = "partial" if blockers or warnings else "yes"
-            return AdoptionDecision(result, tuple(blockers), warnings, evidence, controller_rework)
+            result = "partial" if blockers or blocking_warnings else "yes"
+            return _make_decision(result, tuple(blockers), warnings, evidence, controller_rework, policy)
         if has_diff or changed_files:
             blockers.append("commit_missing")
-            return AdoptionDecision("partial", tuple(blockers), warnings, evidence, controller_rework)
+            return _make_decision("partial", tuple(blockers), warnings, evidence, controller_rework, policy)
         blockers.append("commit_and_diff_missing")
-        return AdoptionDecision("no", tuple(blockers), warnings, evidence, controller_rework)
+        return _make_decision("no", tuple(blockers), warnings, evidence, controller_rework, policy)
 
     if not changed_files and not has_report and not has_diff:
         blockers.append("evidence_missing")
-        return AdoptionDecision("no", tuple(blockers), warnings, evidence, controller_rework)
+        return _make_decision("no", tuple(blockers), warnings, evidence, controller_rework, policy)
     if changed_files and not present_changed_files:
         blockers.append("changed_files_not_present")
     _append_scope_blockers(blockers, evidence)
+    if has_apply_check and not apply_check_passed:
+        blockers.append(apply_check_reason or "apply_check_failed")
     if not has_validation:
         blockers.append("validation_missing")
     if blockers:
-        return AdoptionDecision("partial", tuple(blockers), warnings, evidence, controller_rework)
-    return AdoptionDecision("partial" if warnings else "yes", (), warnings, evidence, controller_rework)
+        if has_apply_check and not apply_check_passed:
+            return _make_decision("no", tuple(blockers), warnings, evidence, controller_rework, policy)
+        return _make_decision("partial", tuple(blockers), warnings, evidence, controller_rework, policy)
+    return _make_decision("partial" if blocking_warnings else "yes", (), warnings, evidence, controller_rework, policy)
 
 
 def _changed_files(value: Any) -> tuple[str, ...]:

@@ -25,6 +25,21 @@ VALID_AUTHORIZATION_PROFILES: tuple[str, ...] = (
     "external_network",
 )
 
+AUTHORIZATION_PROFILE_ALIASES: dict[str, str] = {
+    "readonly": "local_readonly",
+    "read_only": "local_readonly",
+    "read-only": "local_readonly",
+    "local-readonly": "local_readonly",
+    "mutating": "local_mutating",
+    "readwrite": "local_mutating",
+    "read_write": "local_mutating",
+    "read-write": "local_mutating",
+    "test_heavy": "local_test_heavy",
+    "test-heavy": "local_test_heavy",
+    "network": "external_network",
+    "external-network": "external_network",
+}
+
 _AUTHORIZATION_PROFILE_SUMMARIES: dict[str, str] = {
     "local_readonly": (
         "Allowed actions: inspect repository files, run read-only commands, and report findings. "
@@ -47,6 +62,7 @@ _AUTHORIZATION_PROFILE_SUMMARIES: dict[str, str] = {
 
 def validate_authorization_profile(profile: str | None) -> str:
     normalized = (profile or "local_mutating").strip().lower()
+    normalized = AUTHORIZATION_PROFILE_ALIASES.get(normalized, normalized.replace("-", "_"))
     if normalized in VALID_AUTHORIZATION_PROFILES:
         return normalized
     allowed = ", ".join(VALID_AUTHORIZATION_PROFILES)
@@ -90,6 +106,11 @@ class TaskRecord:
     is_approved: bool = False
     authorization_profile: str = "local_mutating"
     authorization_summary: str | None = None
+    task_kind: str = "generic"
+    wait_policy: str = "terminal"
+    controller_wait_seconds: float | None = None
+    execution_budget_seconds: float | None = None
+    background_ok: bool = False
     executor_session_id: str | None = None
     workflow_id: str | None = None
     workflow_node_id: str | None = None
@@ -105,6 +126,11 @@ class TaskAttemptRecord:
     authorization_profile: str
     requested_completion_policy: str
     effective_policy_json: str | None
+    task_kind: str
+    wait_policy: str
+    controller_wait_seconds: float | None
+    execution_budget_seconds: float | None
+    background_ok: bool
     environment_mode: str
     environment_mode_source: str
     skill_policy: str

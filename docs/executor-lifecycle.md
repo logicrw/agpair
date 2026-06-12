@@ -23,6 +23,11 @@ declares noninteractive flags or auth modes, the adapter command must emit the
 matching flags for the default mode, and unit tests must prove that parity for
 every active executor.
 
+For code-writing work, the lifecycle contract includes adoption, not just
+launch. An active mutating executor must be able to run in an isolated worktree,
+produce a worker diff, pass `agpair task apply TASK --check` against the
+controller repository, and leave final acceptance to the controller.
+
 Default modes keep executors natural. Failed attempts should recover by retrying
 the same natural executor, switching to another external executor, or handing
 back to the controller's native subagents:
@@ -35,6 +40,50 @@ back to the controller's native subagents:
 Do not introduce a new capability-bundle system just to add an executor. AGPair
 records launch mode and owns evidence capture; the external CLI owns its normal
 skills, MCP, provider config, and model behavior in `managed-natural` mode.
+
+## Runtime Policy Overlay
+
+`ExecutorSpec` is the compiled-in registry. User and controller preferences live
+in one runtime overlay at `~/.agpair/executors.json`; do not duplicate executor
+definitions there.
+
+The overlay may contain:
+
+- global disabled executors;
+- controller-specific disabled executors;
+- controller-specific priority order.
+
+The resolver combines the static registry and overlay in this order:
+
+1. normalize executor ids and reject removed aliases such as Gemini;
+2. apply lifecycle and static enabled state;
+3. apply controller self-suppression;
+4. apply global and controller disabled entries;
+5. apply controller priority order;
+6. optionally apply binary/auth launch availability checks.
+
+If a task directly requests an executor and that executor is disabled,
+suppressed, inactive, or unavailable, dispatch fails before launch with a
+machine-readable blocker. Direct requests must never silently fall through to a
+different executor. If no executor is requested, AGPair selects the first
+eligible executor after applying the policy.
+
+Use these commands to manage the overlay:
+
+```bash
+agpair policy list --controller codex
+agpair policy disable claude-code --controller codex
+agpair policy enable claude-code --controller codex
+agpair policy priority --controller codex antigravity-cli grok-cli claude-code
+agpair policy reset --controller codex
+```
+
+Use `--global` with `disable`, `enable`, or `reset` only when every controller
+should share the same change.
+
+`agpair doctor --fresh` reports the same resolved controller policies as
+`agpair policy list`, so a controller can explain why an executor was selected,
+skipped, suppressed, or disabled without reading the overlay by hand.
 
 If an executor changes its authentication source, declare the required
 OAuth login, auth environment, or settings source in the profile. Health checks
@@ -78,6 +127,8 @@ Minimum verification for a new active executor:
 - task dispatch test proving completion policies are honored;
 - smoke harness entry proving the executor can produce an adoptable result in a
   disposable worktree;
+- implementation smoke proving `task diff` is available and `task apply --check`
+  succeeds without mutating the real repo;
 - docs/skills update naming the executor only in the shared routing order.
 
 ## Offboarding
@@ -91,6 +142,15 @@ Use profile lifecycle status:
 
 Offboarding should require the profile status/replacement update plus tests and
 docs. It must not require deleting historical task rows, receipts, or logs.
+
+Temporary offboarding is normally a policy overlay change, not a code change:
+
+```bash
+agpair policy disable claude-code --controller codex
+```
+
+Permanent offboarding changes the profile lifecycle status. Historical tasks
+must stay inspectable either way.
 
 Offboarding checklist:
 
@@ -127,7 +187,7 @@ use:
 Diagnostic all-registered smoke may include self executors with an explicit
 allow-self flag. It should report every active executor as `adoptable_result`,
 `skipped`, or a precise blocker such as `executor_unavailable`,
-`executor_quota_exhausted`, `no_progress_timeout`, or
+`executor_quota_exhausted`, `no_progress_budget_exceeded`, or
 `report_output_missing`.
 
 Smoke reports are local evidence. Do not commit raw smoke reports, executor

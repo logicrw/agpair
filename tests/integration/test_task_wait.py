@@ -192,6 +192,74 @@ def test_wait_times_out(tmp_path: Path):
     assert result.phase == "acked"
 
 
+def test_wait_lease_expiry_is_success_for_background_task(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    repo.create_task(
+        task_id="T-LEASE",
+        repo_path="/r",
+        wait_policy="lease",
+        controller_wait_seconds=10,
+        execution_budget_seconds=3600,
+        background_ok=True,
+    )
+    repo.mark_acked(task_id="T-LEASE", session_id="s-1")
+
+    result = wait_for_terminal_phase(
+        _make_paths(tmp_path).db_path,
+        "T-LEASE",
+        interval_seconds=5,
+        timeout_seconds=60,
+        controller_wait_seconds=10,
+        background_ok=True,
+        strict_watchdog=False,
+        _clock=FakeClock(),
+    )
+
+    assert result.phase == "acked"
+    assert result.outcome == "controller_lease_expired"
+    assert result.controller_lease_expired is True
+    assert result.recommended_action == "detach_and_continue"
+    assert exit_code_for_dispatch(result) == 0
+
+
+def test_wait_soft_no_progress_is_success_for_background_task(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    repo.create_task(
+        task_id="T-SOFT-NO-PROGRESS",
+        repo_path="/r",
+        wait_policy="lease",
+        controller_wait_seconds=300,
+        execution_budget_seconds=3600,
+        background_ok=True,
+    )
+    repo.mark_acked(task_id="T-SOFT-NO-PROGRESS", session_id="s-1")
+    old_time = datetime(2026, 3, 24, 11, 44, tzinfo=UTC).isoformat()
+    with sqlite3.connect(_make_paths(tmp_path).db_path) as conn:
+        conn.execute(
+            "UPDATE tasks SET last_activity_at=?, updated_at=? WHERE task_id=?",
+            (old_time, old_time, "T-SOFT-NO-PROGRESS"),
+        )
+        conn.commit()
+
+    result = wait_for_terminal_phase(
+        _make_paths(tmp_path).db_path,
+        "T-SOFT-NO-PROGRESS",
+        interval_seconds=5,
+        timeout_seconds=60,
+        controller_wait_seconds=300,
+        background_ok=True,
+        strict_watchdog=False,
+        heartbeat_silence_seconds=300,
+        _clock=FakeClock(),
+        _utcnow=lambda: datetime(2026, 3, 24, 12, 0, tzinfo=UTC),
+    )
+
+    assert result.outcome == "soft_no_progress"
+    assert result.watchdog_triggered is True
+    assert result.recommended_action == "inspect_logs_or_continue_background"
+    assert exit_code_for_dispatch(result) == 0
+
+
 def test_wait_blocked_is_terminal(tmp_path: Path):
     repo = _make_repo(tmp_path)
     repo.create_task(task_id="T-4", repo_path="/r")
@@ -315,6 +383,29 @@ def test_task_wait_json_returns_structured_terminal_payload(tmp_path: Path, monk
             }
         ),
     )
+    repo.update_attempt_adoption(
+        task_id="T-WJ1",
+        attempt_no=1,
+        protocol_warnings_json="[]",
+        protocol_errors_json="[]",
+        adoptable_result="yes",
+        adoption_evidence_json=json.dumps(
+            {
+                "adoptable_result": "yes",
+                "blockers": [],
+                "warnings": [],
+                "evidence": {"has_commit": True},
+                "controller_rework": "none",
+                "agent_result": {
+                    "state": "usable",
+                    "controller_action": "review_then_apply",
+                    "summary": "ready",
+                    "hard_blockers": [],
+                    "soft_warnings": [],
+                },
+            }
+        ),
+    )
 
     result = CliRunner().invoke(app, ["task", "wait", "T-WJ1", "--json"])
 
@@ -326,13 +417,44 @@ def test_task_wait_json_returns_structured_terminal_payload(tmp_path: Path, monk
     assert payload["timed_out"] is False
     assert payload["watchdog_triggered"] is False
     assert payload["exit_code"] == 0
+    assert payload["agent_result"]["state"] == "usable"
+    assert payload["recommended_action"] == "review_then_apply"
+    assert payload["status_command"] == "agpair task status T-WJ1 --json"
+    assert "agpair task apply T-WJ1 --check" in payload["evidence_commands"]
     assert payload["task"]["task_id"] == "T-WJ1"
     assert payload["task"]["phase"] == "committed"
+    assert payload["task"]["controller_action"] == "review_then_apply"
     assert payload["task"]["terminal_receipt"]["summary"] == "Committed cleanly"
     assert payload["task"]["terminal_receipt"]["payload"]["commit_sha"] == "abc1234"
     assert payload["committed_result"]["commit_sha"] == "abc1234"
     assert payload["committed_result"]["changed_files"] == ["companion-extension/src/services/taskExecutionService.ts"]
     assert payload["committed_result"]["validation"] == ["npm test"]
+
+
+def test_task_wait_json_reports_lease_outcome(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = _make_repo(tmp_path)
+    repo.create_task(
+        task_id="T-WJ-LEASE",
+        repo_path="/r",
+        wait_policy="lease",
+        controller_wait_seconds=0,
+        execution_budget_seconds=3600,
+        background_ok=True,
+    )
+    repo.mark_acked(task_id="T-WJ-LEASE", session_id="session-json-lease")
+
+    result = CliRunner().invoke(app, ["task", "wait", "T-WJ-LEASE", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["phase"] == "acked"
+    assert payload["outcome"] == "controller_lease_expired"
+    assert payload["controller_lease_expired"] is True
+    assert payload["recommended_action"] == "detach_and_continue"
+    assert payload["background_ok"] is True
+    assert payload["task"]["controller_action"] in {"detach_and_continue", "inspect_logs_or_continue_background"}
 
 
 def test_task_wait_json_normalizes_committed_result_list_fields(tmp_path: Path, monkeypatch):
@@ -1011,6 +1133,7 @@ def test_task_watch_json_emits_ndjson(tmp_path: Path, monkeypatch):
 
     events = [item["event_type"] for item in parsed]
     assert "terminal" in events
+    assert "agent_result_changed" in [item["event"] for item in parsed]
 
     phases = [item["phase"] for item in parsed]
     assert "committed" in phases

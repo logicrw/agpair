@@ -15,6 +15,7 @@ from agpair.models import (
     validate_authorization_profile,
 )
 from agpair.storage.db import connect
+from agpair.wait_policy import WaitBudget, normalize_task_kind, normalize_wait_policy, resolve_wait_budget
 
 
 class TaskNotFoundError(RuntimeError):
@@ -57,6 +58,16 @@ def _resolve_attempt_environment_metadata(
         )
 
 
+def _preserved_wait_budget(task: TaskRecord) -> WaitBudget:
+    return WaitBudget(
+        task_kind=normalize_task_kind(task.task_kind),
+        wait_policy=normalize_wait_policy(task.wait_policy, task_kind=task.task_kind),
+        controller_wait_seconds=task.controller_wait_seconds,
+        execution_budget_seconds=task.execution_budget_seconds,
+        background_ok=task.background_ok,
+    )
+
+
 def _check_transition(task: TaskRecord, target_phase: str) -> None:
     valid_sources = _VALID_TRANSITIONS.get(target_phase)
     if valid_sources is not None and task.phase not in valid_sources:
@@ -87,6 +98,11 @@ class TaskRepository:
         authorization_profile: str = "local_mutating",
         authorization_summary: str | None = None,
         completion_policy: str = "auto",
+        task_kind: str | None = None,
+        wait_policy: str | None = None,
+        controller_wait_seconds: float | None = None,
+        execution_budget_seconds: float | None = None,
+        background_ok: bool | None = None,
         effective_policy_json: str | None = None,
         environment_mode: str | None = None,
         environment_mode_source: str | None = None,
@@ -104,6 +120,13 @@ class TaskRepository:
         normalized_authorization_summary = authorization_summary or default_authorization_summary(
             normalized_authorization_profile
         )
+        wait_budget = resolve_wait_budget(
+            task_kind=task_kind,
+            wait_policy=wait_policy,
+            controller_wait_seconds=controller_wait_seconds,
+            execution_budget_seconds=execution_budget_seconds,
+            background_ok=background_ok,
+        )
         environment = _resolve_attempt_environment_metadata(
             executor_backend,
             environment_mode=environment_mode,
@@ -120,16 +143,27 @@ class TaskRepository:
                   last_heartbeat_at, last_workspace_activity_at, client_idempotency_key, executor_backend,
                   depends_on, isolated_worktree, setup_commands, teardown_commands, env_vars, worktree_boundary,
                   spotlight_testing, broad_repo_path_override, completion_policy, terminal_source, terminal_receipt_json, is_approved,
-                  authorization_profile, authorization_summary, workflow_id, workflow_node_id, parent_task_id, child_role
-                ) VALUES (?, ?, ?, 'new', NULL, 1, 0, NULL, NULL, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?, ?, ?, ?, ?, ?)
+                  authorization_profile, authorization_summary,
+                  task_kind, wait_policy, controller_wait_seconds, execution_budget_seconds, background_ok,
+                  workflow_id, workflow_node_id, parent_task_id, child_role
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task_id,
                     repo_path,
                     None,
+                    "new",
+                    None,
+                    1,
+                    0,
+                    None,
+                    None,
+                    0,
                     now,
                     now,
                     now,
+                    None,
+                    None,
                     client_idempotency_key,
                     executor_backend,
                     depends_on,
@@ -141,8 +175,16 @@ class TaskRepository:
                     1 if spotlight_testing else 0,
                     1 if broad_repo_path_override else 0,
                     normalized_completion_policy,
+                    None,
+                    None,
+                    0,
                     normalized_authorization_profile,
                     normalized_authorization_summary,
+                    wait_budget.task_kind,
+                    wait_budget.wait_policy,
+                    wait_budget.controller_wait_seconds,
+                    wait_budget.execution_budget_seconds,
+                    1 if wait_budget.background_ok else 0,
                     workflow_id,
                     workflow_node_id,
                     parent_task_id,
@@ -154,13 +196,14 @@ class TaskRepository:
                 INSERT INTO task_attempts (
                   task_id, attempt_no, executor_backend, authorization_profile,
                   requested_completion_policy, effective_policy_json,
+                  task_kind, wait_policy, controller_wait_seconds, execution_budget_seconds, background_ok,
                   environment_mode, environment_mode_source, skill_policy, mcp_policy,
                   protocol_warnings_json, protocol_errors_json, adoptable_result,
                   adoption_evidence_json, controller_rework_json,
                   dirty_snapshot_mode, dirty_snapshot_json, dirty_snapshot_applied,
                   executor_session_id, phase, terminal_receipt_json, terminal_source, started_at, finished_at,
                   created_at, updated_at
-                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', 'unknown', '{}', '{}', ?, '{}', 0, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
+                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', 'unknown', '{}', '{}', ?, '{}', 0, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
                 """,
                 (
                     task_id,
@@ -168,6 +211,11 @@ class TaskRepository:
                     normalized_authorization_profile,
                     normalized_completion_policy,
                     effective_policy_json,
+                    wait_budget.task_kind,
+                    wait_budget.wait_policy,
+                    wait_budget.controller_wait_seconds,
+                    wait_budget.execution_budget_seconds,
+                    1 if wait_budget.background_ok else 0,
                     environment.environment_mode,
                     environment.environment_mode_source,
                     selected_skill_policy,
@@ -471,6 +519,11 @@ class TaskRepository:
         authorization_profile: str | None = None,
         authorization_summary: str | None = None,
         completion_policy: str | None = None,
+        task_kind: str | None = None,
+        wait_policy: str | None = None,
+        controller_wait_seconds: float | None = None,
+        execution_budget_seconds: float | None = None,
+        background_ok: bool | None = None,
         effective_policy_json: str | None = None,
         environment_mode: str | None = None,
         environment_mode_source: str | None = None,
@@ -492,6 +545,33 @@ class TaskRepository:
             next_authorization_profile
         )
         next_completion_policy = normalize_completion_policy(completion_policy or task.completion_policy)
+        if any(
+            value is not None
+            for value in (
+                task_kind,
+                wait_policy,
+                controller_wait_seconds,
+                execution_budget_seconds,
+                background_ok,
+            )
+        ):
+            next_wait_budget = resolve_wait_budget(
+                task_kind=task_kind or task.task_kind,
+                wait_policy=wait_policy or task.wait_policy,
+                controller_wait_seconds=(
+                    controller_wait_seconds
+                    if controller_wait_seconds is not None
+                    else task.controller_wait_seconds
+                ),
+                execution_budget_seconds=(
+                    execution_budget_seconds
+                    if execution_budget_seconds is not None
+                    else task.execution_budget_seconds
+                ),
+                background_ok=background_ok if background_ok is not None else task.background_ok,
+            )
+        else:
+            next_wait_budget = _preserved_wait_budget(task)
         environment = _resolve_attempt_environment_metadata(
             next_executor_backend,
             environment_mode=environment_mode,
@@ -521,7 +601,12 @@ class TaskRepository:
                     executor_backend=?,
                     completion_policy=?,
                     authorization_profile=?,
-                    authorization_summary=?
+                    authorization_summary=?,
+                    task_kind=?,
+                    wait_policy=?,
+                    controller_wait_seconds=?,
+                    execution_budget_seconds=?,
+                    background_ok=?
                 WHERE task_id=?
                 """,
                 (
@@ -533,6 +618,11 @@ class TaskRepository:
                     next_completion_policy,
                     next_authorization_profile,
                     next_authorization_summary,
+                    next_wait_budget.task_kind,
+                    next_wait_budget.wait_policy,
+                    next_wait_budget.controller_wait_seconds,
+                    next_wait_budget.execution_budget_seconds,
+                    1 if next_wait_budget.background_ok else 0,
                     task_id,
                 ),
             )
@@ -543,13 +633,14 @@ class TaskRepository:
                 INSERT INTO task_attempts (
                   task_id, attempt_no, executor_backend, authorization_profile,
                   requested_completion_policy, effective_policy_json,
+                  task_kind, wait_policy, controller_wait_seconds, execution_budget_seconds, background_ok,
                   environment_mode, environment_mode_source, skill_policy, mcp_policy,
                   protocol_warnings_json, protocol_errors_json, adoptable_result,
                   adoption_evidence_json, controller_rework_json,
                   dirty_snapshot_mode, dirty_snapshot_json, dirty_snapshot_applied,
                   executor_session_id, phase, terminal_receipt_json, terminal_source, started_at, finished_at,
                   created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', 'unknown', '{}', '{}', ?, '{}', 0, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', 'unknown', '{}', '{}', ?, '{}', 0, NULL, 'new', NULL, NULL, ?, NULL, ?, ?)
                 """,
                 (
                     task_id,
@@ -558,6 +649,11 @@ class TaskRepository:
                     next_authorization_profile,
                     next_completion_policy,
                     effective_policy_json,
+                    next_wait_budget.task_kind,
+                    next_wait_budget.wait_policy,
+                    next_wait_budget.controller_wait_seconds,
+                    next_wait_budget.execution_budget_seconds,
+                    1 if next_wait_budget.background_ok else 0,
                     environment.environment_mode,
                     environment.environment_mode_source,
                     selected_skill_policy,
@@ -597,7 +693,17 @@ class TaskRepository:
 
     def get_task(self, task_id: str) -> TaskRecord | None:
         with connect(self.db_path) as conn:
-            row = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+            row = conn.execute(
+                """
+                SELECT tasks.*, task_attempts.executor_session_id AS attempt_executor_session_id
+                FROM tasks
+                LEFT JOIN task_attempts
+                  ON task_attempts.task_id = tasks.task_id
+                 AND task_attempts.attempt_no = tasks.attempt_no
+                WHERE tasks.task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
         if row is None:
             return None
         return self._task_from_row(row)
@@ -628,6 +734,18 @@ class TaskRepository:
             ORDER BY last_activity_at ASC
             """,
             (watchdog_cutoff_iso, hard_timeout_cutoff_iso, watchdog_cutoff_iso, watchdog_cutoff_iso),
+        )
+
+    def list_execution_budget_expired_candidates(self, now_iso: str) -> list[TaskRecord]:
+        return self._query_tasks(
+            """
+            SELECT * FROM tasks
+            WHERE phase='acked'
+              AND execution_budget_seconds IS NOT NULL
+              AND datetime(created_at, '+' || execution_budget_seconds || ' seconds') <= datetime(?)
+            ORDER BY created_at ASC
+            """,
+            (now_iso,),
         )
 
     def list_tasks(
@@ -854,6 +972,7 @@ class TaskRepository:
         except ValueError:
             completion_policy = "auto"
         antigravity_session_id = get("antigravity_session_id")
+        executor_session_id = get("attempt_executor_session_id") or antigravity_session_id
         return TaskRecord(
             task_id=row["task_id"],
             repo_path=row["repo_path"],
@@ -886,7 +1005,12 @@ class TaskRepository:
             is_approved=bool(get("is_approved", 0)),
             authorization_profile=authorization_profile,
             authorization_summary=get("authorization_summary"),
-            executor_session_id=antigravity_session_id,
+            task_kind=get("task_kind", "generic"),
+            wait_policy=get("wait_policy", "terminal"),
+            controller_wait_seconds=get("controller_wait_seconds"),
+            execution_budget_seconds=get("execution_budget_seconds"),
+            background_ok=bool(get("background_ok", 0)),
+            executor_session_id=executor_session_id,
             workflow_id=get("workflow_id"),
             workflow_node_id=get("workflow_node_id"),
             parent_task_id=get("parent_task_id"),
@@ -908,6 +1032,11 @@ class TaskRepository:
             authorization_profile=row["authorization_profile"],
             requested_completion_policy=row["requested_completion_policy"],
             effective_policy_json=get("effective_policy_json"),
+            task_kind=get("task_kind", "generic"),
+            wait_policy=get("wait_policy", "terminal"),
+            controller_wait_seconds=get("controller_wait_seconds"),
+            execution_budget_seconds=get("execution_budget_seconds"),
+            background_ok=bool(get("background_ok", 0)),
             environment_mode=get("environment_mode", "managed-natural"),
             environment_mode_source=get("environment_mode_source", "executor_default"),
             skill_policy=get("skill_policy", "inherit"),

@@ -1,0 +1,9 @@
+Here is the requested review.
+
+Findings:
+- Admission should reject only empty or unsafe tasks.
+- Completion should treat low-risk receipt variants as warnings.
+
+Evidence:
+- agpair/adoption.py
+- agpair/completion.py

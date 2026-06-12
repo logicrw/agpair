@@ -12,9 +12,15 @@ class WatchEvent:
     summary: str | None = None
     receipt_path: str | None = None
     raw_log_path: str | None = None
+    signal_state: str | None = None
+    controller_action: str | None = None
+    stdout_bytes: int | None = None
+    stderr_bytes: int | None = None
+    last_signal_at: str | None = None
+    agent_result: dict[str, object] | None = None
     event: str = "state"
 
-    def to_json_dict(self) -> dict[str, str]:
+    def to_json_dict(self) -> dict[str, object]:
         payload = {
             "schema_version": "1",
             "event": self.event,
@@ -22,7 +28,18 @@ class WatchEvent:
             "state": self.state,
             "cursor": self.cursor,
         }
-        for key in ("heartbeat", "summary", "receipt_path", "raw_log_path"):
+        for key in (
+            "heartbeat",
+            "summary",
+            "receipt_path",
+            "raw_log_path",
+            "signal_state",
+            "controller_action",
+            "stdout_bytes",
+            "stderr_bytes",
+            "last_signal_at",
+            "agent_result",
+        ):
             value = getattr(self, key)
             if value is not None:
                 payload[key] = value
@@ -38,4 +55,10 @@ def should_emit_watch_event(previous: WatchEvent | None, current: WatchEvent) ->
         or previous.heartbeat != current.heartbeat
         or previous.receipt_path != current.receipt_path
         or previous.raw_log_path != current.raw_log_path
+        or previous.signal_state != current.signal_state
+        or previous.controller_action != current.controller_action
+        or previous.stdout_bytes != current.stdout_bytes
+        or previous.stderr_bytes != current.stderr_bytes
+        or previous.last_signal_at != current.last_signal_at
+        or previous.agent_result != current.agent_result
     )

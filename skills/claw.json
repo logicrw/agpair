@@ -1,7 +1,7 @@
 {
   "name": "agpair",
   "version": "1.0.0",
-  "description": "Controller-aware external-agent-first dispatch and workflows for Codex and Claude Code using antigravity-cli, grok-cli, claude-code, and codex; no Gemini for new work",
+  "description": "Controller-aware external-agent-first dispatch and workflows for Codex and Claude Code using active CLI executors: antigravity-cli, grok-cli, claude-code, and codex",
   "author": "logicrw",
   "license": "MIT",
   "entry": "Claude/SKILL.md",

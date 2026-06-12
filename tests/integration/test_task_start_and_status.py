@@ -1,6 +1,7 @@
 from pathlib import Path
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib import import_module
 import json
 import os
 import sqlite3
@@ -213,6 +214,64 @@ def test_task_repository_persists_session_mapping(tmp_path: Path) -> None:
     assert task is not None
     assert task.phase == "acked"
     assert task.antigravity_session_id == "session-123"
+    assert task.executor_session_id == "session-123"
+
+
+def test_task_repository_persists_wait_budget_contract(tmp_path: Path) -> None:
+    repo = make_task_repo(tmp_path)
+    repo.create_task(
+        task_id="TASK-BUDGET-1",
+        repo_path="/tmp/repo",
+        task_kind="implementation",
+        wait_policy="lease",
+        controller_wait_seconds=11,
+        execution_budget_seconds=22,
+        background_ok=True,
+    )
+
+    task = repo.get_task("TASK-BUDGET-1")
+    attempt = repo.current_attempt("TASK-BUDGET-1")
+
+    assert task is not None
+    assert task.task_kind == "implementation"
+    assert task.wait_policy == "lease"
+    assert task.controller_wait_seconds == 11.0
+    assert task.execution_budget_seconds == 22.0
+    assert task.background_ok is True
+    assert attempt is not None
+    assert attempt.task_kind == "implementation"
+    assert attempt.wait_policy == "lease"
+    assert attempt.controller_wait_seconds == 11.0
+    assert attempt.execution_budget_seconds == 22.0
+    assert attempt.background_ok is True
+
+
+def test_task_repository_retry_preserves_wait_budget_contract(tmp_path: Path) -> None:
+    repo = make_task_repo(tmp_path)
+    repo.create_task(
+        task_id="TASK-BUDGET-RETRY",
+        repo_path="/tmp/repo",
+        executor_backend="grok-cli",
+        task_kind="implementation",
+        wait_policy="lease",
+        controller_wait_seconds=11,
+        execution_budget_seconds=22,
+        background_ok=True,
+    )
+
+    task = repo.apply_retry_dispatch(task_id="TASK-BUDGET-RETRY", executor_backend="grok-cli")
+    attempt = repo.current_attempt("TASK-BUDGET-RETRY")
+
+    assert task.task_kind == "implementation"
+    assert task.wait_policy == "lease"
+    assert task.controller_wait_seconds == 11.0
+    assert task.execution_budget_seconds == 22.0
+    assert task.background_ok is True
+    assert attempt is not None
+    assert attempt.attempt_no == 2
+    assert attempt.task_kind == "implementation"
+    assert attempt.wait_policy == "lease"
+    assert attempt.background_ok is True
 
 
 def test_receipt_repository_deduplicates_by_message_id(tmp_path: Path) -> None:
@@ -269,6 +328,109 @@ def test_task_start_creates_local_record_and_starts_default_external_cli(tmp_pat
     assert task.antigravity_session_id is not None
     assert "agpair_antigravity-cli_TASK-CLI-1_" in task.antigravity_session_id
     assert read_calls(calls_path) == []
+
+
+def test_task_start_persists_task_kind_budget_and_completion_default(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--body",
+            "Goal: implement\nScope: repo\nRequired changes: small code change\nExit criteria: evidence",
+            "--task-id",
+            "TASK-CLI-BUDGET",
+            "--task-kind",
+            "implementation",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    task = make_task_repo(tmp_path).get_task("TASK-CLI-BUDGET")
+    assert task is not None
+    assert task.task_kind == "implementation"
+    assert task.wait_policy == "lease"
+    assert task.controller_wait_seconds == 300.0
+    assert task.execution_budget_seconds == 3600.0
+    assert task.background_ok is True
+    assert task.completion_policy == "evidence"
+
+    status = CliRunner().invoke(app, ["task", "status", "TASK-CLI-BUDGET", "--json"])
+    assert status.exit_code == 0
+    payload = json.loads(status.stdout)
+    assert payload["task_kind"] == "implementation"
+    assert payload["wait_policy"] == "lease"
+    assert payload["background_ok"] is True
+    assert "startup_profile" not in payload
+    assert "startup_profile_source" not in payload
+
+
+def test_task_start_rejects_removed_fast_startup_options(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--body",
+            "Goal: report\nScope: repo\nRequired changes: None. This is report-only. Do not edit files.\nExit criteria: evidence",
+            "--task-id",
+            "TASK-FAST-REMOVED",
+            "--task-kind",
+            "quick_review",
+            "--fast",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "No such option" in result.output
+    assert make_task_repo(tmp_path).get_task("TASK-FAST-REMOVED") is None
+
+
+def test_task_start_rejects_readonly_implementation_kind(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--body",
+            "Goal: implement\nScope: repo\nRequired changes: small code change\nExit criteria: evidence",
+            "--task-kind",
+            "implementation",
+            "--authorization-profile",
+            "local_readonly",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 2
 
 
 def test_task_start_reuses_existing_task_for_same_repo_and_idempotency_key(tmp_path: Path, monkeypatch) -> None:
@@ -408,6 +570,11 @@ def test_task_status_json_returns_structured_payload(tmp_path: Path, monkeypatch
     assert payload["phase"] == "acked"
     assert payload["a2a_state_hint"] == "working"
     assert payload["session_id"] == "session-json-1"
+    assert payload["task_kind"] == "generic"
+    assert payload["wait_policy"] == "terminal"
+    assert payload["controller_wait_seconds"] is None
+    assert payload["execution_budget_seconds"] is None
+    assert payload["background_ok"] is False
     assert payload["waiter"] is None
     assert payload["liveness_state"] in {"active_via_heartbeat", "silent", "active_via_workspace"}
 
@@ -1431,17 +1598,23 @@ def test_task_retry_local_executor_redispatches_locally(tmp_path: Path, monkeypa
             "retry",
             "TASK-LOCAL-RETRY",
             "--force",
+            "--prompt",
+            "Retry the previous local executor attempt and report dispatch evidence.",
             "--no-wait",
         ],
     )
 
     assert retry.exit_code == 0
+    assert "Auto-structured retry body" in retry.stderr
     task = make_task_repo(tmp_path).get_task("TASK-LOCAL-RETRY")
     assert task is not None
     assert task.phase == "acked"
     assert task.attempt_no == 2
     assert task.antigravity_session_id == "mock_session_attempt_2"
     assert dispatch_mock.call_count == 2
+    retry_body = dispatch_mock.call_args_list[1].kwargs["body"]
+    assert retry_body.startswith("Goal:\nRetry the previous local executor attempt")
+    assert "Original brief:" in retry_body
 
 
 def test_legacy_rows_without_executor_field_remain_readable(tmp_path: Path, monkeypatch) -> None:
@@ -1621,17 +1794,119 @@ def test_task_abandon_new_local_cli_task_without_session(tmp_path: Path, monkeyp
     assert tasks.get_task("TASK-ABANDON-NEW").phase == "abandoned"
 
 
-def test_task_start_rejects_missing_sections(tmp_path: Path, monkeypatch) -> None:
+def test_task_start_auto_structures_missing_sections(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
     runner = CliRunner()
-    result = runner.invoke(app, ["task", "start", "--repo-path", "/tmp/repo", "--body", "Goal: fix the thing\nScope: none\nRequired changes: tests"])
-    assert result.exit_code == 1
-    assert "Refused" in result.stderr
-    assert "exit criteria" in result.stderr
-    assert "Minimum task body template:" in result.stderr
-    assert "Required changes:" in result.stderr
-    assert "None. This is report-only. Do not edit files." in result.stderr
-    assert "Exit criteria:" in result.stderr
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--authorization-profile",
+            "local_readonly",
+            "--body",
+            "Read-only review. Do not edit files. Inspect docs and return findings.",
+            "--no-wait",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Auto-structured task body" in result.stderr
+    task_id = result.stdout.strip().splitlines()[-1]
+    created = next(row for row in make_journal_repo(tmp_path).tail(task_id, limit=10) if row.event == "created")
+    assert "Goal:" in created.body
+    assert "Scope:" in created.body
+    assert "Required changes:" in created.body
+    assert "None. This is report-only. Do not edit files." in created.body
+    assert "Exit criteria:" in created.body
+    assert "Original brief:" in created.body
+
+
+def test_task_brief_normalizer_accepts_natural_chinese_report_brief() -> None:
+    task_brief = import_module("agpair.task_brief")
+
+    normalized = task_brief.normalize_task_brief(
+        body="帮我审查这个目录里的实现风险，不要修改文件。",
+        authorization_profile="local_readonly",
+        completion_policy="report",
+    )
+
+    assert normalized.auto_structured is True
+    assert "Goal:" in normalized.normalized_body
+    assert "Required changes:" in normalized.normalized_body
+    assert "None. This is report-only. Do not edit files." in normalized.normalized_body
+    assert "Original brief:" in normalized.normalized_body
+    assert "auto_added_goal" in normalized.warnings
+
+
+def test_task_start_accepts_natural_chinese_readonly_brief(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--authorization-profile",
+            "local_readonly",
+            "--completion-policy",
+            "report",
+            "--body",
+            "帮我审查这个目录里的实现风险，不要修改文件。",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Refused" not in result.stderr
+
+
+def test_task_start_accepts_common_aliases_for_first_attempts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo",
+            str(repo_path),
+            "--authorization-profile",
+            "readonly",
+            "--completion-policy",
+            "report",
+            "--prompt",
+            "Read-only review. Do not edit files. Inspect current configuration and report risks.",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 0
+    task = make_task_repo(tmp_path).get_task(result.stdout.strip().splitlines()[-1])
+    assert task.authorization_profile == "local_readonly"
+    assert task.completion_policy == "report"
 
 
 def test_task_start_rejects_placeholder(tmp_path: Path, monkeypatch) -> None:
@@ -1642,6 +1917,7 @@ def test_task_start_rejects_placeholder(tmp_path: Path, monkeypatch) -> None:
         assert result.exit_code == 1
         assert "Refused" in result.stderr
         assert "placeholder" in result.stderr
+        assert "Minimum task body template:" in result.stderr
 
 
 def test_task_start_accepts_valid_brief(tmp_path: Path, monkeypatch) -> None:
@@ -2129,6 +2405,104 @@ def test_task_status_uses_execution_repo_path_for_isolated_activity(tmp_path: Pa
     assert payload["execution_repo_path"] == str(execution_repo_path)
     assert payload["phase_detail"] == "running_without_receipt"
     assert payload["last_workspace_activity_at"] is not None
+
+
+def _init_adoption_git_repo(repo_path: Path) -> None:
+    repo_path.mkdir()
+    subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_path, check=True)
+    subprocess.run(["git", "config", "user.name", "AGPair Test"], cwd=repo_path, check=True)
+    (repo_path / "target.py").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "target.py"], cwd=repo_path, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo_path, check=True, capture_output=True)
+
+
+def _make_ready_isolated_adoption_task(
+    tmp_path: Path,
+    *,
+    conflict: bool = False,
+) -> tuple[Path, str]:
+    repo_path = tmp_path / ("repo-conflict" if conflict else "repo-apply")
+    worktree_path = tmp_path / ("worker-conflict" if conflict else "worker-apply")
+    session_path = tmp_path / ("session-conflict" if conflict else "session-apply")
+    task_id = "TASK-APPLY-CONFLICT" if conflict else "TASK-APPLY-OK"
+    _init_adoption_git_repo(repo_path)
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", str(worktree_path)],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    base_ref = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=worktree_path, text=True).strip()
+    (worktree_path / "target.py").write_text("worker change\n", encoding="utf-8")
+    if conflict:
+        (repo_path / "target.py").write_text("controller change\n", encoding="utf-8")
+    session_path.mkdir(parents=True, exist_ok=True)
+    (session_path / "state.json").write_text(
+        json.dumps(
+            {
+                "repo_path": str(worktree_path),
+                "worker_base_head": base_ref,
+                "worker_diff_base_reason": "start_head",
+            }
+        ),
+        encoding="utf-8",
+    )
+    tasks = make_task_repo(tmp_path)
+    tasks.create_task(
+        task_id=task_id,
+        repo_path=str(repo_path),
+        executor_backend="grok-cli",
+        isolated_worktree=True,
+        worktree_boundary=str(worktree_path),
+    )
+    tasks.mark_acked(task_id=task_id, session_id=str(session_path))
+    tasks.set_execution_repo_path(task_id=task_id, execution_repo_path=str(worktree_path))
+    tasks.mark_ready_for_review(task_id=task_id, terminal_source="test")
+    return repo_path, task_id
+
+
+def test_task_diff_json_surfaces_isolated_worker_diff(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    _repo_path, task_id = _make_ready_isolated_adoption_task(tmp_path)
+
+    result = CliRunner().invoke(app, ["task", "diff", task_id, "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["changed_files"] == ["target.py"]
+    assert payload["has_patch"] is True
+    assert "target.py" in payload["stat"]
+
+
+def test_task_apply_check_refuses_conflict(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path, task_id = _make_ready_isolated_adoption_task(tmp_path, conflict=True)
+
+    result = CliRunner().invoke(app, ["task", "apply", task_id, "--check", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"] == "apply_conflict"
+    assert (repo_path / "target.py").read_text(encoding="utf-8") == "controller change\n"
+
+
+def test_task_apply_applies_worker_patch_to_controller_repo(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path, task_id = _make_ready_isolated_adoption_task(tmp_path)
+
+    result = CliRunner().invoke(app, ["task", "apply", task_id, "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["applied"] is True
+    assert payload["changed_files"] == ["target.py"]
+    assert (repo_path / "target.py").read_text(encoding="utf-8") == "worker change\n"
+    rows = JournalRepository(make_paths(tmp_path).db_path).tail(task_id, limit=5)
+    assert any(row.event == "controller_applied_diff" for row in rows)
 
 
 def test_task_accept_records_controller_adoption_metadata(tmp_path: Path, monkeypatch) -> None:
