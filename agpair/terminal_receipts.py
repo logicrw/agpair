@@ -332,6 +332,68 @@ def _wrapped_text_candidates(value: Any) -> list[str]:
     return candidates
 
 
+def _receipt_from_native_success_envelope(
+    parsed: Mapping[str, Any],
+    *,
+    raw_body: str,
+    expected_status: str | None = None,
+    expected_task_id: str | None = None,
+) -> StructuredTerminalReceipt | None:
+    normalized_expected_status = _normalize_status(expected_status) if expected_status is not None else None
+    if normalized_expected_status is not None and normalized_expected_status != "EVIDENCE_PACK":
+        return None
+
+    if parsed.get("is_error") is True:
+        return None
+
+    type_value = str(parsed.get("type") or "").strip().lower()
+    subtype_value = str(parsed.get("subtype") or "").strip().lower()
+    status_value = str(parsed.get("status") or "").strip().lower()
+    stop_reason = str(parsed.get("stop_reason") or parsed.get("stopReason") or "").strip().lower()
+    is_success = (
+        parsed.get("is_error") is False
+        or subtype_value == "success"
+        or status_value in {"success", "succeeded", "complete", "completed"}
+        or (type_value == "result" and stop_reason not in {"cancelled", "canceled", "maxturns", "max_turns", "max turns"})
+    )
+    if not is_success:
+        return None
+
+    task_id = parsed.get("task_id") if isinstance(parsed.get("task_id"), str) else expected_task_id
+    if not isinstance(task_id, str) or not task_id.strip():
+        return None
+
+    report = None
+    for key in _WRAPPED_TEXT_KEYS:
+        value = parsed.get(key)
+        if isinstance(value, str) and value.strip():
+            report = value.strip()
+            break
+    if report is None:
+        return None
+
+    summary = next((line.strip() for line in report.splitlines() if line.strip()), "Executor produced a report")
+    if len(summary) > 180:
+        summary = summary[:177].rstrip() + "..."
+
+    return StructuredTerminalReceipt(
+        schema_version="1",
+        task_id=task_id,
+        attempt_no=1,
+        review_round=0,
+        status="EVIDENCE_PACK",
+        summary=summary,
+        payload={
+            "claimed_state": "ready_for_review",
+            "changed_files": [],
+            "scope_violations": [],
+            "validation_not_run": "executor returned native success envelope",
+            "report": report,
+        },
+        raw_body=raw_body,
+    )
+
+
 def parse_structured_terminal_receipt(
     body: str,
     *,
@@ -399,6 +461,20 @@ def normalize_terminal_receipt(
                     parsed=nested_json,
                     source_warning="wrapped_text_json",
                 )
+    if isinstance(parsed, Mapping):
+        native = _receipt_from_native_success_envelope(
+            parsed,
+            raw_body=body,
+            expected_status=expected_status,
+            expected_task_id=expected_task_id,
+        )
+        if native is not None:
+            return _protocol_for_receipt(
+                native,
+                raw_body=body,
+                parsed=parsed,
+                source_warning="native_success_envelope",
+            )
     return ReceiptProtocolResult(receipt=None, ok=False, errors=("receipt_not_found",), raw_body=body)
 
 

@@ -60,9 +60,23 @@ def write_fake_antigravity_cli(tmp_path: Path) -> Path:
     return bin_path
 
 
+def write_fake_grok_cli(tmp_path: Path) -> Path:
+    bin_path = tmp_path / "fake-grok"
+    bin_path.write_text(
+        "#!/bin/sh\n"
+        "echo '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}'\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    bin_path.chmod(0o755)
+    return bin_path
+
+
 def configure_fake_antigravity_cli(tmp_path: Path, monkeypatch) -> Path:
     fake_cli = write_fake_antigravity_cli(tmp_path)
+    fake_grok = write_fake_grok_cli(tmp_path)
     monkeypatch.setenv("AGPAIR_ANTIGRAVITY_CLI", str(fake_cli))
+    monkeypatch.setenv("AGPAIR_GROK_CLI_BIN", str(fake_grok))
     return fake_cli
 
 
@@ -324,9 +338,9 @@ def test_task_start_creates_local_record_and_starts_default_external_cli(tmp_pat
     task = make_task_repo(tmp_path).get_task("TASK-CLI-1")
     assert task is not None
     assert task.phase == "acked"
-    assert task.executor_backend == "antigravity-cli"
+    assert task.executor_backend == "grok-cli"
     assert task.antigravity_session_id is not None
-    assert "agpair_antigravity-cli_TASK-CLI-1_" in task.antigravity_session_id
+    assert "agpair_grok-cli_TASK-CLI-1_" in task.antigravity_session_id
     assert read_calls(calls_path) == []
 
 
@@ -1215,7 +1229,7 @@ def test_task_start_target_substitution(tmp_path: Path, monkeypatch) -> None:
     assert task is not None
     assert task.repo_path == str(repo_path.resolve())
     assert task.phase == "acked"
-    assert task.executor_backend == "antigravity-cli"
+    assert task.executor_backend == "grok-cli"
     assert read_calls(calls_path) == []
 
 
@@ -1234,7 +1248,7 @@ def test_task_start_rejects_target_and_repo_path_together(tmp_path: Path, monkey
     assert result.exit_code != 0
     assert "cannot specify both" in (result.stdout + result.stderr).lower()
 
-def test_task_start_default_executor_is_antigravity_cli(tmp_path: Path, monkeypatch) -> None:
+def test_task_start_default_executor_is_grok_cli(tmp_path: Path, monkeypatch) -> None:
     binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
@@ -1249,12 +1263,12 @@ def test_task_start_default_executor_is_antigravity_cli(tmp_path: Path, monkeypa
     assert result.exit_code == 0
     task = make_task_repo(tmp_path).get_task("TASK-EXEC-DEFAULT")
     assert task is not None
-    assert task.executor_backend == "antigravity-cli"
+    assert task.executor_backend == "grok-cli"
 
     status = runner.invoke(app, ["task", "status", "TASK-EXEC-DEFAULT", "--json"])
     assert status.exit_code == 0
     payload = json.loads(status.stdout)
-    assert payload["active_executor_backend"] == "antigravity-cli"
+    assert payload["active_executor_backend"] == "grok-cli"
 
 
 def test_task_start_persists_authorization_profile(tmp_path: Path, monkeypatch) -> None:

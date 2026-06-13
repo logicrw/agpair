@@ -584,6 +584,7 @@ def _body_with_task_contract(
         f"{summary}\n\n"
         "Noninteractive execution requirements:\n"
         "- This is a background AGPair task; do not wait for human confirmation, editor interaction, or approval prompts.\n"
+        "- Do not start another AGPair task from inside this executor unless the controller explicitly authorized nested delegation.\n"
         "- For file edits, use deterministic repository-local shell/file operations or your CLI's noninteractive edit tools.\n"
         "- Do not describe intended work as completed; only claim changed files, validation, or success after observing actual file state and command output.\n"
         "- If you cannot continue without interaction, return a structured BLOCKED receipt instead of waiting.\n\n"

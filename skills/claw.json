@@ -1,12 +1,12 @@
 {
   "name": "agpair",
   "version": "3.0.0",
-  "description": "AGPair 3.0 external-agent-first handoff and workflows for Codex and Claude Code using active CLI executors: antigravity-cli, grok-cli, claude-code, and codex",
+  "description": "AGPair 3.0 external-agent-first handoff and workflows for Codex and Claude Code using active CLI executors: grok-cli, antigravity-cli, claude-code, and codex",
   "author": "logicrw",
   "license": "MIT",
   "entry": "Claude/SKILL.md",
   "permissions": ["shell"],
-  "tags": ["external-agents", "task-dispatch", "codex", "claude-code", "antigravity-cli", "grok-cli", "cli"],
+  "tags": ["external-agents", "task-dispatch", "codex", "claude-code", "grok-cli", "antigravity-cli", "cli"],
   "models": ["claude-*", "gpt-*"],
   "repository": "https://github.com/logicrw/agpair"
 }

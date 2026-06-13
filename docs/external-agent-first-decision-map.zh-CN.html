@@ -827,7 +827,7 @@
         </div>
         <div class="stat-panel reveal">
           <strong>4 个 executor</strong>
-          <span>antigravity-cli / grok-cli / claude-code / codex。</span>
+          <span>grok-cli / antigravity-cli / claude-code / codex。</span>
         </div>
         <div class="stat-panel reveal">
           <strong>0 个 IDE bridge</strong>
@@ -935,7 +935,7 @@
           <div class="flow-step">
             <b>acked</b>
             <strong>AGPair 派 CLI</strong>
-            <span>优先外部 executor，默认 antigravity-cli。</span>
+            <span>优先外部 executor，默认 grok-cli，antigravity-cli 作为强力接力。</span>
           </div>
           <div class="flow-step">
             <b>working</b>
@@ -1039,7 +1039,7 @@
       <div class="timeline">
         <div class="phase reveal">
           <h3>1. 清 executor 名字</h3>
-          <p>新增 `antigravity-cli / grok-cli / claude-code / codex`；Gemini 从新任务入口移除。</p>
+          <p>新增 `grok-cli / antigravity-cli / claude-code / codex`；Gemini 从新任务入口移除。</p>
         </div>
         <div class="phase reveal">
           <h3>2. 替换 Antigravity 路径</h3>
@@ -1072,7 +1072,7 @@
 
       <div class="checklist">
         <div class="check reveal"><span class="mark">✓</span><span>不注册 target，也能在任意 git repo 里 `task start`。</span></div>
-        <div class="check reveal"><span class="mark">✓</span><span>新任务 executor 只显示 `antigravity-cli / grok-cli / claude-code / codex`。</span></div>
+        <div class="check reveal"><span class="mark">✓</span><span>新任务 executor 只显示 `grok-cli / antigravity-cli / claude-code / codex`。</span></div>
         <div class="check reveal"><span class="mark">✓</span><span>Gemini 历史记录能看，新 start/retry 不能用。</span></div>
         <div class="check reveal"><span class="mark">✓</span><span>Antigravity 默认路径不再经过 IDE bridge。</span></div>
         <div class="check reveal"><span class="mark">✓</span><span>`blocked(approval_required)` 是终态，不试图原进程恢复。</span></div>

@@ -58,6 +58,9 @@ def test_claude_code_command_is_print_json_and_managed_natural_by_default() -> N
         "env",
         "CLAUDE_CODE_MAX_RETRIES=0",
         "fake-claude",
+        "--debug-file",
+        "/tmp/agpair/claude-code-debug.log",
+        "--no-chrome",
         "--permission-mode",
         "bypassPermissions",
         "--no-session-persistence",
@@ -70,7 +73,7 @@ def test_claude_code_command_is_print_json_and_managed_natural_by_default() -> N
     assert "--strict-mcp-config" not in cmd
     assert "--mcp-config" not in cmd
     assert "--disable-slash-commands" not in cmd
-    assert "--no-chrome" not in cmd
+    assert "--bare" not in cmd
 
 
 def test_claude_code_ignores_removed_oauth_profile_restriction(monkeypatch) -> None:
@@ -87,8 +90,16 @@ def test_claude_code_ignores_removed_oauth_profile_restriction(monkeypatch) -> N
     assert "--strict-mcp-config" not in cmd
     assert "--mcp-config" not in cmd
     assert "--disable-slash-commands" not in cmd
-    assert "--no-chrome" not in cmd
-    assert cmd[:5] == ["env", "CLAUDE_CODE_MAX_RETRIES=0", "fake-claude", "--permission-mode", "bypassPermissions"]
+    assert cmd[:7] == [
+        "env",
+        "CLAUDE_CODE_MAX_RETRIES=0",
+        "fake-claude",
+        "--debug-file",
+        "/tmp/agpair/claude-code-debug.log",
+        "--no-chrome",
+        "--permission-mode",
+    ]
+    assert cmd[cmd.index("--permission-mode") + 1] == "bypassPermissions"
 
 
 def test_claude_code_settings_file_is_passed_to_api_worker(monkeypatch) -> None:
@@ -102,10 +113,19 @@ def test_claude_code_settings_file_is_passed_to_api_worker(monkeypatch) -> None:
         pathlib.Path("/tmp/agpair"),
     )
 
-    assert cmd[:3] == ["env", "CLAUDE_CODE_MAX_RETRIES=0", "fake-claude"]
+    assert cmd[:7] == [
+        "env",
+        "CLAUDE_CODE_MAX_RETRIES=0",
+        "fake-claude",
+        "--settings",
+        "/tmp/claude-settings.json",
+        "--debug-file",
+        "/tmp/agpair/claude-code-debug.log",
+    ]
     assert "--bare" not in cmd
     assert "--strict-mcp-config" not in cmd
     assert "--mcp-config" not in cmd
+    assert "--no-chrome" in cmd
     assert "--settings" in cmd
     assert cmd[cmd.index("--settings") + 1] == "/tmp/claude-settings.json"
 
@@ -127,9 +147,17 @@ def test_claude_code_ccswitch_mode_uses_provider_env_without_command_secret(monk
         pathlib.Path("/tmp/agpair"),
     )
 
-    assert cmd[:3] == ["env", "CLAUDE_CODE_MAX_RETRIES=0", "fake-claude"]
+    assert cmd[:6] == [
+        "env",
+        "CLAUDE_CODE_MAX_RETRIES=0",
+        "fake-claude",
+        "--debug-file",
+        "/tmp/agpair/claude-code-debug.log",
+        "--no-chrome",
+    ]
     assert "--bare" not in cmd
     assert "test-secret" not in " ".join(cmd)
+    assert "--no-chrome" in cmd
     assert env["ANTHROPIC_API_KEY"] == "test-secret"
     assert env["ANTHROPIC_BASE_URL"] == "https://api.moonshot.ai/anthropic"
     assert env["ANTHROPIC_MODEL"] == "kimi-k2.5"
@@ -176,6 +204,13 @@ exit 0
         pathlib.Path("/tmp/agpair"),
     )
 
-    assert cmd[:3] == ["env", "CLAUDE_CODE_MAX_RETRIES=0", str(fake_binary)]
+    assert cmd[:6] == [
+        "env",
+        "CLAUDE_CODE_MAX_RETRIES=0",
+        str(fake_binary),
+        "--debug-file",
+        "/tmp/agpair/claude-code-debug.log",
+        "--no-chrome",
+    ]
     assert env["ANTHROPIC_API_KEY"] == "test-secret"
     assert live_probe_count.read_text(encoding="utf-8") == "2"

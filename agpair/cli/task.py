@@ -13,7 +13,7 @@ from agpair.transport.bus import AgentBusClient, BusSendError
 
 import dataclasses
 
-from agpair.delegation_guard import nested_delegation_blocked
+from agpair.delegation_guard import nested_delegation_authorized, nested_delegation_blocked
 from agpair.cli.wait import (
     DEFAULT_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
@@ -1143,11 +1143,17 @@ def start_task(
         body = body_from_file if body is None else body
     if body is None:
         raise typer.BadParameter("Either --body or --body-file is required.")
-    if nested_delegation_blocked() and not allow_nested_delegation:
-        raise typer.BadParameter(
-            "nested_delegation_blocked: external executors may not start nested AGPair tasks by default; "
-            "pass --allow-nested-delegation only for an explicitly bounded orchestration task"
-        )
+    if nested_delegation_blocked():
+        if not allow_nested_delegation:
+            raise typer.BadParameter(
+                "nested_delegation_blocked: external executors may not start nested AGPair tasks by default; "
+                "pass --allow-nested-delegation only for an explicitly bounded orchestration task"
+            )
+        if not nested_delegation_authorized():
+            raise typer.BadParameter(
+                "nested_delegation_not_authorized: --allow-nested-delegation cannot be self-authorized "
+                "from inside an AGPair executor; the controller must set AGPAIR_ALLOW_NESTED_DELEGATION=1"
+            )
     try:
         normalized_authorization_profile = validate_authorization_profile(authorization_profile)
     except ValueError as exc:

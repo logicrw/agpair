@@ -150,7 +150,7 @@ an isolated worktree:
 
 ```bash
 agpair task start \
-  --executor antigravity-cli \
+  --executor grok-cli \
   --repo-path /absolute/path/to/repo \
   --task-kind implementation \
   --wait-policy lease \
@@ -167,8 +167,8 @@ worktree. Ignored and untracked files are not copied. Use
 
 Other new-task executor ids are:
 
-- `antigravity-cli`: default external implementation executor
-- `grok-cli`: cheap alternate external executor
+- `grok-cli`: default external implementation executor
+- `antigravity-cli`: strong external implementation and second-opinion executor
 - `claude-code`: AGPair-managed external Claude Code CLI executor
 - `codex`: AGPair-managed external Codex CLI executor
 
@@ -195,8 +195,8 @@ Executor launch environments:
 
 | Executor | Default mode | Skills/MCP |
 | --- | --- | --- |
-| `antigravity-cli` | `managed-natural` | inherit |
 | `grok-cli` | `managed-natural` | inherit |
+| `antigravity-cli` | `managed-natural` | inherit |
 | `claude-code` | `managed-natural` when auth is healthy | inherit |
 | `codex` | `managed-natural` | inherit |
 
@@ -273,6 +273,13 @@ Internal launch markers, set by AGPair and not meant for global shells:
 - `AGPAIR_INTERNAL_ROLE=probe|executor|smoke`
 - `AGPAIR_SUPPRESS_CLIENT_HOOKS=1`
 - `AGPAIR_NONINTERACTIVE=1`
+- `AGPAIR_ALLOW_NESTED_DELEGATION=1`
+
+Nested AGPair delegation is blocked for executor-launched processes by default.
+`--allow-nested-delegation` cannot be self-authorized from inside an executor;
+it also requires `AGPAIR_ALLOW_NESTED_DELEGATION=1` from the controller
+environment. This keeps Claude Code or other inherited skills from turning a
+worker task into another controller loop unless that was explicitly intended.
 
 These knobs are adapter-local escape hatches. The registry profile remains the
 shared contract for every executor, and tests require declared noninteractive
@@ -362,7 +369,11 @@ parallel and isolated execution.
 - `env_vars`: Persisted per-task environment hints; only explicitly supported executor env is applied automatically.
 - `spotlight_testing`: Boolean intent to prioritize localized test runs over full-suite execution.
 
-**Parallelism recommendation:** Always parallelize across worktrees, not inside one worktree.
+**Parallelism recommendation:** Use useful breadth by default. It is valid to
+start multiple tasks with the same executor, including several `grok-cli`
+tasks, when each task has a distinct id, prompt, file slice, evaluation angle,
+or acceptance criteria. For mutating work, parallelize across isolated
+worktrees or disjoint scopes, not inside one controller worktree.
 
 Use `task wait --json` when a controller needs a machine-readable outcome after
 dispatch. Lease-based waits may return `controller_lease_expired` or
@@ -580,7 +591,11 @@ controls described above.
 
 ## Workflows
 
-Use `agpair task start` for ordinary work. Use `agpair workflow start` for high-value multi-part, parallel, adversarial, or long-running work.
+Use `agpair task start` for ordinary work. Start several task ids when a
+non-trivial task benefits from multiple `grok-cli` reviews, competing
+implementation candidates, or additional `antigravity-cli` / `claude-code`
+verification. Use `agpair workflow start` for high-value multi-part, parallel,
+adversarial, or long-running work.
 
 ```bash
 agpair workflow validate --file templates/workflows/fanout-synthesize.json
@@ -619,7 +634,7 @@ Every external executor is a registered module. Add, disable, deprecate, or
 remove executors through the shared profile contract rather than through custom
 state-machine branches. See [Executor Lifecycle](executor-lifecycle.md).
 
-Current active executor ids are `antigravity-cli`, `grok-cli`, `claude-code`,
+Current active executor ids are `grok-cli`, `antigravity-cli`, `claude-code`,
 and `codex`. `codex` means an AGPair-managed external Codex CLI worker, not
 Codex native subagents. `claude-code` means an AGPair-managed external Claude
 Code worker, not Claude Code native subagents.

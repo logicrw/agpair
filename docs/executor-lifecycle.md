@@ -32,8 +32,8 @@ Default modes keep executors natural. Failed attempts should recover by retrying
 the same natural executor, switching to another external executor, or handing
 back to the controller's native subagents:
 
-- `antigravity-cli`: `managed-natural`, skills/MCP inherit.
 - `grok-cli`: `managed-natural`, skills/MCP inherit.
+- `antigravity-cli`: `managed-natural`, skills/MCP inherit.
 - `claude-code`: `managed-natural`, skills/MCP inherit when auth is healthy.
 - `codex`: `managed-natural`, skills/MCP inherit.
 
@@ -74,7 +74,7 @@ Use these commands to manage the overlay:
 agpair policy list --controller codex
 agpair policy disable claude-code --controller codex
 agpair policy enable claude-code --controller codex
-agpair policy priority --controller codex antigravity-cli grok-cli claude-code
+agpair policy priority --controller codex grok-cli antigravity-cli claude-code
 agpair policy reset --controller codex
 ```
 
@@ -90,7 +90,7 @@ OAuth login, auth environment, or settings source in the profile. Health checks
 and dispatch preflight must then report `executor_auth_required` before launch
 instead of letting the process sit silently until a no-progress timeout.
 
-Current active executor ids are `antigravity-cli`, `grok-cli`, `claude-code`,
+Current active executor ids are `grok-cli`, `antigravity-cli`, `claude-code`,
 and `codex`. `codex` means an external Codex CLI worker; it is different from
 Codex native subagents. `claude-code` means an external Claude Code worker; it
 is different from Claude Code native subagents.
@@ -166,9 +166,9 @@ Offboarding checklist:
 
 Controller suppression belongs in the profile:
 
-- Codex controller normally uses `antigravity-cli`, `grok-cli`, and
+- Codex controller normally uses `grok-cli`, `antigravity-cli`, and
   `claude-code`; it suppresses external `codex`.
-- Claude Code controller normally uses `antigravity-cli`, `grok-cli`, and
+- Claude Code controller normally uses `grok-cli`, `antigravity-cli`, and
   external `codex`; it suppresses external `claude-code`.
 - Diagnostic mode may include self executors only when explicitly allowed.
 
@@ -181,8 +181,8 @@ fall through to another executor.
 Normal controller smoke covers the executors each controller should actually
 use:
 
-- Codex controller: `antigravity-cli`, `grok-cli`, `claude-code`.
-- Claude Code controller: `antigravity-cli`, `grok-cli`, `codex`.
+- Codex controller: `grok-cli`, `antigravity-cli`, `claude-code`.
+- Claude Code controller: `grok-cli`, `antigravity-cli`, `codex`.
 
 Diagnostic all-registered smoke may include self executors with an explicit
 allow-self flag. It should report every active executor as `adoptable_result`,

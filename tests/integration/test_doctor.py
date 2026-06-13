@@ -67,9 +67,9 @@ def test_doctor_reports_missing_bus_or_database_paths(tmp_path: Path, monkeypatc
     assert payload["config_root"].endswith(".agpair")
     assert payload["db_exists"] is False
     assert payload["agent_bus_available"] is False
-    assert payload["active_executor_backend"] == "antigravity-cli"
-    assert payload["default_executor_backend"] == "antigravity-cli"
-    assert payload["supported_executor_backends"] == ["antigravity-cli", "grok-cli", "claude-code", "codex"]
+    assert payload["active_executor_backend"] == "grok-cli"
+    assert payload["default_executor_backend"] == "grok-cli"
+    assert payload["supported_executor_backends"] == ["grok-cli", "antigravity-cli", "claude-code", "codex"]
     assert "gemini_cli" in payload["legacy_executor_backends"]
     assert "local_mutating" in payload["authorization_profiles"]
     assert payload["executor_policy_path"].endswith("executors.json")
@@ -140,10 +140,10 @@ def test_doctor_reports_external_cli_executor_health(tmp_path: Path, monkeypatch
     assert health["codex"]["available"] is True
     assert "codex" in health
     assert "gemini_cli" not in health
-    assert payload["controller_policies"]["codex"]["selected_executor"] == "antigravity-cli"
+    assert payload["controller_policies"]["codex"]["selected_executor"] == "grok-cli"
     assert payload["controller_policies"]["claude-code"]["eligible_executors"] == [
-        "antigravity-cli",
         "grok-cli",
+        "antigravity-cli",
         "codex",
     ]
 

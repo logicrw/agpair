@@ -178,6 +178,39 @@ def test_parse_receipt_from_codex_jsonl_item_text() -> None:
     assert parsed.payload["changed_files"] == ["tests/fixtures/external_executor_smoke/codex.txt"]
 
 
+def test_parse_claude_code_success_result_as_native_report_envelope() -> None:
+    wrapper = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": "结论：Claude Code worker 可用。\n\n- 能启动\n- 能返回中文报告",
+    }
+
+    protocol = normalize_terminal_receipt(json.dumps(wrapper), expected_task_id="TASK-CLAUDE-RESULT")
+    parsed = protocol.receipt
+
+    assert parsed is not None
+    assert parsed.task_id == "TASK-CLAUDE-RESULT"
+    assert parsed.status == "EVIDENCE_PACK"
+    assert parsed.payload["report"].startswith("结论：Claude Code worker 可用")
+    assert parsed.payload["changed_files"] == []
+    assert parsed.payload["validation_not_run"] == "executor returned native success envelope"
+    assert "native_success_envelope" in protocol.warnings
+
+
+def test_native_success_envelope_requires_task_context() -> None:
+    wrapper = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": "结论：这只是一个普通 JSON 输出。",
+    }
+
+    parsed = parse_structured_terminal_receipt(json.dumps(wrapper))
+
+    assert parsed is None
+
+
 def test_parse_receipt_extracts_mixed_text_then_multiline_json() -> None:
     raw = """
 I inspected the repository and found no issues.

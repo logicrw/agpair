@@ -4,11 +4,13 @@ import os
 import pathlib
 import re
 
+from agpair.executor_errors import prioritize_error_lines
 from agpair.executors.local_cli import LocalCLIExecutor
 from agpair.executors.registry import executor_safety_metadata
 from agpair.models import ContinuationCapability
 
 _GO_DURATION_RE = re.compile(r"^\d+(?:ns|us|ms|s|m|h)(?:\d+(?:ns|us|ms|s|m|h))*$")
+_VENDOR_LOG_NAME = "antigravity-cli.log"
 
 
 def _approval_args() -> list[str]:
@@ -67,9 +69,27 @@ class AntigravityCLIExecutor(LocalCLIExecutor):
             repo_path,
             "--print-timeout",
             _print_timeout(),
+            "--log-file",
+            str(temp_dir / _VENDOR_LOG_NAME),
             "--print",
             body,
         ]
+
+    def _raw_log_payload(self, temp_dir: pathlib.Path) -> dict:
+        payload = super()._raw_log_payload(temp_dir)
+        payload["vendor_log_path"] = str(temp_dir / _VENDOR_LOG_NAME)
+        return payload
+
+    def _extract_error_summary(self, temp_dir: pathlib.Path, max_chars: int = 500) -> str:
+        summary = super()._extract_error_summary(temp_dir, max_chars=max_chars)
+        if summary and summary != "No output captured":
+            return summary
+        vendor_log = temp_dir / _VENDOR_LOG_NAME
+        if not vendor_log.exists():
+            return summary
+        lines = vendor_log.read_text(encoding="utf-8", errors="replace").splitlines()
+        focused = prioritize_error_lines(lines, max_lines=12)
+        return "\n".join(focused)[:max_chars] or summary
 
     @property
     def continuation_capability(self) -> ContinuationCapability:

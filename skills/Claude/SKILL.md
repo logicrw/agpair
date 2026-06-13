@@ -5,7 +5,7 @@ description: "Use when Claude Code handles non-trivial coding, refactor, test-fi
 
 # AGPair 3.0 For Claude Code
 
-IRON LAW: Non-trivial work requires an explicit routing decision. Use at least one external AGPair lane by default; add fanout only when it improves adoptable evidence more than it adds coordination cost.
+IRON LAW: Non-trivial work requires an explicit routing budget. Use external AGPair lanes by default, but fan out only when each lane has a distinct role, scope, hypothesis, or verification value. Multiple `grok-cli` lanes are valid when they are not duplicate prompts.
 
 Claude Code is the controller and verifier. AGPair is the durable external-agent control plane.
 
@@ -13,12 +13,12 @@ Claude Code is the controller and verifier. AGPair is the durable external-agent
 
 Use AGPair before Claude Code native subagents for non-trivial implementation, refactor, test-fix, research, review, or multi-file work.
 
-Actively outsource low-value, repetitive, time-consuming, or easily verifiable work through AGPair: repo scans, alternative reviews, focused test-fix attempts, multi-file mechanical edits, smoke checks, and implementation slices with clear acceptance criteria. For non-trivial work, default to one external AGPair lane first; add parallel external lanes when independent evidence can be compared or merged safely.
+Actively outsource low-value, repetitive, time-consuming, or easily verifiable work through AGPair: repo scans, alternative reviews, focused test-fix attempts, multi-file mechanical edits, smoke checks, and implementation slices with clear acceptance criteria. For ordinary non-trivial work, start with the strongest external lane, usually `grok-cli`; add more lanes when they reduce controller labor or create independent evidence. It is acceptable to run several `grok-cli` attempts at once for parallel review, competing implementation approaches, or file-sliced work, but each attempt needs a distinct task id and role.
 
 Prefer executors in this order:
 
-1. `antigravity-cli` for default external implementation work.
-2. `grok-cli` for cheap parallel review, research, or alternative implementation attempts.
+1. `grok-cli` for the default fast external lane, review, research, and implementation attempts.
+2. `antigravity-cli` for strong implementation work or a second opinion when Grok is insufficient.
 3. `codex` when an AGPair-managed external Codex CLI worker is useful as a fallback executor.
 
 `codex` is the AGPair-managed external Codex CLI worker for Claude Code controllers. It is the cross-controller fallback lane, not a Claude Code native subagent.
@@ -27,7 +27,7 @@ Do not request the AGPair-managed external `claude-code` executor by default; Cl
 
 Only route new work to active registered executor ids. Historical task records may remain inspectable for compatibility, but they are not default dispatch targets.
 
-Use Claude Code native subagents only when AGPair is unavailable, unsuitable for the task, or an external result is not good enough. If skipping external AGPair entirely for non-trivial work, state the skip reason before proceeding. Native subagents are fallback, review, or narrow helper lanes, not the default execution lane.
+Use Claude Code native subagents as narrow controller-side reviewers/helpers when they add clear value, and as fallback when AGPair is unavailable, unsuitable for the task, or an external result is not good enough. If skipping external AGPair entirely for non-trivial work, state the skip reason before proceeding. Native subagents are not the default primary execution lane, but they can run in parallel when they materially improve verification, hidden-context reasoning, or integration of external outcomes.
 
 Default executor environments are `managed-natural` for all active external CLI executors: AGPair manages state and evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config.
 
@@ -35,19 +35,23 @@ AGPair external-first routing applies to controller sessions. AGPair-started exe
 
 Use `agpair policy list --controller claude-code --json` to inspect the effective executor order, suppression, and lifecycle state. Use `agpair policy disable/enable/priority/reset` for pluggable runtime changes instead of editing source.
 
-## Routing And Fanout Decision
+## Routing Budget And Fanout
 
 Before doing non-trivial work directly or using native subagents, answer:
 
 1. Which external lane is most likely to produce an adoptable result?
-2. Would a second external lane reduce controller labor or improve confidence
-   enough to justify the merge/review cost?
-3. If the task mutates files, can every mutating lane use an isolated worktree
+2. What is the routing budget: one lane, several role-based lanes, direct work,
+   or a native helper?
+3. For every extra lane, what distinct role does it play: implementation,
+   review, test-fix, research, adversarial critique, or file-sliced work?
+4. If the task mutates files, can every mutating lane use an isolated worktree
    or a disjoint scope?
 
-If fanout has clear value, dispatch fanout. If fanout only adds coordination
-cost, use the best single external lane and continue. Do not dispatch extra
-lanes just to satisfy a numeric target.
+Default to one high-likelihood external lane for ordinary work. Dispatch
+additional lanes when they are role-distinct and the added evidence is likely
+to reduce rework, risk, or uncertainty. Do not cap useful fanout by habit, but
+also do not add lanes as ceremony. Stop when an added lane would only duplicate
+another lane's prompt, scope, or expected evidence.
 
 Skip AGPair entirely only when one of these is true, and state the reason:
 
@@ -63,8 +67,8 @@ Recommended shapes:
 
 | Work type | Default external shape | Claude Code controller lanes |
 | --- | --- | --- |
-| Non-trivial research/review/diagnosis/design | 2 lanes when executors are healthy and time budget allows | `grok-cli` plus `antigravity-cli`; add `codex` for high-risk work |
-| Non-trivial implementation/refactor/test-fix | 1 isolated implementation lane first; add an external review/test lane or alternative implementation when risk or uncertainty warrants it | `antigravity-cli` primary; `grok-cli` or `codex` challenger |
+| Non-trivial research/review/diagnosis/design | 1 strong external lane by default; 2-4 role-based lanes for high-risk or multi-angle work | `grok-cli` first; add a second `grok-cli`, `antigravity-cli`, or `codex` only with a distinct angle |
+| Non-trivial implementation/refactor/test-fix | 1 isolated implementation lane first; add a challenger or review/test lane when risk justifies it | `grok-cli` implementation lane first; `antigravity-cli` or `codex` as challenger/reviewer when useful |
 | Tiny/sensitive/context-heavy work | 0-1 lane | State the skip reason if AGPair is skipped, then work directly or use a narrow helper |
 
 Give each external lane the same goal, explicit scope, and comparable exit
@@ -78,15 +82,23 @@ executors in the controller worktree. Safe patterns:
 
 - one primary implementation lane plus one external review/test lane;
 - two alternative implementation candidates in separate isolated worktrees;
-- multiple instances of the same executor only when scopes are disjoint or each
-  instance has its own isolated worktree.
+- multiple `grok-cli` or same-executor instances with distinct task ids,
+  prompts, file slices, or acceptance criteria; mutating instances need
+  disjoint scopes or separate isolated worktrees.
 
-Claude Code native subagents remain fallback, review, or narrow helper lanes
-after external executors are unsuitable, unavailable, or not good enough.
+Claude Code native subagents remain available as review or narrow helper lanes
+when they add useful controller-side verification, and as fallback when external
+output is unavailable, unsuitable, or not good enough. Prefer external AGPair
+lanes for primary execution, but do not avoid a native helper when it can run in
+parallel and materially improve verification. Native helpers are especially
+appropriate for hidden-context reasoning, quick local sanity checks, integrating
+multiple external outcomes, or reviewing an external diff before adoption.
 
 Anti-patterns:
 
-- Do not use fanout as ceremony when one external lane is enough.
+- Do not use fanout as ceremony when added lanes no longer improve the result.
+- Do not run duplicate external lanes with the same prompt, scope, and exit
+  criteria.
 - Do not run multiple mutating lanes in the controller worktree.
 - Do not keep waiting on a silent or low-quality lane after another lane has
   produced adoptable evidence.
@@ -95,7 +107,10 @@ Anti-patterns:
 
 Pre-delivery check:
 
-- [ ] Routing decision made: external lane, fanout, direct work, or native helper.
+- [ ] Routing budget made: single external lane, role-based fanout, direct work,
+      or native helper.
+- [ ] Every external brief is self-contained and not dependent on hidden chat
+      context.
 - [ ] AGPair skip reason stated if no external lane was used for non-trivial work.
 - [ ] Every mutating external lane is isolated or disjoint.
 - [ ] `task status --json` inspected for each lane.
@@ -107,6 +122,12 @@ Pre-delivery check:
 For ordinary tasks, send a clear natural brief. AGPair normalizes useful
 briefs and should not reject work merely because a section heading is missing.
 Do not pass placeholders like `<brief>`, `todo`, or `fix this`.
+
+External lanes do not share Claude Code's hidden conversation state. The brief
+must stand alone: include the goal, relevant paths, constraints, forbidden
+scope, expected output, and validation or evidence requirements. If the worker
+would need unstated chat context to succeed, either add that context to the
+brief or keep the work in Claude Code/native helper lanes.
 
 For complex mutating work, prefer this structured shape because it gives the
 external executor tighter scope and gives the controller better evidence:
@@ -132,7 +153,7 @@ For a single external lane, let `task start` wait by default:
 agpair task start \
   --repo-path "$REPO" \
   --controller claude-code \
-  --executor antigravity-cli \
+  --executor grok-cli \
   --task-kind quick_review \
   --wait-policy lease \
   --authorization-profile local_readonly \
@@ -150,7 +171,7 @@ the extra coordination:
 agpair task start \
   --repo-path "$REPO" \
   --controller claude-code \
-  --executor antigravity-cli \
+  --executor grok-cli \
   --task-kind implementation \
   --wait-policy lease \
   --authorization-profile local_mutating \
@@ -170,7 +191,7 @@ For parallel or background work, dispatch asynchronously and attach a low-noise 
 ```bash
 agpair task start \
   --repo-path "$REPO" \
-  --executor antigravity-cli \
+  --executor grok-cli \
   --authorization-profile local_mutating \
   --body "$BRIEF" \
   --no-wait

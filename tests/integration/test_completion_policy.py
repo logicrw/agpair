@@ -141,6 +141,71 @@ def test_finalize_report_policy_accepts_report_only_receipt_without_implementati
     assert "required_missing" not in receipt["payload"]
 
 
+def test_finalize_executor_receipt_preserves_vendor_and_debug_artifacts(tmp_path: Path) -> None:
+    from agpair.task_terminal import finalize_executor_receipt
+    from agpair.transport import messages
+
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    repo = TaskRepository(paths.db_path)
+    repo.create_task(
+        task_id="TASK-EXTRA-ARTIFACTS",
+        repo_path=str(tmp_path / "repo"),
+        authorization_profile="local_readonly",
+        completion_policy="report",
+    )
+    repo.mark_acked(task_id="TASK-EXTRA-ARTIFACTS", session_id="session-extra-artifacts")
+    task = repo.get_task("TASK-EXTRA-ARTIFACTS")
+    assert task is not None
+
+    temp_dir = tmp_path / "executor-temp"
+    temp_dir.mkdir()
+    stdout = temp_dir / "stdout.log"
+    stderr = temp_dir / "stderr.log"
+    vendor_log = temp_dir / "antigravity-cli.log"
+    debug_log = temp_dir / "claude-code-debug.log"
+    stdout.write_text("report stdout\n", encoding="utf-8")
+    stderr.write_text("", encoding="utf-8")
+    vendor_log.write_text("vendor evidence\n", encoding="utf-8")
+    debug_log.write_text("debug evidence\n", encoding="utf-8")
+
+    decision = finalize_executor_receipt(
+        state_root=paths.root,
+        tasks=repo,
+        journal=JournalRepository(paths.db_path),
+        task=task,
+        raw_receipt={
+            "schema_version": "1",
+            "task_id": "TASK-EXTRA-ARTIFACTS",
+            "attempt_no": 1,
+            "review_round": 0,
+            "status": messages.EVIDENCE_PACK,
+            "summary": "Report complete.",
+            "payload": {
+                "report": "外部执行器报告已完成。",
+                "raw_log_path": str(stdout),
+                "stderr_log_path": str(stderr),
+                "vendor_log_path": str(vendor_log),
+                "debug_log_path": str(debug_log),
+                "exit_code": 0,
+            },
+        },
+        source="test",
+        message_id="msg-extra-artifacts",
+    )
+
+    assert decision.ok is True
+    task_after = repo.get_task("TASK-EXTRA-ARTIFACTS")
+    assert task_after is not None
+    receipt = json.loads(task_after.terminal_receipt_json or "{}")
+    assert Path(receipt["payload"]["vendor_log_path"]).read_text(encoding="utf-8") == "vendor evidence\n"
+    assert Path(receipt["payload"]["debug_log_path"]).read_text(encoding="utf-8") == "debug evidence\n"
+
+    artifacts = {artifact.artifact_type: artifact for artifact in repo.list_artifacts(task_id="TASK-EXTRA-ARTIFACTS")}
+    assert artifacts["vendor_log"].path == receipt["payload"]["vendor_log_path"]
+    assert artifacts["debug_log"].path == receipt["payload"]["debug_log_path"]
+
+
 def test_direct_commit_policy_rejects_evidence_pack(tmp_path: Path) -> None:
     from agpair.daemon.loop import run_once
 

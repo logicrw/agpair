@@ -30,8 +30,8 @@ agpair doctor --fresh --repo-path /path/to/repo
 
 Important fields:
 
-- `supported_executor_backends`: `antigravity-cli`, `grok-cli`, `claude-code`, `codex`.
-- `default_executor_backend`: `antigravity-cli`.
+- `supported_executor_backends`: `grok-cli`, `antigravity-cli`, `claude-code`, `codex`.
+- `default_executor_backend`: `grok-cli`.
 - `executor_cli_health`: whether each CLI binary is available.
 - `authorization_profiles`: dispatch-time permission budgets.
 - `client_hook_install_status`: Codex/Claude hook status when a repo path is provided.
@@ -164,8 +164,8 @@ Workflow manifests are declarative and are not a script runner. Workflow `ready_
 
 Use this order unless the task gives a better reason:
 
-1. `antigravity-cli`: default external implementation executor.
-2. `grok-cli`: cheap challenger / backup.
+1. `grok-cli`: default fast external executor.
+2. `antigravity-cli`: strong implementation / second-opinion executor.
 
 For Codex controllers, next use `claude-code`; external `codex` is suppressed by default because it is the AGPair-managed Codex CLI worker. For Claude Code controllers, next use `codex`; external `claude-code` is suppressed by default because Claude Code already has native subagents. Override self-executor suppression only with `--allow-self-executor`.
 

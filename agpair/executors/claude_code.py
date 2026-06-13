@@ -35,6 +35,21 @@ def _settings_args() -> list[str]:
     return ["--settings", value]
 
 
+def _debug_args(temp_dir: pathlib.Path) -> list[str]:
+    value = os.environ.get("AGPAIR_CLAUDE_CODE_DEBUG_FILE", "").strip()
+    if value.lower() in {"0", "false", "no", "off"}:
+        return []
+    debug_path = pathlib.Path(value) if value else temp_dir / "claude-code-debug.log"
+    return ["--debug-file", str(debug_path)]
+
+
+def _chrome_args() -> list[str]:
+    value = os.environ.get("AGPAIR_CLAUDE_CODE_CHROME", "").strip().lower()
+    if value in {"1", "true", "yes", "on", "enable", "enabled"}:
+        return []
+    return ["--no-chrome"]
+
+
 class ClaudeCodeExecutor(LocalCLIExecutor):
     def __init__(self, claude_bin: str | None = None) -> None:
         self._auth_resolution: ClaudeAuthResolution | None = None
@@ -64,11 +79,13 @@ class ClaudeCodeExecutor(LocalCLIExecutor):
         repo_path: str,
         temp_dir: pathlib.Path,
     ) -> list[str]:
-        del repo_path, temp_dir
+        del repo_path
         return [
             *_retry_env_args(),
             self.bin_path,
             *_settings_args(),
+            *_debug_args(temp_dir),
+            *_chrome_args(),
             *_permission_args(),
             "--no-session-persistence",
             "--output-format",
@@ -88,6 +105,13 @@ class ClaudeCodeExecutor(LocalCLIExecutor):
         if resolution.error is None and resolution.mode == "ccswitch":
             return resolution.env_overrides or ccswitch_env_overrides(load_current_ccswitch_provider())
         return claude_retry_env()
+
+    def _raw_log_payload(self, temp_dir: pathlib.Path) -> dict:
+        payload = super()._raw_log_payload(temp_dir)
+        debug_args = _debug_args(temp_dir)
+        if debug_args:
+            payload["debug_log_path"] = debug_args[1]
+        return payload
 
     @property
     def continuation_capability(self) -> ContinuationCapability:

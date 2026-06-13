@@ -72,7 +72,8 @@ def test_controller_priority_overlay_reorders_without_changing_static_specs() ->
     decision = resolve_controller_policy(controller="codex", overlay=overlay)
 
     assert decision.eligible_executors[:3] == ("grok-cli", "antigravity-cli", "claude-code")
-    assert EXECUTOR_SPECS["antigravity-cli"].default_priority == 10
+    assert EXECUTOR_SPECS["antigravity-cli"].default_priority == 20
+    assert EXECUTOR_SPECS["grok-cli"].default_priority == 10
 
 
 def test_self_suppression_is_independent_from_runtime_disable() -> None:

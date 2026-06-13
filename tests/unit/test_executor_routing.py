@@ -15,13 +15,13 @@ from agpair.executors.grok_cli import GrokCLIExecutor
 from agpair.executors.policy import EXECUTOR_SPECS
 
 
-def test_default_executor_is_antigravity_cli() -> None:
-    assert default_executor_id() == "antigravity-cli"
-    assert EXECUTOR_SPECS["antigravity-cli"].default_binary == "agy"
+def test_default_executor_is_grok_cli() -> None:
+    assert default_executor_id() == "grok-cli"
+    assert EXECUTOR_SPECS["grok-cli"].default_binary == "grok"
 
 
 def test_supported_executor_ids_exclude_gemini() -> None:
-    assert supported_executor_ids() == ("antigravity-cli", "grok-cli", "claude-code", "codex")
+    assert supported_executor_ids() == ("grok-cli", "antigravity-cli", "claude-code", "codex")
     assert is_supported_executor("antigravity-cli")
     assert is_supported_executor("grok-cli")
     assert is_supported_executor("claude-code")

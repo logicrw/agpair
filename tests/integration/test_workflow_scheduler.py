@@ -40,7 +40,6 @@ def make_manifest(repo_path: str):
                     "body": "Goal: scan. Required changes: none.",
                     "authorization_profile": "local_readonly",
                     "completion_policy": "report",
-                    "executor": "antigravity-cli",
                     "depends_on": [],
                 },
                 {"id": "gate", "kind": "gate", "depends_on": ["scan"]},
@@ -107,7 +106,7 @@ def test_scheduler_reroutes_stuck_node_with_retry_budget(tmp_path: Path, monkeyp
     tasks = TaskRepository(paths.db_path)
     first_task = tasks.get_task("WF-REROUTE-scan")
     assert first_task is not None
-    assert first_task.executor_backend == "antigravity-cli"
+    assert first_task.executor_backend == "grok-cli"
     tasks.mark_stuck(task_id=first_task.task_id, reason="executor stopped sending heartbeats")
 
     result = scheduler.tick(workflow_id, repo_path=str(repo_dir))
@@ -117,11 +116,11 @@ def test_scheduler_reroutes_stuck_node_with_retry_budget(tmp_path: Path, monkeyp
     assert node.phase == "running"
     assert node.attempt_no == 1
     assert node.task_id == "WF-REROUTE-scan-A1"
-    assert node.executor_backend == "grok-cli"
-    assert "rerouting from antigravity-cli to grok-cli" in (node.last_error or "")
+    assert node.executor_backend == "antigravity-cli"
+    assert "rerouting from grok-cli to antigravity-cli" in (node.last_error or "")
     retry_task = tasks.get_task("WF-REROUTE-scan-A1")
     assert retry_task is not None
-    assert retry_task.executor_backend == "grok-cli"
+    assert retry_task.executor_backend == "antigravity-cli"
 
 
 def test_scheduler_marks_workflow_ready_after_child_and_gate(tmp_path: Path, monkeypatch) -> None:

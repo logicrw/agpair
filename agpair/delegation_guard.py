@@ -5,6 +5,8 @@ import os
 DELEGATION_DEPTH_ENV = "AGPAIR_DELEGATION_DEPTH"
 PARENT_TASK_ID_ENV = "AGPAIR_PARENT_TASK_ID"
 NONINTERACTIVE_ENV = "AGPAIR_NONINTERACTIVE"
+ALLOW_NESTED_DELEGATION_ENV = "AGPAIR_ALLOW_NESTED_DELEGATION"
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 def current_delegation_depth(env: dict[str, str] | None = None) -> int:
@@ -17,6 +19,11 @@ def current_delegation_depth(env: dict[str, str] | None = None) -> int:
 
 def nested_delegation_blocked(env: dict[str, str] | None = None) -> bool:
     return current_delegation_depth(env) >= 1
+
+
+def nested_delegation_authorized(env: dict[str, str] | None = None) -> bool:
+    source = env if env is not None else os.environ
+    return source.get(ALLOW_NESTED_DELEGATION_ENV, "").strip().lower() in _TRUE_VALUES
 
 
 def next_delegation_env(task_id: str, env: dict[str, str] | None = None) -> dict[str, str]:

@@ -104,6 +104,8 @@ def start_and_settle(paths: AppPaths, repo_path: pathlib.Path, task_id: str):
             "start",
             "--repo-path",
             str(repo_path),
+            "--executor",
+            "antigravity-cli",
             "--task-id",
             task_id,
             "--body",

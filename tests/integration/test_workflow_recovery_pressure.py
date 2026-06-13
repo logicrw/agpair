@@ -53,7 +53,6 @@ def make_manifest(repo_path: str, *, max_retries: int = 1):
                     "body": "Goal: scan. Required changes: none. Exit criteria: report findings.",
                     "authorization_profile": "local_readonly",
                     "completion_policy": "report",
-                    "executor": "antigravity-cli",
                     "max_retries": max_retries,
                     "depends_on": [],
                 },
@@ -92,7 +91,7 @@ def test_restart_reroutes_stuck_node_once_and_keeps_retry_context(tmp_path: Path
     WorkflowScheduler(paths).tick("WF-RESTART", repo_path=str(repo_dir))
     first = tasks.get_task("WF-RESTART-scan")
     assert first is not None
-    assert first.executor_backend == "antigravity-cli"
+    assert first.executor_backend == "grok-cli"
     tasks.mark_stuck(task_id=first.task_id, reason="child stopped making progress")
 
     restart_scheduler = WorkflowScheduler(paths)
@@ -104,8 +103,8 @@ def test_restart_reroutes_stuck_node_once_and_keeps_retry_context(tmp_path: Path
     assert node.phase == "running"
     assert node.attempt_no == 1
     assert node.task_id == "WF-RESTART-scan-A1"
-    assert node.executor_backend == "grok-cli"
-    assert "rerouting from antigravity-cli to grok-cli" in (node.last_error or "")
+    assert node.executor_backend == "antigravity-cli"
+    assert "rerouting from grok-cli to antigravity-cli" in (node.last_error or "")
     workflow_tasks = tasks.list_tasks(workflow_id="WF-RESTART", limit=10)
     assert {task.task_id for task in workflow_tasks} == {"WF-RESTART-scan", "WF-RESTART-scan-A1"}
     assert len(workflow_tasks) == 2
@@ -151,9 +150,9 @@ def test_repeated_stuck_attempts_rotate_through_executor_policy_order(tmp_path: 
     tasks = TaskRepository(paths.db_path)
 
     WorkflowScheduler(paths).tick("WF-ROTATE", repo_path=str(repo_dir))
-    tasks.mark_stuck(task_id="WF-ROTATE-scan", reason="antigravity failed")
+    tasks.mark_stuck(task_id="WF-ROTATE-scan", reason="grok failed")
     WorkflowScheduler(paths).tick("WF-ROTATE", repo_path=str(repo_dir))
-    tasks.mark_stuck(task_id="WF-ROTATE-scan-A1", reason="grok failed")
+    tasks.mark_stuck(task_id="WF-ROTATE-scan-A1", reason="antigravity failed")
     WorkflowScheduler(paths).tick("WF-ROTATE", repo_path=str(repo_dir))
 
     node = workflows.require_node("WF-ROTATE", "scan")
@@ -166,8 +165,8 @@ def test_repeated_stuck_attempts_rotate_through_executor_policy_order(tmp_path: 
         for task in tasks.list_tasks(workflow_id="WF-ROTATE", limit=10)
     }
     assert backends == {
-        "WF-ROTATE-scan": "antigravity-cli",
-        "WF-ROTATE-scan-A1": "grok-cli",
+        "WF-ROTATE-scan": "grok-cli",
+        "WF-ROTATE-scan-A1": "antigravity-cli",
         "WF-ROTATE-scan-A2": "claude-code",
     }
 

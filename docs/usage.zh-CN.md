@@ -202,8 +202,8 @@ Executor launch environment：
 
 | Executor | 默认 mode | Skills/MCP |
 | --- | --- | --- |
-| `antigravity-cli` | `managed-natural` | inherit |
 | `grok-cli` | `managed-natural` | inherit |
+| `antigravity-cli` | `managed-natural` | inherit |
 | `claude-code` | 认证健康时 `managed-natural` | inherit |
 | `codex` | `managed-natural` | inherit |
 
@@ -275,6 +275,13 @@ probe、smoke 和 retry 进程会被标记为 internal，让 Codex / Claude hook
 - `AGPAIR_INTERNAL_ROLE=probe|executor|smoke`
 - `AGPAIR_SUPPRESS_CLIENT_HOOKS=1`
 - `AGPAIR_NONINTERACTIVE=1`
+- `AGPAIR_ALLOW_NESTED_DELEGATION=1`
+
+executor 启动出来的进程默认禁止再次发起 AGPair 嵌套委派。
+`--allow-nested-delegation` 不能由 executor 自己授权；它还必须同时拿到
+controller 环境里的 `AGPAIR_ALLOW_NESTED_DELEGATION=1`。这样可以防止
+Claude Code 或其他继承来的 skill 把一个 worker 任务再次变成 controller loop，
+除非这本来就是主控显式授权的编排任务。
 
 这些开关都是 adapter-local 的诊断/兼容入口。所有 executor 的共享合同仍以
 registry profile 为准，测试会要求 profile 声明的非交互和隔离 flag 与 adapter
@@ -359,7 +366,10 @@ AGPair 会返回结构化的 background-running 结果，而不是让主控浪�
 - `env_vars`: 单任务环境提示；只有 executor 明确支持的环境变量会自动应用。
 - `spotlight_testing`: 布尔值，表示优先运行局部焦点测试而非全量测试的意图。
 
-**并发建议：** 永远在跨 worktree 间做并发，不能在同一个 worktree 内并发任务。
+**并发建议：** 默认使用有价值的并行度。同一个 executor 可以同时开多个 task，
+包括多个 `grok-cli`，只要每个 task 有不同的 task id、prompt、文件切片、
+审查角度或验收标准。会写文件的任务必须跨 isolated worktree 或互不重叠的
+scope 并发，不能在同一个主控 worktree 内互相踩文件。
 
 ---
 
@@ -609,7 +619,10 @@ outcome 不允许后台继续。
 
 ## 12. 工作流
 
-普通工作使用 `agpair task start`。高价值、多段、并行、对抗审查或长时间任务使用 `agpair workflow start`。
+普通工作使用 `agpair task start`。当非平凡任务适合多个 `grok-cli` 复核、
+竞争实现候选，或需要额外 `antigravity-cli` / `claude-code` 验证时，直接启动
+多个 task id。高价值、多段、并行、对抗审查或长时间任务使用
+`agpair workflow start`。
 
 ```bash
 agpair workflow validate --file templates/workflows/fanout-synthesize.json
@@ -643,7 +656,7 @@ Workflow `ready_for_review` 表示 AGPair 已生成 evidence pack 等待主控�
 contract，而不是在任务状态机里散落 provider 特判。详见
 [Executor Lifecycle](executor-lifecycle.md)。
 
-当前 active executor id 是 `antigravity-cli`、`grok-cli`、`claude-code` 和
+当前 active executor id 是 `grok-cli`、`antigravity-cli`、`claude-code` 和
 `codex`。`codex` 指 AGPair 管理的外部 Codex CLI worker，不是 Codex 原生
 subagent；`claude-code` 指 AGPair 管理的外部 Claude Code worker，不是 Claude
 Code 原生 subagent。

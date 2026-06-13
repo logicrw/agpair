@@ -68,6 +68,8 @@ def finalize_executor_receipt(
     attempt_dir = ensure_attempt_dir(state_root, task.task_id, task.attempt_no)
     stdout_path = copy_artifact(payload.get("raw_log_path"), attempt_dir / "stdout.log") or str(attempt_dir / "stdout.log")
     stderr_path = copy_artifact(payload.get("stderr_log_path"), attempt_dir / "stderr.log") or None
+    vendor_log_path = copy_artifact(payload.get("vendor_log_path"), attempt_dir / "vendor.log")
+    debug_log_path = copy_artifact(payload.get("debug_log_path"), attempt_dir / "debug.log")
     if not Path(stdout_path).exists():
         Path(stdout_path).write_text("", encoding="utf-8")
     if stderr_path is None:
@@ -84,6 +86,10 @@ def finalize_executor_receipt(
 
     payload["raw_log_path"] = stdout_path
     payload["stderr_log_path"] = stderr_path
+    if vendor_log_path:
+        payload["vendor_log_path"] = vendor_log_path
+    if debug_log_path:
+        payload["debug_log_path"] = debug_log_path
     if report_path:
         payload["report_path"] = report_path
     receipt_path = str(attempt_dir / "receipt.json")
@@ -127,6 +133,8 @@ def finalize_executor_receipt(
             for item in (
                 artifact_metadata(stdout_path, artifact_type="stdout"),
                 artifact_metadata(stderr_path, artifact_type="stderr"),
+                artifact_metadata(vendor_log_path, artifact_type="vendor_log"),
+                artifact_metadata(debug_log_path, artifact_type="debug_log"),
                 artifact_metadata(receipt_path, artifact_type="receipt"),
                 artifact_metadata(report_path, artifact_type="report"),
             )
@@ -154,6 +162,8 @@ def finalize_executor_receipt(
         artifacts={
             "stdout": stdout_path,
             "stderr": stderr_path,
+            "vendor_log": vendor_log_path,
+            "debug_log": debug_log_path,
             "receipt": receipt_path,
             "report": report_path,
             "evidence": evidence_path,

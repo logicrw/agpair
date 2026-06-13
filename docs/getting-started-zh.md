@@ -30,8 +30,8 @@ agpair doctor --fresh --repo-path /path/to/repo
 
 重点看：
 
-- `supported_executor_backends`: `antigravity-cli`, `grok-cli`, `claude-code`, `codex`。
-- `default_executor_backend`: `antigravity-cli`。
+- `supported_executor_backends`: `grok-cli`, `antigravity-cli`, `claude-code`, `codex`。
+- `default_executor_backend`: `grok-cli`。
 - `executor_cli_health`: 每个 CLI binary 是否可用。
 - `authorization_profiles`: 派发时可选的授权预算。
 - `client_hook_install_status`: 传入 repo path 时会显示 Codex/Claude hook 安装状态。
@@ -163,8 +163,8 @@ agpair workflow watch WF-ABC123DEF456 --json
 
 默认先选：
 
-1. `antigravity-cli`：默认外部实现 executor。
-2. `grok-cli`：低成本 challenger / backup。
+1. `grok-cli`：默认快速外部 executor。
+2. `antigravity-cli`：强实现 / 第二意见 executor。
 
 Codex 主控之后用 `claude-code`；外部 `codex` 默认被抑制，因为它是 AGPair 管理的 Codex CLI worker。Claude Code 主控之后用 `codex`；外部 `claude-code` 默认被抑制，因为 Claude Code 已有原生 subagent。只有明确需要时才用 `--allow-self-executor` 覆盖。
 

@@ -44,9 +44,38 @@ def test_antigravity_cli_command_is_agy_print_driven(monkeypatch) -> None:
         "/tmp/repo",
         "--print-timeout",
         "30m0s",
+        "--log-file",
+        "/tmp/agpair/antigravity-cli.log",
         "--print",
         "Goal: edit the repo",
     ]
+
+
+def test_antigravity_cli_raw_log_payload_includes_vendor_log() -> None:
+    executor = AntigravityCLIExecutor(antigravity_bin="fake-agy")
+
+    payload = executor._raw_log_payload(pathlib.Path("/tmp/agpair"))
+
+    assert payload == {
+        "raw_log_path": "/tmp/agpair/stdout.log",
+        "stderr_log_path": "/tmp/agpair/stderr.log",
+        "vendor_log_path": "/tmp/agpair/antigravity-cli.log",
+    }
+
+
+def test_antigravity_cli_error_summary_reads_vendor_log(tmp_path) -> None:
+    (tmp_path / "stdout.log").write_text("", encoding="utf-8")
+    (tmp_path / "stderr.log").write_text("", encoding="utf-8")
+    (tmp_path / "antigravity-cli.log").write_text(
+        "INFO startup\nERROR tool call timed out waiting for response from model\n",
+        encoding="utf-8",
+    )
+    executor = AntigravityCLIExecutor(antigravity_bin="fake-agy")
+
+    assert (
+        executor._extract_error_summary(tmp_path)
+        == "ERROR tool call timed out waiting for response from model"
+    )
 
 
 def test_antigravity_cli_command_honors_print_timeout_env(monkeypatch) -> None:

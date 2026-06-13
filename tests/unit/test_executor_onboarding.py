@@ -116,19 +116,19 @@ def test_controller_suppression_is_profile_driven_for_codex_and_claude_code() ->
     codex_policy = resolve_controller_policy(controller="codex")
 
     assert codex_policy.suppressed_executors == ("codex",)
-    assert codex_policy.eligible_executors == ("antigravity-cli", "grok-cli", "claude-code")
+    assert codex_policy.eligible_executors == ("grok-cli", "antigravity-cli", "claude-code")
 
     claude_policy = resolve_controller_policy(controller="claude-code")
 
     assert claude_policy.suppressed_executors == ("claude-code",)
-    assert claude_policy.eligible_executors == ("antigravity-cli", "grok-cli", "codex")
+    assert claude_policy.eligible_executors == ("grok-cli", "antigravity-cli", "codex")
 
 
 def test_diagnostic_policy_can_include_all_registered_executors_when_self_allowed() -> None:
     decision = resolve_controller_policy(controller="codex", allow_self_executor=True)
 
     assert decision.suppressed_executors == ()
-    assert decision.eligible_executors == registered_executor_ids()
+    assert decision.eligible_executors == ("grok-cli", "antigravity-cli", "claude-code", "codex")
 
 
 def test_requested_executor_availability_probe_is_targeted(monkeypatch, tmp_path) -> None:

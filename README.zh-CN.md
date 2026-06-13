@@ -13,17 +13,24 @@ AGPair 3.0 是一个本地任务生命周期和证据层，让 Codex 或 Claude 
 
 ## AGPair 3.0 模型
 
-- 默认外部 executor：`antigravity-cli`
-- 低成本 challenger / backup：`grok-cli`
+- 默认第一外部 executor：`grok-cli`；当 prompt、scope 或验收标准不同，
+  可以并行启动多个 `grok-cli` task
+- 强实现 / 第二意见 executor：`antigravity-cli`
 - 质量升级：`claude-code`
 - 外部 Codex CLI worker fallback：`codex`
-- Codex / Claude Code 原生 subagent：只作为 fallback 或 review 资源
+- Codex / Claude Code 原生 subagent：在能明显提升验证或恢复质量时作为
+  review / helper / fallback lane
 
 路由是 controller-aware 的：Codex 主控默认不选择 AGPair 管理的外部 `codex`，Claude Code 主控默认不选择 AGPair 管理的外部 `claude-code`，除非明确使用 `--allow-self-executor`。
 
 实际分工是：`codex` 是给 Claude Code 主控使用的外部 Codex CLI worker；Codex 主控自己的 fallback / review lane 应使用 Codex 原生 subagent。`claude-code` 是给 Codex 主控使用的外部 Claude Code worker；Claude Code 主控自己的 fallback / review lane 应使用 Claude Code 原生 subagent。
 
 历史 executor 记录仍可为兼容性读取。新任务只使用上面的 active executor id。
+
+非平凡任务不应习惯性只派一个默认 lane。主控应优先使用有价值的并行度：
+一个或多个 `grok-cli` lane 起手；当 `antigravity-cli` 或 `claude-code`
+能提升置信度时加入；原生 subagent 可作为窄范围 reviewer/helper 补充主控
+验证。并行写代码必须使用 isolated worktree 或互不重叠的 scope。
 
 所有 active 外部 CLI executor 默认都使用 `managed-natural`。AGPair 负责任务边界、
 receipt、日志、status、retry 和验收证据；外部 CLI 继续使用它正常启动时的
@@ -64,7 +71,7 @@ export AGPAIR_ANTIGRAVITY_MODEL="Gemini 3.1 Pro (Low)"
 
 ```bash
 agpair task start \
-  --executor antigravity-cli \
+  --executor grok-cli \
   --task-kind quick_review \
   --wait-policy lease \
   --authorization-profile local_readonly \
@@ -77,7 +84,7 @@ agpair task start \
 
 ```bash
 agpair task start \
-  --executor antigravity-cli \
+  --executor grok-cli \
   --task-kind quick_review \
   --wait-policy lease \
   --authorization-profile local_readonly \
@@ -95,7 +102,7 @@ agpair task watch TASK-123 --json
 
 ```bash
 agpair task start \
-  --executor antigravity-cli \
+  --executor grok-cli \
   --task-kind implementation \
   --wait-policy lease \
   --authorization-profile local_mutating \
@@ -245,7 +252,7 @@ AGPair CLI + SQLite state + journal + receipts
         |
         | external CLI executor
         v
-antigravity-cli / grok-cli / claude-code / codex
+grok-cli / antigravity-cli / claude-code / codex
 ```
 
 AGPair 不是语义控制器。规划、范围决策、review 和最终验证仍由主控 AI 负责。

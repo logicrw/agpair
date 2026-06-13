@@ -13,17 +13,25 @@ Controllers plan and verify. AGPair dispatches external CLI executors, persists 
 
 ## AGPair 3.0 Model
 
-- Default external executor: `antigravity-cli`
-- Cheap challenger / backup: `grok-cli`
+- Default first external executor: `grok-cli`; multiple `grok-cli` tasks may run
+  in parallel when their prompts, scopes, or acceptance criteria are distinct
+- Strong implementation / second-opinion executor: `antigravity-cli`
 - Quality escalation: `claude-code`
 - Fallback external Codex CLI worker: `codex`
-- Native Codex / Claude Code subagents: fallback or review only
+- Native Codex / Claude Code subagents: review/helper/fallback lanes when they
+  materially improve verification or recovery
 
 Controller-aware routing suppresses self-executors by default: Codex controllers do not choose AGPair-managed external `codex`, and Claude Code controllers do not choose AGPair-managed external `claude-code`, unless `--allow-self-executor` is explicitly used.
 
 Operationally, `codex` is the external Codex CLI worker for Claude Code controllers. Codex controllers should use native Codex subagents as their fallback/review lane. `claude-code` is the external Claude Code worker for Codex controllers. Claude Code controllers should use native Claude Code subagents as their fallback/review lane.
 
 Historical executor records remain inspectable for compatibility. New dispatch uses the active executor ids above.
+
+For non-trivial work, the controller should prefer useful breadth over a single
+default lane: run one or more `grok-cli` lanes, add `antigravity-cli` or
+`claude-code` when their output can improve confidence, and use native
+subagents as narrow reviewers/helpers when they add controller-side value.
+Mutating parallel lanes must use isolated worktrees or disjoint scopes.
 
 Default executor environments are managed-natural for every active external CLI executor: AGPair manages task boundaries, receipts, logs, status, retry, and verification evidence, while the external CLI keeps its normal skills, MCP, memory, plugins, and provider config. Controller suppression handles self-executor avoidance; executor launch configuration is not special-cased.
 
@@ -59,7 +67,7 @@ Start a task. `task start` waits by default:
 
 ```bash
 agpair task start \
-  --executor antigravity-cli \
+  --executor grok-cli \
   --task-kind quick_review \
   --wait-policy lease \
   --authorization-profile local_readonly \
@@ -72,7 +80,7 @@ For async or parallel work, dispatch and watch state changes:
 
 ```bash
 agpair task start \
-  --executor antigravity-cli \
+  --executor grok-cli \
   --task-kind quick_review \
   --wait-policy lease \
   --authorization-profile local_readonly \
@@ -244,7 +252,7 @@ AGPair CLI + SQLite state + journal + receipts
         |
         | external CLI executor
         v
-antigravity-cli / grok-cli / claude-code / codex
+grok-cli / antigravity-cli / claude-code / codex
 ```
 
 AGPair is not a semantic controller. The AI controller still owns planning, scope decisions, review, and final verification.
