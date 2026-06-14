@@ -117,6 +117,46 @@ Pre-delivery check:
 - [ ] Useful evidence was accepted/adopted or explicitly rejected.
 - [ ] Final answer distinguishes external evidence from controller judgment.
 
+## Fusion-Style Workflow Fanout
+
+For high-value research, review, design, implementation choices, or competing
+candidate work, prefer a fanout-synthesis workflow instead of manually starting
+unrelated tasks. The useful pattern is parallel lane tasks, one synthesis node,
+and a controller gate:
+
+```bash
+agpair workflow fanout \
+  --controller claude-code \
+  --mode review \
+  --topic "$TOPIC" \
+  --lane grok-cli:primary \
+  --lane grok-cli:adversarial \
+  --lane antigravity-cli:second-opinion \
+  --repo-path "$REPO" \
+  --wait --json
+```
+
+For implementation or test-fix panels, mutating lanes are isolated by the
+fanout preset. Keep the scope explicit:
+
+```bash
+agpair workflow fanout \
+  --controller claude-code \
+  --mode implementation \
+  --topic "$TOPIC" \
+  --scope "$ALLOWED_SCOPE" \
+  --lane grok-cli:candidate-a \
+  --lane codex:candidate-b \
+  --isolated-worktree \
+  --repo-path "$REPO" \
+  --dry-run --json
+```
+
+Read `panel_result`, `lane_cards`, `synthesis_result`, and `evidence_path`
+before answering. The synthesis result is evidence, not final truth. Controller
+verification still decides whether to use, apply, retry, switch executor, or
+fall back to a native helper.
+
 ## Dispatch
 
 For ordinary tasks, send a clear natural brief. AGPair normalizes useful

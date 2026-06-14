@@ -94,6 +94,26 @@ agpair task watch TASK-123 --json
 
 `watch --json` emits state-change events and paths to raw logs/receipts. It does not stream full executor logs into the controller context.
 
+For high-value review, research, design, or competing implementation choices,
+use Fusion-style fanout so the controller receives lane cards plus one
+synthesis/gate evidence pack:
+
+```bash
+agpair workflow fanout \
+  --controller codex \
+  --mode review \
+  --topic "Review external-agent routing risks" \
+  --lane grok-cli:primary \
+  --lane grok-cli:adversarial \
+  --lane antigravity-cli:second-opinion \
+  --repo-path /path/to/repo \
+  --wait --json
+```
+
+Inspect `panel_result`, `lane_cards`, `synthesis_result`, and `evidence_path`
+before answering. Synthesis is evidence for controller verification, not an
+automatic final answer.
+
 For implementation/refactor/test-fix slices, use an isolated worktree with evidence completion:
 
 ```bash

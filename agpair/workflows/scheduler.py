@@ -103,10 +103,32 @@ class WorkflowScheduler:
             return
         if incomplete:
             return
+        evidence_pack = build_workflow_evidence_pack(self.paths, workflow.workflow_id, phase=workflow.phase)
+        has_synthesis = any(item.kind == "synthesis" for item in required)
+        if has_synthesis and not evidence_pack.get("synthesis_result"):
+            self.workflows.mark_node_phase(
+                workflow.workflow_id,
+                node.node_id,
+                "blocked",
+                error="gate failed: missing synthesis result",
+            )
+            return
+        panel_result = evidence_pack.get("panel_result") if isinstance(evidence_pack.get("panel_result"), dict) else {}
+        hard_blockers = panel_result.get("hard_blockers") if isinstance(panel_result, dict) else []
+        if has_synthesis and isinstance(hard_blockers, list) and hard_blockers:
+            self.workflows.mark_node_phase(
+                workflow.workflow_id,
+                node.node_id,
+                "blocked",
+                error="gate failed: panel hard blockers: " + ", ".join(str(item) for item in hard_blockers),
+            )
+            return
         evidence = {
             "schema_version": "1",
             "gate": "passed",
             "required_nodes": [item.node_id for item in required],
+            "synthesis_result": evidence_pack.get("synthesis_result"),
+            "panel_result": panel_result,
         }
         self.workflows.mark_node_phase(
             workflow.workflow_id,
@@ -149,12 +171,12 @@ class WorkflowScheduler:
             effective_policy_json=effective_policy_json,
             executor_backend=executor_id,
         )
+        dirty_snapshot_mode = (
+            "tracked"
+            if node.isolated_worktree and node.authorization_profile != "local_readonly"
+            else "off"
+        )
         try:
-            dirty_snapshot_mode = (
-                "tracked"
-                if node.isolated_worktree and node.authorization_profile != "local_readonly"
-                else "off"
-            )
             self.tasks.create_task(
                 task_id=task_id,
                 repo_path=repo_path,
@@ -231,6 +253,11 @@ class WorkflowScheduler:
 
     def _node_body(self, workflow: WorkflowRecord, node: WorkflowNodeRecord) -> str:
         body = node.body or f"Workflow node {node.node_id} has no body."
+        manifest = _safe_json(workflow.manifest_json) or {}
+        source_policy = manifest.get("source_policy")
+        if isinstance(source_policy, dict) and node.kind != "gate":
+            body += "\n\nWorkflow source policy, JSON:\n"
+            body += json.dumps(source_policy, ensure_ascii=False, sort_keys=True)
         if node.kind in {"synthesis", "verification"}:
             dependencies = []
             for dep in node.depends_list():
@@ -244,18 +271,23 @@ class WorkflowScheduler:
                     "evidence": _safe_json(dep_node.evidence_json),
                     "result": _safe_json(dep_node.result_json),
                 })
+            context = {
+                "workflow_id": workflow.workflow_id,
+                "node_id": node.node_id,
+                "node_kind": node.kind,
+                "dependencies": dependencies,
+                "instruction": "Use durable artifact paths and structured receipt summaries. Do not rely on raw executor prose as proof.",
+            }
+            if isinstance(source_policy, dict):
+                context["source_policy"] = source_policy
+            if node.kind == "synthesis":
+                context["lane_cards"] = build_workflow_evidence_pack(
+                    self.paths,
+                    workflow.workflow_id,
+                    phase=workflow.phase,
+                ).get("lane_cards", [])
             body += "\n\nWorkflow context for this node, JSON:\n"
-            body += json.dumps(
-                {
-                    "workflow_id": workflow.workflow_id,
-                    "node_id": node.node_id,
-                    "node_kind": node.kind,
-                    "dependencies": dependencies,
-                    "instruction": "Use durable artifact paths and structured receipt summaries. Do not rely on raw executor prose as proof.",
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            )
+            body += json.dumps(context, ensure_ascii=False, sort_keys=True)
         if node.attempt_no > 0:
             body += "\n\nRetry context:\n"
             body += self._retry_context(workflow, node)

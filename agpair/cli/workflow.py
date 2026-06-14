@@ -10,6 +10,7 @@ from agpair.config import AppPaths
 from agpair.models import validate_authorization_profile
 from agpair.storage.db import ensure_database
 from agpair.targets import resolve_repo_path
+from agpair.workflows.presets import build_fanout_manifest
 from agpair.workflows.schema import load_manifest_file, validate_manifest
 from agpair.workflows.scheduler import TERMINAL_WORKFLOW_PHASES, WorkflowScheduler
 from agpair.workflows.store import WorkflowNotFoundError, WorkflowRepository
@@ -141,6 +142,86 @@ def start(
     typer.echo(f"workflow_id: {payload['workflow_id']}")
     typer.echo(f"phase: {payload['phase']}")
     typer.echo(f"dispatched: {payload['tick']['dispatched']}")
+
+
+@app.command("fanout")
+def fanout(
+    controller: str = typer.Option("generic", "--controller", help="Workflow controller: codex, claude-code, or generic."),
+    mode: str = typer.Option("review", "--mode", help="Fanout mode: review, research, implementation, or test-fix."),
+    topic: str = typer.Option(..., "--topic", help="Self-contained fanout topic."),
+    lane: list[str] | None = typer.Option(None, "--lane", help="Executor lane as executor:role. Repeat for multiple lanes."),
+    scope: str | None = typer.Option(None, "--scope", help="Optional file/module/task scope for every lane."),
+    repo_path: str | None = typer.Option(None, "--repo-path", help="Repository path for delegated tasks."),
+    target: str | None = typer.Option(None, "--target", help="Target alias alternative to --repo-path."),
+    workflow_id: str | None = typer.Option(None, "--workflow-id", help="Optional deterministic workflow id."),
+    isolated_worktree: bool = typer.Option(False, "--isolated-worktree", help="Use isolated worktrees for mutating lane tasks."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Only emit the generated workflow manifest."),
+    wait: bool = typer.Option(False, "--wait", help="Wait until terminal workflow phase."),
+    interval_seconds: float = typer.Option(2.0, "--interval-seconds", min=0.1),
+    timeout_seconds: float = typer.Option(3600.0, "--timeout-seconds", min=1.0),
+    no_dispatch: bool = typer.Option(False, "--no-dispatch", help="Create records without invoking executors."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    paths = _paths()
+    try:
+        effective_repo_path = _resolve_workflow_repo_path(
+            manifest_repo_path=None,
+            repo_path=repo_path,
+            target=target,
+            paths=paths,
+        )
+        manifest_dict = build_fanout_manifest(
+            controller=controller,
+            mode=mode,
+            topic=topic,
+            lanes=lane or [],
+            scope=scope,
+            repo_path=effective_repo_path if effective_repo_path else None,
+            isolated_worktree=isolated_worktree,
+        )
+        manifest = validate_manifest(
+            manifest_dict,
+            require_repo_path=not dry_run,
+            repo_path=effective_repo_path if effective_repo_path else None,
+        )
+        if dry_run:
+            payload = {
+                "ok": True,
+                "dry_run": True,
+                "manifest": manifest.manifest,
+                "node_count": len(manifest.nodes),
+            }
+        else:
+            repo = WorkflowRepository(paths.db_path)
+            final_workflow_id = repo.create_workflow(manifest, workflow_id=workflow_id, repo_path=effective_repo_path)
+            tick = WorkflowScheduler(paths).tick(final_workflow_id, repo_path=effective_repo_path, dispatch=not no_dispatch)
+            payload = (
+                _wait_for_workflow(
+                    paths,
+                    final_workflow_id,
+                    repo_path=effective_repo_path,
+                    interval_seconds=interval_seconds,
+                    timeout_seconds=timeout_seconds,
+                )
+                if wait and not no_dispatch
+                else workflow_status_payload(paths, final_workflow_id)
+            )
+            payload.update({"ok": bool(payload.get("ok", True)), "tick": tick, "repo_path": effective_repo_path})
+    except Exception as exc:
+        payload = {"ok": False, "error": str(exc)}
+        if json_output:
+            _emit_json(payload)
+        else:
+            typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    if json_output:
+        _emit_json(payload)
+        return
+    if dry_run:
+        typer.echo(json.dumps(payload["manifest"], ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    typer.echo(f"workflow_id: {payload['workflow_id']}")
+    typer.echo(f"phase: {payload['phase']}")
 
 
 @app.command("status")

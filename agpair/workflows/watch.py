@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from agpair.config import AppPaths
@@ -48,6 +49,7 @@ def workflow_status_payload(paths: AppPaths, workflow_id: str) -> dict[str, Any]
             "evidence": _json_object(node.evidence_json),
             "result": _json_object(node.result_json),
         })
+    evidence_payload = _workflow_evidence_payload(workflow.evidence_path)
     return {
         "ok": True,
         "workflow_id": workflow.workflow_id,
@@ -64,8 +66,20 @@ def workflow_status_payload(paths: AppPaths, workflow_id: str) -> dict[str, Any]
         "cancelled_at": workflow.cancelled_at,
         "error": workflow.error or workflow.stuck_reason,
         "cursor": "|".join(cursor_parts),
+        "panel_result": _dict_value(evidence_payload.get("panel_result")),
+        "synthesis_result": _dict_value(evidence_payload.get("synthesis_result")),
+        "lane_cards": evidence_payload.get("lane_cards") if isinstance(evidence_payload.get("lane_cards"), list) else [],
         "nodes": node_payloads,
     }
+
+
+def _workflow_evidence_payload(evidence_path: str | None) -> dict[str, Any]:
+    if not evidence_path:
+        return {}
+    try:
+        return _dict_value(_json_object(Path(evidence_path).read_text(encoding="utf-8")))
+    except OSError:
+        return {}
 
 
 def workflow_event_payload(paths: AppPaths, workflow_id: str, *, previous_cursor: str | None = None) -> dict[str, Any]:
@@ -92,9 +106,9 @@ def workflow_event_payload(paths: AppPaths, workflow_id: str, *, previous_cursor
             node_id = node.get("node_id")
             node_phase = node.get("phase")
             task_id = node.get("task_id")
-            paths = node.get("artifact_paths") or {}
-            receipt_path = paths.get("receipt")
-            raw_log_path = paths.get("stdout")
+            artifact_paths = _dict_value(node.get("artifact_paths"))
+            receipt_path = artifact_paths.get("receipt")
+            raw_log_path = artifact_paths.get("stdout")
             summary = f"Node {node_id} reached {node_phase}"
             break
     return {
@@ -122,6 +136,10 @@ def _json_object(text: str | None) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
+
+
+def _dict_value(raw: Any) -> dict[str, Any]:
+    return raw if isinstance(raw, dict) else {}
 
 
 def _attempt_protocol_adoption(tasks: TaskRepository, task_id: str) -> tuple[dict[str, Any], dict[str, Any]]:

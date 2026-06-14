@@ -621,10 +621,30 @@ outcome 不允许后台继续。
 
 普通工作使用 `agpair task start`。当非平凡任务适合多个 `grok-cli` 复核、
 竞争实现候选，或需要额外 `antigravity-cli` / `claude-code` 验证时，直接启动
-多个 task id。高价值、多段、并行、对抗审查或长时间任务使用
-`agpair workflow start`。
+多个 task id。高价值 panel 工作使用 `agpair workflow fanout`，让主控一次拿到
+多个 lane card 和一个 synthesis/gate evidence pack。只有 preset fanout 表达不
+够时，才用 manifest 版 `agpair workflow start`。
 
 ```bash
+agpair workflow fanout \
+  --controller codex \
+  --mode review \
+  --topic "Review terminal receipt salvage and workflow synthesis risks" \
+  --lane grok-cli:primary \
+  --lane grok-cli:adversarial \
+  --lane antigravity-cli:second-opinion \
+  --repo-path /absolute/path/to/repo \
+  --wait --json
+agpair workflow fanout \
+  --controller codex \
+  --mode implementation \
+  --topic "Implement a bounded parser fix" \
+  --scope "agpair/workflows/*.py and focused tests only" \
+  --lane grok-cli:candidate-a \
+  --lane claude-code:candidate-b \
+  --isolated-worktree \
+  --repo-path /absolute/path/to/repo \
+  --dry-run --json
 agpair workflow validate --file templates/workflows/fanout-synthesize.json
 agpair workflow start --file templates/workflows/fanout-synthesize.json --controller codex --repo-path /absolute/path/to/repo --json
 agpair workflow status WF-ABC123DEF456 --json
@@ -636,6 +656,8 @@ agpair workflow cancel WF-ABC123DEF456 --reason 'operator requested'
 工作流清单是声明式的。AGPair 会拒绝任意脚本字段，并派发普通 AGPair 子任务；子任务仍使用 durable artifacts、completion policies、结构化 receipt 和 controller-aware executor routing。
 
 Workflow `ready_for_review` 表示 AGPair 已生成 evidence pack 等待主控验收，不是最终用户侧完成。`workflow watch --json` 只输出低噪状态变化和 artifact 路径，不输出完整 raw logs。
+
+Fanout workflow 会在 status/watch/evidence payload 里暴露 `lane_cards`、`synthesis_result` 和 `panel_result`。Synthesis 是主控要检查的证据，不是最终答案。部分 lane 输出即使 receipt 不完美也会被保留，但 AGPair 会标成 `needs_review`，不会把 salvage 伪装成成功。
 
 ---
 

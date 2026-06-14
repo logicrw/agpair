@@ -98,6 +98,24 @@ agpair task watch TASK-123 --json
 
 `watch --json` 只输出状态变化和 raw log / receipt 路径，不会把完整 executor 日志塞进主控上下文。
 
+高价值 review、research、design 或竞争实现选择，使用 Fusion-style fanout。
+主控会拿到多个 lane card，以及一个 synthesis/gate evidence pack：
+
+```bash
+agpair workflow fanout \
+  --controller codex \
+  --mode review \
+  --topic "Review external-agent routing risks" \
+  --lane grok-cli:primary \
+  --lane grok-cli:adversarial \
+  --lane antigravity-cli:second-opinion \
+  --repo-path /path/to/repo \
+  --wait --json
+```
+
+回答前检查 `panel_result`、`lane_cards`、`synthesis_result` 和
+`evidence_path`。Synthesis 是给主控验收的证据，不是自动最终答案。
+
 实现 / 重构 / 修测试这类切片，用 isolated worktree 加 evidence completion：
 
 ```bash

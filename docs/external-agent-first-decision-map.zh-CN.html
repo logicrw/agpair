@@ -842,7 +842,7 @@
 
     <section id="decisions">
       <div class="section-head">
-        <h2>七个决策点</h2>
+        <h2>八个决策点</h2>
         <p class="section-note">看完这里就能判断后续代码改造有没有跑偏。每张卡都是一个实现时必须保持的边界。</p>
       </div>
 
@@ -914,6 +914,16 @@
           <div class="do-dont">
             <div class="mini"><b>要</b>统一 profile + overlay</div>
             <div class="mini"><b>不要</b>散落胶水逻辑</div>
+          </div>
+        </article>
+
+        <article class="decision-card reveal" data-no="08">
+          <span class="tag gold">多路合成</span>
+          <h3>高价值任务走 fanout panel</h3>
+          <p>多个外部 lane 并行产出证据，synthesis 汇总共识、冲突和盲点，gate 只做最小验收。主控仍是最终判断者。</p>
+          <div class="do-dont">
+            <div class="mini"><b>要</b><span class="code">workflow fanout</span></div>
+            <div class="mini"><b>不要</b>把 synthesis 当最终真理</div>
           </div>
         </article>
       </div>
@@ -1000,17 +1010,17 @@
         <tbody>
           <tr>
             <td><span class="priority">10</span></td>
-            <td><span class="code">antigravity-cli</span></td>
-            <td>实现、修测试、常规重构、长任务。</td>
-            <td><span class="code">local_mutating</span></td>
-            <td>默认第一执行器；只走 CLI，不走 IDE/桌面端。</td>
+            <td><span class="code">grok-cli</span></td>
+            <td>默认快速外部 lane、review、research、实现候选。</td>
+            <td><span class="code">local_readonly</span> 起步</td>
+            <td>可以并行多个 lane，但 prompt、scope 或验收标准必须不同。</td>
           </tr>
           <tr>
             <td><span class="priority">20</span></td>
-            <td><span class="code">grok-cli</span></td>
-            <td>探索、第二意见、便宜重试、失败后换脑子。</td>
-            <td><span class="code">local_readonly</span> 起步</td>
-            <td>能力先用 smoke/benchmark 校准，不预设它一定擅长大改。</td>
+            <td><span class="code">antigravity-cli</span></td>
+            <td>强实现、第二意见、challenger。</td>
+            <td><span class="code">local_mutating</span></td>
+            <td>只走 CLI，不走 IDE/桌面端；更适合 second opinion 或较重任务。</td>
           </tr>
           <tr>
             <td><span class="priority">30</span></td>

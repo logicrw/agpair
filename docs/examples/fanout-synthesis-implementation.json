@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "name": "fanout-implementation",
+  "controller": "codex",
+  "mode": "implementation",
+  "authorization_profile": "local_mutating",
+  "completion_policy": "direct_commit",
+  "source_policy": {
+    "mode": "implementation",
+    "policy": "Use repository evidence, existing tests, and explicit validation output.",
+    "warning": "Source policy is task guidance and evidence metadata, not a sandbox or network firewall."
+  },
+  "limits": {
+    "max_parallel_tasks": 3,
+    "max_child_tasks": 5
+  },
+  "nodes": [
+    {
+      "id": "candidate-a",
+      "kind": "task",
+      "role": "candidate-a",
+      "executor": "grok-cli",
+      "authorization_profile": "local_mutating",
+      "completion_policy": "direct_commit",
+      "isolated_worktree": true,
+      "body": "Goal: Produce the smallest safe implementation candidate for the topic. Scope: only the explicitly allowed files. Required changes: commit one candidate diff. Exit criteria: changed files, validation output, risks, and evidence paths."
+    },
+    {
+      "id": "candidate-b",
+      "kind": "task",
+      "role": "candidate-b",
+      "executor": "claude-code",
+      "authorization_profile": "local_mutating",
+      "completion_policy": "direct_commit",
+      "isolated_worktree": true,
+      "body": "Goal: Produce an alternative implementation candidate for the same topic. Scope: only the explicitly allowed files. Required changes: commit one candidate diff. Exit criteria: changed files, validation output, risks, and evidence paths."
+    },
+    {
+      "id": "reviewer",
+      "kind": "task",
+      "role": "reviewer",
+      "executor": "grok-cli",
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report",
+      "body": "Goal: Review implementation candidates when evidence is available. Scope: read-only. Required changes: none; report only. Exit criteria: compare candidates, surface risks, and recommend controller action."
+    },
+    {
+      "id": "synthesis",
+      "kind": "synthesis",
+      "role": "synthesis",
+      "depends_on": ["candidate-a", "candidate-b", "reviewer"],
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report",
+      "body": "Goal: Synthesize the implementation panel. Required changes: none. Exit criteria: return consensus, contradictions, unique_insights, blind_spots, recommended_controller_action, and evidence references."
+    },
+    {
+      "id": "gate",
+      "kind": "gate",
+      "role": "gate",
+      "depends_on": ["synthesis"],
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report"
+    }
+  ]
+}

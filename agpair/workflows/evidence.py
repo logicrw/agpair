@@ -7,6 +7,12 @@ from agpair.artifacts import write_json
 from agpair.config import AppPaths
 from agpair.storage.tasks import TaskRepository
 from agpair.workflows.models import SUCCESS_NODE_PHASES
+from agpair.workflows.synthesis import (
+    SynthesisValidationError,
+    build_lane_card,
+    derive_panel_result,
+    validate_synthesis_result,
+)
 from agpair.workflows.store import WorkflowRepository
 
 
@@ -95,14 +101,18 @@ def build_workflow_evidence_pack(paths: AppPaths, workflow_id: str, *, phase: st
         node_payloads.append({
             "node_id": node.node_id,
             "kind": node.kind,
+            "role": node.role,
             "phase": node.phase,
             "task_id": node.task_id,
             "task_phase": task_phase,
+            "executor_backend": node.executor_backend,
             "artifacts": artifacts,
             "protocol_result": protocol_result,
             "adoption_result": adoption_result,
             "terminal_receipt": terminal_receipt_payload,
             "error": node.error or node.last_error,
+            "evidence": _parse_json_object(node.evidence_json),
+            "result": _parse_json_object(node.result_json),
         })
 
     if not residual_risks:
@@ -113,6 +123,14 @@ def build_workflow_evidence_pack(paths: AppPaths, workflow_id: str, *, phase: st
             "exit_code": 0,
             "evidence": "all completed nodes have durable artifact references or internal gate evidence",
         })
+
+    lane_cards = [build_lane_card(payload) for payload in node_payloads if payload.get("kind") == "task"]
+    synthesis_result = _extract_synthesis_result(workflow.workflow_id, node_payloads, residual_risks)
+    panel_result = derive_panel_result(
+        workflow_id=workflow.workflow_id,
+        lane_cards=lane_cards,
+        synthesis_result=synthesis_result,
+    )
 
     return {
         "schema_version": "1",
@@ -130,8 +148,42 @@ def build_workflow_evidence_pack(paths: AppPaths, workflow_id: str, *, phase: st
         "receipts": receipts,
         "scope_violations": scope_violations,
         "residual_risks": residual_risks,
+        "lane_cards": lane_cards,
+        "synthesis_result": synthesis_result,
+        "panel_result": panel_result,
         "nodes": node_payloads,
     }
+
+
+def _extract_synthesis_result(
+    workflow_id: str,
+    node_payloads: list[dict[str, Any]],
+    residual_risks: list[str],
+) -> dict[str, Any] | None:
+    for payload in node_payloads:
+        if payload.get("kind") != "synthesis":
+            continue
+        for raw in (payload.get("result"), payload.get("evidence")):
+            candidate = _synthesis_candidate(raw)
+            if candidate is None:
+                continue
+            try:
+                return validate_synthesis_result(candidate)
+            except SynthesisValidationError as exc:
+                residual_risks.append(f"synthesis node {payload.get('node_id')} invalid: {exc}")
+    if any(payload.get("kind") == "synthesis" for payload in node_payloads):
+        residual_risks.append(f"workflow {workflow_id} has no valid synthesis result")
+    return None
+
+
+def _synthesis_candidate(raw: Any) -> dict[str, Any] | None:
+    value = raw if isinstance(raw, dict) else {}
+    nested = value.get("synthesis_result")
+    if isinstance(nested, dict):
+        return nested
+    if "recommended_controller_action" in value:
+        return value
+    return None
 
 
 def persist_workflow_evidence_pack(paths: AppPaths, workflow_id: str, *, phase: str | None = None) -> str:

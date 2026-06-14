@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "name": "fanout-review",
+  "controller": "codex",
+  "mode": "review",
+  "authorization_profile": "local_readonly",
+  "completion_policy": "report",
+  "source_policy": {
+    "mode": "review",
+    "policy": "Use source-backed evidence where possible and list uncertainty explicitly.",
+    "warning": "Source policy is task guidance and evidence metadata, not a sandbox or network firewall."
+  },
+  "limits": {
+    "max_parallel_tasks": 3,
+    "max_child_tasks": 5
+  },
+  "nodes": [
+    {
+      "id": "primary",
+      "kind": "task",
+      "role": "primary",
+      "executor": "grok-cli",
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report",
+      "body": "Goal: Review the target change. Scope: repository files relevant to the stated topic. Required changes: none; report only. Exit criteria: findings, evidence paths, uncertainties, and recommended controller action."
+    },
+    {
+      "id": "adversarial",
+      "kind": "task",
+      "role": "adversarial",
+      "executor": "grok-cli",
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report",
+      "body": "Goal: Challenge the primary review and look for missed risks. Scope: repository files relevant to the stated topic. Required changes: none; report only. Exit criteria: disagreements, extra findings, evidence paths, and confidence."
+    },
+    {
+      "id": "second-opinion",
+      "kind": "task",
+      "role": "second-opinion",
+      "executor": "antigravity-cli",
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report",
+      "body": "Goal: Provide an independent review from a different executor. Scope: repository files relevant to the stated topic. Required changes: none; report only. Exit criteria: unique insights, risks, evidence paths, and blind spots."
+    },
+    {
+      "id": "synthesis",
+      "kind": "synthesis",
+      "role": "synthesis",
+      "depends_on": ["primary", "adversarial", "second-opinion"],
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report",
+      "body": "Goal: Synthesize the fanout panel. Required changes: none. Exit criteria: return consensus, contradictions, unique_insights, blind_spots, recommended_controller_action, and evidence references."
+    },
+    {
+      "id": "gate",
+      "kind": "gate",
+      "role": "gate",
+      "depends_on": ["synthesis"],
+      "authorization_profile": "local_readonly",
+      "completion_policy": "report"
+    }
+  ]
+}

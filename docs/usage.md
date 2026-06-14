@@ -594,10 +594,31 @@ controls described above.
 Use `agpair task start` for ordinary work. Start several task ids when a
 non-trivial task benefits from multiple `grok-cli` reviews, competing
 implementation candidates, or additional `antigravity-cli` / `claude-code`
-verification. Use `agpair workflow start` for high-value multi-part, parallel,
-adversarial, or long-running work.
+verification. Use `agpair workflow fanout` for high-value panel work where the
+controller wants multiple lane cards plus one synthesis/gate evidence pack.
+Use `agpair workflow start` with a manifest when the preset fanout modes are not
+enough.
 
 ```bash
+agpair workflow fanout \
+  --controller codex \
+  --mode review \
+  --topic "Review terminal receipt salvage and workflow synthesis risks" \
+  --lane grok-cli:primary \
+  --lane grok-cli:adversarial \
+  --lane antigravity-cli:second-opinion \
+  --repo-path /absolute/path/to/repo \
+  --wait --json
+agpair workflow fanout \
+  --controller codex \
+  --mode implementation \
+  --topic "Implement a bounded parser fix" \
+  --scope "agpair/workflows/*.py and focused tests only" \
+  --lane grok-cli:candidate-a \
+  --lane claude-code:candidate-b \
+  --isolated-worktree \
+  --repo-path /absolute/path/to/repo \
+  --dry-run --json
 agpair workflow validate --file templates/workflows/fanout-synthesize.json
 agpair workflow start --file templates/workflows/fanout-synthesize.json --controller codex --repo-path /absolute/path/to/repo --json
 agpair workflow status WF-ABC123DEF456 --json
@@ -609,6 +630,8 @@ agpair workflow cancel WF-ABC123DEF456 --reason 'operator requested'
 Workflow manifests are declarative. AGPair rejects arbitrary script fields and dispatches normal AGPair child tasks with durable artifacts, completion policies, structured receipts, and controller-aware executor routing.
 
 Workflow `ready_for_review` means AGPair has an evidence pack for controller verification, not final user-facing success. `workflow watch --json` emits low-noise state changes and artifact paths, not full raw logs.
+
+Fanout workflows expose `lane_cards`, `synthesis_result`, and `panel_result` in status/watch/evidence payloads. Treat synthesis as evidence to inspect, not a final answer. Partial or malformed lane output may still be useful, but AGPair marks it as `needs_review` and keeps the controller gate explicit.
 
 ## Failure posture
 
