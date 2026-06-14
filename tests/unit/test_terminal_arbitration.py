@@ -33,3 +33,18 @@ def test_claude_code_result_json_is_completed_report() -> None:
 
     assert terminal_arbitration.looks_like_completed_report(text) is True
     assert terminal_arbitration.completed_report_text(text).startswith("结论：Claude Code worker 可用")
+
+
+def test_cancelled_result_json_is_not_completed_report() -> None:
+    terminal_arbitration = import_module("agpair.terminal_arbitration")
+    text = json.dumps(
+        {
+            "type": "result",
+            "subtype": "cancelled",
+            "is_error": True,
+            "result": "结论：我已经完成审查。\n\n- 但任务被取消",
+        }
+    )
+
+    assert terminal_arbitration.looks_like_completed_report(text) is False
+    assert terminal_arbitration.completed_report_text(text) is None

@@ -377,9 +377,11 @@ worktrees or disjoint scopes, not inside one controller worktree.
 
 Use `task wait --json` when a controller needs a machine-readable outcome after
 dispatch. Lease-based waits may return `controller_lease_expired` or
-`soft_no_progress` with `recommended_action` while the executor remains alive.
-Terminal waits include `agent_result`; use its `controller_action` (`use_result`,
-`review_then_apply`, or retry/switch actions) as the low-friction handoff signal.
+`soft_no_progress` while the executor remains alive. Terminal waits include
+`agent_result` and `recovery_decision`; use `recovery_decision.action`
+(`use_result`, `review_then_apply`, `wait_background`, `switch_executor`,
+`native_fallback`, `repair_executor`, or `retry_same_executor`) as the
+low-friction handoff signal.
 
 ### Inspect a task
 
@@ -538,10 +540,10 @@ hooks. AGPair refuses to overwrite a non-AGPair skill at that path.
 ### How to judge AGPair value
 
 Do not treat dispatch or process liveness as value. Track completion rate,
-usable `agent_result` rate, time to first useful signal, fallback rate,
-controller rework rate, and abandoned/no-progress rate. The main
-surfaces are `agpair task status --json`, `agpair task list --json`, and
-`scripts/smoke_real_executors.py`.
+usable `agent_result` rate, time to first useful signal, fallback
+recommendation rate, controller rework rate, and abandoned/no-progress rate.
+The main surfaces are `agpair task status --json`, `agpair task list --json`,
+and the `summary_metrics` from `scripts/smoke_real_executors.py`.
 
 For async tasks, attach with:
 
@@ -569,7 +571,7 @@ agpair task wait TASK-SMOKE-001 --timeout-seconds 600 --interval-seconds 10
 
 Exit code `0` can mean terminal success, or a background-running lease outcome
 when the task permits background continuation. Use `--json` to read `outcome`,
-`agent_result`, `controller_lease_expired`, `recommended_action`, and
+`agent_result`, `recovery_decision`, `controller_lease_expired`, and
 `background_ok`.
 
 Exit code `1` means terminal failure, strict timeout/watchdog failure, missing
@@ -668,7 +670,7 @@ Before publishing or opening a PR:
 
 - Run the targeted tests plus the full unit/integration suite.
 - Run real smoke for the controller matrix, require `all_success=true` plus
-  usable `agent_result.state` and `agent_result.controller_action` for each
+  usable `agent_result.state` and `recovery_decision.action` for each
   attempted executor, and keep smoke reports local.
 - Run `git diff --check`.
 - Inspect `git status --short --untracked-files=all`.

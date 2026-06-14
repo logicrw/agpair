@@ -108,6 +108,16 @@ def test_evidence_pack_includes_lane_cards_synthesis_and_panel_result(tmp_path: 
     workflows.mark_workflow_phase(workflow_id, "ready_for_review", evidence_path=evidence_path)
     payload = workflow_status_payload(paths, workflow_id)
     assert payload["panel_result"]["state"] == "needs_review"
+    assert payload["recovery_decision"]["action"] in {
+        "use_result",
+        "review_then_apply",
+        "inspect_evidence",
+        "wait_background",
+        "retry_same_executor",
+        "switch_executor",
+        "native_fallback",
+        "repair_executor",
+    }
 
 
 def test_scheduler_passes_lane_cards_to_synthesis_node(tmp_path: Path) -> None:

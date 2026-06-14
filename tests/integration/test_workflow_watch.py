@@ -59,7 +59,22 @@ def test_workflow_watch_payload_reports_terminal_node_and_stable_cursor(tmp_path
     )
     evidence_path = paths.root / "workflows" / workflow_id / "evidence.json"
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
-    evidence_path.write_text(json.dumps({"schema_version": "1", "ok": True}), encoding="utf-8")
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1",
+                "ok": True,
+                "recovery_decision": {
+                    "action": "inspect_evidence",
+                    "reason": "workflow evidence is ready for controller inspection",
+                    "next_executor": None,
+                    "command": None,
+                    "alternative_command": None,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     workflows.mark_node_phase(
         workflow_id,
         "scan",
@@ -87,6 +102,7 @@ def test_workflow_watch_payload_reports_terminal_node_and_stable_cursor(tmp_path
     assert status["phase"] == "ready_for_review"
     assert status["evidence_path"] == str(evidence_path)
     assert status["result"] == {"schema_version": "1", "ok": True}
+    assert status["recovery_decision"]["action"] == "inspect_evidence"
     scan = next(node for node in status["nodes"] if node["node_id"] == "scan")
     assert scan["protocol_result"]["warnings"] == ["schema_version_alias"]
     assert scan["adoption_result"]["adoptable_result"] == "partial"
@@ -94,4 +110,5 @@ def test_workflow_watch_payload_reports_terminal_node_and_stable_cursor(tmp_path
     assert event["node_id"] == "gate"
     assert event["node_phase"] == "ready_for_review"
     assert event["evidence_path"] == str(evidence_path)
+    assert event["recovery_decision"]["action"] == "inspect_evidence"
     assert unchanged["event"] == "unchanged"

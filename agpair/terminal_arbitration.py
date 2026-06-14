@@ -80,6 +80,8 @@ def _extract_report_from_json(text: str) -> str | None:
     parsed = _parse_json_object(text)
     if parsed is None:
         return None
+    if _json_object_is_failed_result(parsed):
+        return ""
     payload = parsed.get("payload")
     if isinstance(payload, Mapping):
         report = payload.get("report")
@@ -92,6 +94,22 @@ def _extract_report_from_json(text: str) -> str | None:
     if _json_object_is_incomplete_event(parsed):
         return ""
     return None
+
+
+def _json_object_is_failed_result(value: Mapping[str, Any]) -> bool:
+    if value.get("is_error") is True:
+        return True
+    status = value.get("status")
+    subtype = value.get("subtype")
+    return str(status or subtype).strip().lower() in {
+        "blocked",
+        "cancelled",
+        "canceled",
+        "error",
+        "failed",
+        "failure",
+        "interrupted",
+    }
 
 
 def _json_object_is_incomplete_event(value: Mapping[str, Any]) -> bool:

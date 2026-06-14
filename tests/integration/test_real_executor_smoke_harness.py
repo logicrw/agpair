@@ -203,6 +203,10 @@ def test_smoke_harness_runs_codex_controller_fake_executor_matrix(tmp_path: Path
     assert payload["policy_expected_executors"] is None
     assert payload["policy_suppressed_executors"] == []
     assert payload["scenario"] == "implementation_smoke"
+    assert payload["summary_metrics"]["completion_rate"] == 1.0
+    assert payload["summary_metrics"]["adoptable_result_rate"] == 1.0
+    assert payload["summary_metrics"]["fallback_recommended_rate"] == 0.0
+    assert payload["summary_metrics"]["no_progress_rate"] == 0.0
     assert [result["executor_id"] for result in payload["results"]] == [
         "antigravity-cli",
         "grok-cli",
@@ -219,9 +223,11 @@ def test_smoke_harness_runs_codex_controller_fake_executor_matrix(tmp_path: Path
         assert result["agent_result"]["state"] in {"usable", "needs_review"}
         assert result["agent_result"]["controller_action"] == "review_then_apply"
         assert result["controller_action"] == "review_then_apply"
+        assert result["recovery_decision"]["action"] == "review_then_apply"
         assert result["controller_rework"] in {"none", "minor"}
         assert result["fallback_suggestion"] is None
         assert result["failure_class"] is None
+        assert result["no_progress"] is False
         assert isinstance(result["protocol_warnings"], list)
         assert result["adoption_blockers"] == []
         assert result["adoption_evidence"]["terminal_receipt"] is True
@@ -252,6 +258,7 @@ def test_smoke_harness_runs_codex_controller_fake_executor_matrix(tmp_path: Path
     assert report_file_payload["all_success"] is True
     assert report_file_payload["harness_completed"] is True
     assert report_file_payload["report_path"] == payload["report_path"]
+    assert report_file_payload["summary_metrics"] == payload["summary_metrics"]
 
 
 def test_smoke_harness_runs_report_smoke_without_diff_requirement(tmp_path: Path) -> None:
@@ -279,6 +286,7 @@ def test_smoke_harness_runs_report_smoke_without_diff_requirement(tmp_path: Path
     assert result["adoptable_result"] in {"yes", "partial"}
     assert result["agent_result"]["state"] in {"usable", "needs_review"}
     assert result["agent_result"]["controller_action"] == "use_result"
+    assert result["recovery_decision"]["action"] == "use_result"
     assert result["adoption_blockers"] == []
     assert result["adoption_evidence"]["terminal_receipt"] is True
     assert result["adoption_evidence"]["report"] is True
@@ -482,6 +490,7 @@ def test_smoke_harness_reports_missing_binary_without_dispatch(tmp_path: Path) -
     assert result["scenario"] == "implementation_smoke"
     assert result["attempted"] is False
     assert result["blocker_type"] == "executor_unavailable"
+    assert result["recovery_decision"]["action"] == "repair_executor"
     assert "AGPAIR_GROK_CLI_BIN" in result["reason"]
 
 
@@ -506,6 +515,7 @@ def test_smoke_harness_reports_claude_oauth_auth_without_dispatch(tmp_path: Path
     assert result["client_hooks_suppressed_expected"] is True
     assert result["auth_source"] == "oauth"
     assert result["auth_state"] == "executor_auth_required"
+    assert result["recovery_decision"]["action"] == "repair_executor"
     assert "claude auth login" in result["reason"]
 
 
@@ -535,10 +545,15 @@ def test_smoke_harness_abandons_silent_executor_after_no_progress(tmp_path: Path
     assert result["outcome"] == "blocked"
     assert result["adoptable_result"] == "no"
     assert result["adoptable"] is False
-    assert "terminal_receipt_missing" in result["adoption_blockers"]
+    assert "task_phase_abandoned" in result["adoption_blockers"]
+    assert "no_progress_budget_exceeded" in result["adoption_blockers"]
     assert result["blocker_type"] == "no_progress_budget_exceeded"
     assert result["failure_class"] == "no_progress_budget_exceeded"
     assert result["fallback_suggestion"] == "inspect_status_then_retry_or_switch_executor"
+    assert result["recovery_decision"]["action"] == "retry_same_executor"
+    assert result["no_progress"] is True
+    assert payload["summary_metrics"]["fallback_recommended_rate"] == 1.0
+    assert payload["summary_metrics"]["no_progress_rate"] == 1.0
     assert result["wait_payload"]["watchdog_triggered"] is True
     assert result["phase"] == "abandoned"
     assert result["cleanup"]["removed"] is True

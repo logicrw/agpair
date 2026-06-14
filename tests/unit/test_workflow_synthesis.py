@@ -93,6 +93,21 @@ def test_validate_synthesis_result_requires_comparison_fields() -> None:
         )
 
 
+def test_synthesis_accepts_legacy_fall_back_but_outputs_native_fallback() -> None:
+    result = validate_synthesis_result(
+        {
+            "workflow_id": "WF-1",
+            "consensus": [],
+            "contradictions": [],
+            "unique_insights": [],
+            "blind_spots": [],
+            "recommended_controller_action": "fall_back",
+        }
+    )
+
+    assert result["recommended_controller_action"] == "native_fallback"
+
+
 def test_derive_panel_result_degrades_for_partial_lane_and_scope_violation() -> None:
     synthesis = validate_synthesis_result(
         {

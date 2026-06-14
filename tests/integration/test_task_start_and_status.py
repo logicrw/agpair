@@ -390,6 +390,63 @@ def test_task_start_persists_task_kind_budget_and_completion_default(tmp_path: P
     assert "startup_profile_source" not in payload
 
 
+def test_task_start_salvages_stdout_report_for_evidence_policy_after_nonzero_exit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    fake_grok = tmp_path / "fake-grok-report"
+    fake_grok.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"--help\" ]; then exit 0; fi\n"
+        "printf '%s\\n' '结论：外部实现完成，可采纳。'\n"
+        "printf '%s\\n' ''\n"
+        "printf '%s\\n' '修改点：已完成最小实现。'\n"
+        "printf '%s\\n' '验证：已运行聚焦测试。'\n"
+        "printf '%s\\n' '风险：无新增阻塞。'\n"
+        "exit 7\n",
+        encoding="utf-8",
+    )
+    fake_grok.chmod(0o755)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_GROK_CLI_BIN", str(fake_grok))
+    repo_path = make_repo_dir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--executor",
+            "grok-cli",
+            "--completion-policy",
+            "evidence",
+            "--task-kind",
+            "implementation",
+            "--body",
+            "Goal: implement\nScope: repo\nRequired changes: small code change\nExit criteria: evidence",
+            "--task-id",
+            "TASK-SALVAGE-EVIDENCE",
+            "--interval-seconds",
+            "0.1",
+            "--timeout-seconds",
+            "10",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    status = CliRunner().invoke(app, ["task", "status", "TASK-SALVAGE-EVIDENCE", "--json"])
+    assert status.exit_code == 0, status.output
+    payload = json.loads(status.stdout)
+    assert payload["phase"] == "ready_for_review"
+    receipt = payload["terminal_receipt"]
+    assert receipt["status"] == "EVIDENCE_PACK"
+    assert receipt["payload"]["arbitration"] == "report_salvage_after_nonzero_exit"
+    assert "外部实现完成" in receipt["payload"]["report"]
+    assert payload["adoption_result"]["adoptable_result"] in {"yes", "partial"}
+
+
 def test_task_start_rejects_removed_fast_startup_options(tmp_path: Path, monkeypatch) -> None:
     binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
@@ -727,6 +784,61 @@ def test_task_status_json_marks_budget_exhausted_without_receipt_as_blocked_sign
     assert "execution_budget_exhausted" in payload["agent_result"]["hard_blockers"]
     assert "terminal_receipt_missing" in payload["agent_result"]["hard_blockers"]
     assert "stdout_available_without_receipt" in payload["agent_result"]["soft_warnings"]
+
+
+def test_task_status_json_includes_recovery_decision_for_no_signal(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--controller",
+            "codex",
+            "--executor",
+            "grok-cli",
+            "--task-id",
+            "TASK-RECOVERY-NO-SIGNAL",
+            "--authorization-profile",
+            "local_readonly",
+            "--completion-policy",
+            "report",
+            "--execution-budget-seconds",
+            "1",
+            "--no-wait",
+            "--body",
+            "Goal: Review this directory.\nScope: repo only.\nRequired changes: none.\nExit criteria: report findings.",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    tasks = TaskRepository(AppPaths.default().db_path)
+    task = tasks.get_task("TASK-RECOVERY-NO-SIGNAL")
+    assert task is not None
+    with sqlite3.connect(AppPaths.default().db_path) as conn:
+        conn.execute(
+            "UPDATE tasks SET antigravity_session_id=?, created_at=datetime('now', '-5 seconds') WHERE task_id=?",
+            ("/tmp/missing-session", task.task_id),
+        )
+        conn.commit()
+
+    status = runner.invoke(app, ["task", "status", "TASK-RECOVERY-NO-SIGNAL", "--json"])
+
+    assert status.exit_code == 0, status.output
+    payload = json.loads(status.stdout)
+    assert payload["active_executor_backend"] == "grok-cli"
+    assert payload["recovery_decision"]["action"] in {
+        "switch_executor",
+        "retry_same_executor",
+        "native_fallback",
+    }
+    assert payload["recovery_decision"]["reason"]
 
 
 def test_task_status_json_includes_structured_terminal_receipt(tmp_path: Path, monkeypatch) -> None:
@@ -2396,6 +2508,7 @@ def test_task_start_isolated_worktree_persists_boundary(tmp_path: Path, monkeypa
             skill_policy="inherit",
             mcp_policy="inherit",
             dirty_snapshot_mode="tracked",
+            completion_policy="auto",
         )
 
         status_result = runner.invoke(app, ["task", "status", "TASK-ISO-DB", "--json"])
@@ -2806,6 +2919,7 @@ def test_task_retry_preserves_isolated_worktree_metadata_for_local_cli(tmp_path:
             "skill_policy": "inherit",
             "mcp_policy": "inherit",
             "dirty_snapshot_mode": "tracked",
+            "completion_policy": "auto",
         }
     ]
 

@@ -514,10 +514,10 @@ AGPair 管理的 hooks：
 ### 如何判断 AGPair 是否真的有价值
 
 不要把 dispatch 成功或进程还活着当成价值。重点看 completion rate、
-可用 `agent_result` rate、time-to-first-useful-signal、fallback rate、
-controller rework rate，以及 abandoned/no-progress rate。主要入口是
-`agpair task status --json`、`agpair task list --json` 和
-`scripts/smoke_real_executors.py`。
+可用 `agent_result` rate、time-to-first-useful-signal、fallback
+recommendation rate、controller rework rate，以及 abandoned/no-progress rate。
+主要入口是 `agpair task status --json`、`agpair task list --json` 和
+`scripts/smoke_real_executors.py` 的 `summary_metrics`。
 
 异步任务使用低噪等待：
 
@@ -592,10 +592,11 @@ agpair task wait TASK-001 --timeout-seconds 600 --interval-seconds 10
 ```
 
 退出码 `0` 可以表示终态成功，也可以表示允许后台继续的 lease outcome。用
-`--json` 查看 `outcome`、`agent_result`、`controller_lease_expired`、
-`recommended_action` 和 `background_ok`。终态任务优先看
-`agent_result.controller_action`：报告通常是 `use_result`，隔离实现 diff 通常是
-`review_then_apply`，后台继续等待可理解为 `wait_background`。
+`--json` 查看 `outcome`、`agent_result`、`recovery_decision`、
+`controller_lease_expired` 和 `background_ok`。终态任务优先看
+`recovery_decision.action`：报告通常是 `use_result`，隔离实现 diff 通常是
+`review_then_apply`，后台继续等待是 `wait_background`，失败恢复可能是
+`switch_executor`、`native_fallback`、`repair_executor` 或 `retry_same_executor`。
 
 退出码 `1` 表示终态失败、strict timeout / watchdog、任务不存在，或当前 wait
 outcome 不允许后台继续。
@@ -689,7 +690,7 @@ Code 原生 subagent。
 
 - 跑目标测试和完整 unit/integration suite。
 - 跑 controller matrix 的真实 smoke，要求 `all_success=true`，且每个尝试过的
-  executor 都有可用的 `agent_result.state` 和 `agent_result.controller_action`；smoke report 只留本地。
+  executor 都有可用的 `agent_result.state` 和 `recovery_decision.action`；smoke report 只留本地。
 - 跑 `git diff --check`。
 - 检查 `git status --short --untracked-files=all`。
 - 不要提交 `.agpair/`、`~/.agpair`、raw executor logs、本地 receipts、session transcripts、个人 Codex/Claude 配置或生成的 hook debug 输出。

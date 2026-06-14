@@ -70,6 +70,10 @@ def test_watch_event_emits_agent_result_changed_without_log_body() -> None:
             "state": "usable",
             "controller_action": "review_then_apply",
         },
+        recovery_decision={
+            "action": "review_then_apply",
+            "reason": "External executor produced code or diff evidence that must be reviewed before applying.",
+        },
     )
 
     payload = current.to_json_dict()
@@ -77,4 +81,5 @@ def test_watch_event_emits_agent_result_changed_without_log_body() -> None:
     assert should_emit_watch_event(previous, current)
     assert payload["event"] == "agent_result_changed"
     assert payload["agent_result"]["controller_action"] == "review_then_apply"
+    assert payload["recovery_decision"]["action"] == "review_then_apply"
     assert "log_body" not in payload

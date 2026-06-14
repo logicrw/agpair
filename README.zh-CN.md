@@ -215,9 +215,9 @@ AGPair 3.0 不做“运行中暂停等待授权”。越界时 executor 应返�
 
 ## 验收门
 
-`ready_for_review`、`evidence_ready`、`committed` 都不是自动成功。主控必须检查 `agent_result`、git diff/commit 证据、receipt、必要时的 raw log 路径，并运行相应验证后才能报告完成。真实 executor smoke 也必须看到 `all_success=true`，且每个尝试过的 executor 都有可用的 `agent_result.state` 和 `agent_result.controller_action`，例如 `use_result` 或 `review_then_apply`；只 dispatch 成功或只进入成功 phase 不算通过。
+`ready_for_review`、`evidence_ready`、`committed` 都不是自动成功。主控必须检查 `recovery_decision`、`agent_result`、git diff/commit 证据、receipt、必要时的 raw log 路径，并运行相应验证后才能报告完成。真实 executor smoke 也必须看到 `all_success=true`，且每个尝试过的 executor 都有可用的 `agent_result.state` 和 `recovery_decision.action`，例如 `use_result` 或 `review_then_apply`；只 dispatch 成功或只进入成功 phase 不算通过。
 
-判断 AGPair 是否真的有价值，主要看 completion rate、可用 `agent_result` rate、time-to-first-useful-signal、fallback rate、controller rework rate，以及 abandoned/no-progress rate。用 `task status --json`、`task list --json` 和 `scripts/smoke_real_executors.py` 看这些字段。
+判断 AGPair 是否真的有价值，主要看 completion rate、可用 `agent_result` rate、time-to-first-useful-signal、fallback recommendation rate、controller rework rate，以及 abandoned/no-progress rate。用 `task status --json`、`task list --json` 和 `scripts/smoke_real_executors.py` 查看 `summary_metrics` 与每个 executor 的 `recovery_decision`。
 
 主控验收 evidence 后，用下面的命令标记任务已接受，避免 Stop hook 对同一个 receipt 反复阻塞：
 

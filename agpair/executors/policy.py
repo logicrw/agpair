@@ -681,3 +681,25 @@ def resolve_controller_policy(
         skipped_executors=tuple(skipped),
         policy_sources=policy_sources,
     )
+
+
+def next_eligible_executor(
+    *,
+    controller: str | None,
+    current_executor: str | None,
+    requested_executor: str | None = None,
+    allow_self_executor: bool = False,
+    require_available: bool = False,
+) -> str | None:
+    if requested_executor:
+        return None
+    resolved = resolve_controller_policy(
+        controller=controller,
+        requested_executor=None,
+        allow_self_executor=allow_self_executor,
+        require_available=require_available,
+    )
+    for candidate in resolved.eligible_executors:
+        if candidate != current_executor:
+            return candidate
+    return None

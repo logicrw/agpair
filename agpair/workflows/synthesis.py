@@ -3,12 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Final
 
+from agpair.recovery import RecoveryInput, choose_recovery_decision
+
 VALID_CONTROLLER_ACTIONS: Final = frozenset({
     "use_result",
     "inspect_evidence",
     "review_then_apply",
     "retry",
+    "retry_same_executor",
     "switch_executor",
+    "native_fallback",
+    "repair_executor",
     "fall_back",
 })
 
@@ -35,6 +40,11 @@ def build_lane_card(node_payload: dict[str, Any], *, role: str | None = None, ex
         "task_id": _optional_str(node_payload.get("task_id")),
         "phase": str(node_payload.get("phase") or "unknown"),
         "agent_result": agent_result,
+        "recovery_decision": _recovery_decision(
+            task_id=_optional_str(node_payload.get("task_id")) or str(node_payload.get("node_id") or ""),
+            executor=executor or _optional_str(node_payload.get("executor_backend")),
+            agent_result=agent_result,
+        ),
         "artifacts": artifact_paths,
         "summary_excerpt": summary,
         "changed_files": _string_list(terminal_payload.get("changed_files")),
@@ -54,7 +64,7 @@ def validate_synthesis_result(raw: dict[str, Any]) -> dict[str, Any]:
             raise SynthesisValidationError(f"synthesis result requires {field}")
         if not _all_strings(raw[field]):
             raise SynthesisValidationError(f"synthesis result {field} must be a string array")
-    action = raw.get("recommended_controller_action")
+    action = _canonical_controller_action(raw.get("recommended_controller_action"))
     if action not in VALID_CONTROLLER_ACTIONS:
         raise SynthesisValidationError("synthesis result requires a valid recommended_controller_action")
     return {
@@ -65,7 +75,7 @@ def validate_synthesis_result(raw: dict[str, Any]) -> dict[str, Any]:
         "contradictions": list(raw["contradictions"]),
         "unique_insights": list(raw["unique_insights"]),
         "blind_spots": list(raw["blind_spots"]),
-        "recommended_controller_action": str(action),
+        "recommended_controller_action": action,
         "summary": _optional_str(raw.get("summary")),
     }
 
@@ -100,15 +110,29 @@ def derive_panel_result(
         if _list_value(lane.get("scope_violations")):
             hard_blockers.append("scope_violation")
     normalized_synthesis = synthesis_result or _empty_synthesis(workflow_id)
-    controller_action = str(normalized_synthesis.get("recommended_controller_action") or "inspect_evidence")
+    controller_action = _canonical_controller_action(
+        normalized_synthesis.get("recommended_controller_action")
+    ) or "inspect_evidence"
     state = "usable"
     if hard_blockers or partial_count or blocked_count or normalized_synthesis.get("contradictions"):
         state = "needs_review"
         controller_action = "inspect_evidence"
     if not lane_cards:
         state = "blocked"
-        controller_action = "fall_back"
+        controller_action = "native_fallback"
         hard_blockers.append("no_lanes")
+    agent_result = {
+        "state": state,
+        "controller_action": controller_action,
+        "summary": None,
+        "hard_blockers": sorted(set(hard_blockers)),
+        "soft_warnings": sorted(set(soft_warnings)),
+    }
+    recovery_decision = _recovery_decision(
+        task_id=workflow_id,
+        executor=None,
+        agent_result=agent_result,
+    )
     return {
         "schema_version": "1",
         "workflow_id": workflow_id,
@@ -122,8 +146,9 @@ def derive_panel_result(
         "contradiction_count": len(_list_value(normalized_synthesis.get("contradictions"))),
         "unique_insight_count": len(_list_value(normalized_synthesis.get("unique_insights"))),
         "blind_spot_count": len(_list_value(normalized_synthesis.get("blind_spots"))),
-        "hard_blockers": sorted(set(hard_blockers)),
-        "soft_warnings": sorted(set(soft_warnings)),
+        "hard_blockers": agent_result["hard_blockers"],
+        "soft_warnings": agent_result["soft_warnings"],
+        "recovery_decision": recovery_decision,
     }
 
 
@@ -135,13 +160,14 @@ def _agent_result(
 ) -> dict[str, Any]:
     existing = _dict_value(adoption_result.get("agent_result"))
     if existing:
-        return {
+        agent_result = {
             "state": str(existing.get("state") or "needs_review"),
             "controller_action": str(existing.get("controller_action") or "inspect_evidence"),
             "summary": _optional_str(existing.get("summary")),
             "hard_blockers": _string_list(existing.get("hard_blockers")),
             "soft_warnings": _string_list(existing.get("soft_warnings")),
         }
+        return agent_result
     warnings: list[str] = []
     if artifact_paths.get("stdout") and not terminal_receipt:
         warnings.extend(["terminal_receipt_missing", "stdout_report_salvaged"])
@@ -228,3 +254,27 @@ def _all_strings(raw: Any) -> bool:
 
 def _optional_str(raw: Any) -> str | None:
     return raw if isinstance(raw, str) and raw else None
+
+
+def _canonical_controller_action(raw: Any) -> str | None:
+    if raw == "fall_back":
+        return "native_fallback"
+    if raw == "retry":
+        return "retry_same_executor"
+    return raw if isinstance(raw, str) else None
+
+
+def _recovery_decision(*, task_id: str, executor: str | None, agent_result: dict[str, Any]) -> dict[str, str | None]:
+    return choose_recovery_decision(
+        RecoveryInput(
+            task_id=task_id,
+            controller=None,
+            current_executor=executor,
+            requested_executor=None,
+            agent_result=agent_result,
+            liveness_state=None,
+            wait_outcome=None,
+            execution_budget_exhausted=False,
+            next_eligible_executor=None,
+        )
+    ).to_dict()

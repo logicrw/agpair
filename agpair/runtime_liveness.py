@@ -39,6 +39,8 @@ class SignalSummary:
     state: str
     last_signal_at: str | None
     last_signal_type: str | None
+    progress_quality: str = "none"
+    last_safe_excerpt: str | None = None
     stdout_bytes: int = 0
     stderr_bytes: int = 0
     bootstrap_noise_only: bool = False
@@ -51,6 +53,8 @@ class SignalSummary:
             "state": self.state,
             "last_signal_at": self.last_signal_at,
             "last_signal_type": self.last_signal_type,
+            "progress_quality": self.progress_quality,
+            "last_safe_excerpt": self.last_safe_excerpt,
             "stdout_bytes": self.stdout_bytes,
             "stderr_bytes": self.stderr_bytes,
             "bootstrap_noise_only": self.bootstrap_noise_only,
@@ -133,6 +137,12 @@ def _read_log_tail(path: Path, *, max_chars: int = 8192) -> str:
         return ""
 
 
+def _safe_excerpt(path: Path, *, max_chars: int = 500) -> str | None:
+    text = _read_log_tail(path, max_chars=max_chars).replace("\x00", "")
+    text = text.strip()
+    return text[-max_chars:] if text else None
+
+
 def _output_stat(task: TaskRecord, filename: str) -> tuple[int, datetime | None, bool]:
     session_dir = _session_dir(task)
     if session_dir is None:
@@ -161,6 +171,20 @@ def _process_alive_from_state(task: TaskRecord) -> bool | None:
         return None
     value = state.get("is_process_alive")
     return value if isinstance(value, bool) else None
+
+
+def _usable_artifact_path(task: TaskRecord) -> Path | None:
+    session_dir = _session_dir(task)
+    if session_dir is None:
+        return None
+    for filename in ("receipt.json", "report.md", "evidence.json"):
+        path = session_dir / filename
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                return path
+        except OSError:
+            continue
+    return None
 
 
 REPORT_ONLY_NO_PROGRESS_SECONDS: float = 180.0
@@ -268,6 +292,10 @@ def build_signal_summary(
     last_activity_at = _parse_iso(task.last_activity_at)
     stdout_bytes, stdout_at, _ = _output_stat(task, "stdout.log")
     stderr_bytes, stderr_at, stderr_bootstrap_only = _output_stat(task, "stderr.log")
+    session_dir = _session_dir(task)
+    stdout_path = session_dir / "stdout.log" if session_dir is not None else None
+    stderr_path = session_dir / "stderr.log" if session_dir is not None else None
+    artifact_path = _usable_artifact_path(task)
 
     output_at = None
     output_type = None
@@ -299,11 +327,24 @@ def build_signal_summary(
     if task.execution_budget_seconds is not None and created_at is not None:
         budget_deadline = created_at + timedelta(seconds=float(task.execution_budget_seconds))
         execution_budget_remaining_seconds = max(0.0, (budget_deadline - current).total_seconds())
+    progress_quality = "none"
+    last_safe_excerpt = None
+    if artifact_path is not None:
+        progress_quality = "usable_artifact"
+        last_safe_excerpt = _safe_excerpt(artifact_path)
+    elif stdout_bytes and stdout_path is not None:
+        progress_quality = "partial_output"
+        last_safe_excerpt = _safe_excerpt(stdout_path)
+    elif stderr_bytes and stderr_path is not None:
+        progress_quality = "bootstrap_noise" if stderr_bootstrap_only else "partial_output"
+        last_safe_excerpt = _safe_excerpt(stderr_path)
 
     return SignalSummary(
         state=state,
         last_signal_at=last_signal_at_dt.isoformat() if last_signal_at_dt is not None else None,
         last_signal_type=last_signal_type,
+        progress_quality=progress_quality,
+        last_safe_excerpt=last_safe_excerpt,
         stdout_bytes=stdout_bytes,
         stderr_bytes=stderr_bytes,
         bootstrap_noise_only=bool(stderr_bytes and stderr_bootstrap_only and not stdout_bytes),

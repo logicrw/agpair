@@ -557,6 +557,12 @@ def _read_state(temp_dir: pathlib.Path) -> dict:
     return state
 
 
+def _allows_stdout_report_salvage(state: dict) -> bool:
+    authorization_profile = str(state.get("authorization_profile") or "local_mutating")
+    completion_policy = str(state.get("completion_policy") or "auto").strip().lower()
+    return authorization_profile == "local_readonly" or completion_policy in {"evidence", "report"}
+
+
 def _body_with_task_contract(
     task_id: str,
     body: str,
@@ -643,6 +649,7 @@ class LocalCLIExecutor(ExecutorAdapter):
         skill_policy: str | None = None,
         mcp_policy: str | None = None,
         dirty_snapshot_mode: str = "off",
+        completion_policy: str = "auto",
     ) -> DispatchResult:
         temp_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"agpair_{self._backend_id}_{task_id}_"))
         normalized_dirty_snapshot_mode = (dirty_snapshot_mode or "off").strip().lower()
@@ -760,6 +767,7 @@ sys.exit(rc)
             "termination_requested_at": None,
             "termination_signal": None,
             "authorization_profile": authorization_profile,
+            "completion_policy": completion_policy,
             "environment_mode": environment_mode,
             "skill_policy": skill_policy,
             "mcp_policy": mcp_policy,
@@ -1139,28 +1147,28 @@ sys.exit(rc)
                         "receipt_path": str(temp_dir / "receipt.json"),
                     }
                     return True, self._make_receipt(task_id, attempt_no, "COMMITTED", summary, payload)
+                stdout_report = completed_report_text(stdout_text)
+                if _allows_stdout_report_salvage(state) and stdout_report:
+                    summary = self._extract_final_summary(temp_dir) or "Executor produced a report"
+                    state["final_summary"] = summary
+                    state["error_summary"] = None
+                    return True, self._make_receipt(
+                        task_id,
+                        attempt_no,
+                        "EVIDENCE_PACK",
+                        summary,
+                        {
+                            "exit_code": 0,
+                            "arbitration": "report_salvage_after_zero_exit",
+                            "report": stdout_report,
+                            "changed_files": [],
+                            "scope_violations": [],
+                            "validation_not_run": "report salvaged from stdout after zero exit",
+                            **self._raw_log_payload(temp_dir),
+                            "receipt_path": str(temp_dir / "receipt.json"),
+                        },
+                    )
                 if authorization_profile == "local_readonly":
-                    stdout_report = completed_report_text(stdout_text)
-                    if stdout_report:
-                        summary = self._extract_final_summary(temp_dir) or "Executor produced a report"
-                        state["final_summary"] = summary
-                        state["error_summary"] = None
-                        return True, self._make_receipt(
-                            task_id,
-                            attempt_no,
-                            "EVIDENCE_PACK",
-                            summary,
-                            {
-                                "exit_code": 0,
-                                "arbitration": "report_salvage_after_zero_exit",
-                                "report": stdout_report,
-                                "changed_files": [],
-                                "scope_violations": [],
-                                "validation_not_run": "report salvaged from stdout after zero exit",
-                                **self._raw_log_payload(temp_dir),
-                                "receipt_path": str(temp_dir / "receipt.json"),
-                            },
-                        )
                     error_summary = self._extract_error_summary(temp_dir)
                     blocker_type, recoverable, recommended_next_action = _classify_executor_error(error_summary)
                     if blocker_type == "execution_error":
@@ -1212,7 +1220,7 @@ sys.exit(rc)
                 stdout_report = completed_report_text(
                     stdout_file.read_text(encoding="utf-8", errors="replace") if stdout_file.exists() else ""
                 )
-                if authorization_profile == "local_readonly" and stdout_report:
+                if _allows_stdout_report_salvage(state) and stdout_report:
                     summary = self._extract_final_summary(temp_dir) or "Executor produced a report before non-zero exit"
                     state["final_summary"] = summary
                     state["error_summary"] = None
@@ -1294,6 +1302,30 @@ sys.exit(rc)
                 )
             else:
                 authorization_profile = str(state.get("authorization_profile") or "local_mutating")
+                stdout_file = temp_dir / "stdout.log"
+                stdout_report = completed_report_text(
+                    stdout_file.read_text(encoding="utf-8", errors="replace") if stdout_file.exists() else ""
+                )
+                if _allows_stdout_report_salvage(state) and stdout_report:
+                    summary = self._extract_final_summary(temp_dir) or "Executor produced a report before process exit"
+                    state["final_summary"] = summary
+                    state["error_summary"] = None
+                    return True, self._make_receipt(
+                        task_id,
+                        attempt_no,
+                        "EVIDENCE_PACK",
+                        summary,
+                        {
+                            "exit_code": -1,
+                            "arbitration": "report_salvage_after_process_death",
+                            "report": stdout_report,
+                            "changed_files": [],
+                            "scope_violations": [],
+                            "validation_not_run": "report salvaged from stdout after process ended without exit code",
+                            **self._raw_log_payload(temp_dir),
+                            "receipt_path": str(temp_dir / "receipt.json"),
+                        },
+                    )
                 if authorization_profile == "local_readonly":
                     summary = "Executor process ended before producing a report or terminal receipt"
                     blocker_type = "report_output_missing"

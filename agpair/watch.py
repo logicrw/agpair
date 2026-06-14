@@ -18,6 +18,7 @@ class WatchEvent:
     stderr_bytes: int | None = None
     last_signal_at: str | None = None
     agent_result: dict[str, object] | None = None
+    recovery_decision: dict[str, object] | None = None
     event: str = "state"
 
     def to_json_dict(self) -> dict[str, object]:
@@ -39,6 +40,7 @@ class WatchEvent:
             "stderr_bytes",
             "last_signal_at",
             "agent_result",
+            "recovery_decision",
         ):
             value = getattr(self, key)
             if value is not None:
@@ -61,4 +63,5 @@ def should_emit_watch_event(previous: WatchEvent | None, current: WatchEvent) ->
         or previous.stderr_bytes != current.stderr_bytes
         or previous.last_signal_at != current.last_signal_at
         or previous.agent_result != current.agent_result
+        or previous.recovery_decision != current.recovery_decision
     )

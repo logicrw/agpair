@@ -157,6 +157,63 @@ def test_retry_from_block_with_executor_override_stores_supported_executor(tmp_p
     assert task.executor_backend == "claude-code"
 
 
+def test_retry_from_block_can_use_recommended_next_executor(tmp_path: Path, monkeypatch) -> None:
+    paths = make_paths(tmp_path, monkeypatch)
+    seed_blocked_task(
+        paths,
+        task_id="TASK-SWITCH",
+        executor_backend="grok-cli",
+        blocker_type="no_progress_budget_exceeded",
+        authorization_profile="local_readonly",
+    )
+    fake_executor = FakeExecutor()
+    monkeypatch.setattr("agpair.executors.get_executor", lambda backend_id, **kwargs: fake_executor)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "retry",
+            "TASK-SWITCH",
+            "--from-block",
+            "--next-executor",
+            "--authorization-profile",
+            "local_mutating",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_executor.calls
+    task = TaskRepository(paths.db_path).get_task("TASK-SWITCH")
+    assert task is not None
+    assert task.executor_backend != "grok-cli"
+
+
+def test_retry_next_executor_requires_from_block_and_no_executor_override(tmp_path: Path, monkeypatch) -> None:
+    paths = make_paths(tmp_path, monkeypatch)
+    seed_blocked_task(paths, task_id="TASK-NEXT-CONFLICT", executor_backend="grok-cli")
+
+    missing_from_block = CliRunner().invoke(app, ["task", "retry", "TASK-NEXT-CONFLICT", "--next-executor"])
+    assert missing_from_block.exit_code != 0
+    assert "--next-executor requires --from-block" in missing_from_block.output
+
+    conflict = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "retry",
+            "TASK-NEXT-CONFLICT",
+            "--from-block",
+            "--next-executor",
+            "--executor",
+            "antigravity-cli",
+        ],
+    )
+    assert conflict.exit_code != 0
+    assert "--next-executor cannot be combined with --executor" in conflict.output
+
+
 def test_retry_from_block_rejects_committed_task(tmp_path: Path, monkeypatch) -> None:
     paths = make_paths(tmp_path, monkeypatch)
     repo = TaskRepository(paths.db_path)

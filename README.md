@@ -217,9 +217,9 @@ AGPair 3.0 does not pause a running executor for live approval. Out-of-scope wor
 
 ## Review Gate
 
-`ready_for_review`, `evidence_ready`, and `committed` are not automatic success. The controller must inspect `agent_result`, git diff/commit evidence, receipts, raw log paths when needed, and run the relevant verification before reporting completion. Real executor smoke also requires `all_success=true`, a usable `agent_result.state`, and `agent_result.controller_action` such as `use_result` or `review_then_apply` for each attempted executor; dispatch or phase success alone is not enough.
+`ready_for_review`, `evidence_ready`, and `committed` are not automatic success. The controller must inspect `recovery_decision`, `agent_result`, git diff/commit evidence, receipts, raw log paths when needed, and run the relevant verification before reporting completion. Real executor smoke also requires `all_success=true`, a usable `agent_result.state`, and `recovery_decision.action` such as `use_result` or `review_then_apply` for each attempted executor; dispatch or phase success alone is not enough.
 
-Useful value metrics are completion rate, usable `agent_result` rate, time to first useful signal, fallback rate, controller rework rate, and abandoned/no-progress rate. Use `task status --json`, `task list --json`, and `scripts/smoke_real_executors.py` to inspect those fields.
+Useful value metrics are completion rate, usable `agent_result` rate, time to first useful signal, fallback recommendation rate, controller rework rate, and abandoned/no-progress rate. Use `task status --json`, `task list --json`, and `scripts/smoke_real_executors.py` to inspect `summary_metrics` and per-executor `recovery_decision`.
 
 After the controller accepts the evidence, mark the task accepted so Stop hooks do not keep blocking on the same receipt:
 

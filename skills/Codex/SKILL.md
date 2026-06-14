@@ -229,7 +229,7 @@ Do not use repeated Codex prompts as a polling loop. Use `agpair task watch <TAS
 
 `watch --json` emits state changes and raw evidence paths; it does not stream full logs. Do not run raw executor output through lossy compression by default.
 
-`wait --json` reports `outcome`, `agent_result`, `recommended_action`, and whether the controller wait lease expired. Treat `controller_lease_expired` and `soft_no_progress` as background-running outcomes; the controller action for those cases is effectively `wait_background` unless the task budget has expired. Inspect `task status --json` rather than burning model turns in a polling loop.
+`wait --json` reports `outcome`, `agent_result`, `recovery_decision`, and whether the controller wait lease expired. Treat `controller_lease_expired` and `soft_no_progress` as background-running outcomes when `recovery_decision.action=wait_background`; otherwise follow `switch_executor`, `native_fallback`, `repair_executor`, or `retry_same_executor`. Inspect `task status --json` rather than burning model turns in a polling loop.
 
 Use Codex App thread automation only for very long tasks that should wake the same thread later.
 
@@ -242,7 +242,7 @@ agpair task status TASK-123 --json
 agpair task logs TASK-123 --include-executor-output
 ```
 
-Use `agent_result` as the controller-facing outcome. Prefer `agent_result.controller_action`: `use_result` for reports, `review_then_apply` for isolated implementation diffs, `retry_or_switch_executor` for blocked attempts, and `inspect_evidence` when the evidence needs manual inspection. `protocol_result` and `adoption_result` remain compatibility/debug surfaces; do not make low-risk protocol warnings override useful evidence.
+Use `recovery_decision` as the controller-facing next step and `agent_result` as the evidence quality state. Follow `recovery_decision.action`: `use_result` for reports, `review_then_apply` for isolated implementation diffs, `wait_background` for live background tasks, `switch_executor` for the next external executor, `native_fallback` for native subagents/direct controller work, `repair_executor` for auth/binary health, and `inspect_evidence` when artifacts need manual inspection. `protocol_result` and `adoption_result` remain compatibility/debug surfaces; do not make low-risk protocol warnings override useful evidence.
 
 For isolated implementation or test-fix tasks, review and apply the executor diff explicitly:
 

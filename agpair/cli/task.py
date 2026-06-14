@@ -28,7 +28,7 @@ from agpair.cli.wait import (
 from agpair.artifacts import copy_artifact, ensure_attempt_dir, live_artifact_metadata, read_excerpt
 from agpair.completion import derive_effective_task_safety, resolve_effective_task_policy
 from agpair.config import AppPaths
-from agpair.executors.policy import resolve_controller_policy, resolve_environment_metadata
+from agpair.executors.policy import next_eligible_executor, resolve_controller_policy, resolve_environment_metadata
 from agpair.executors.routing import (
     default_executor_id,
     is_legacy_executor,
@@ -50,6 +50,7 @@ from agpair.runtime_liveness import (
     is_task_live,
     recommend_controller_action,
 )
+from agpair.recovery import RecoveryInput, choose_recovery_decision
 from agpair.task_brief import TaskBriefError, normalize_task_brief
 from agpair.terminal_receipts import (
     blocked_failure_context_from_receipt,
@@ -496,16 +497,72 @@ def _derive_antigravity_bridge_state(paths: AppPaths, task) -> dict:
     }
 
 
-def _controller_from_current_attempt(paths: AppPaths, task_id: str) -> str | None:
+def _current_attempt_policy_payload(paths: AppPaths, task_id: str) -> dict:
     attempt = TaskRepository(paths.db_path).current_attempt(task_id)
     if attempt is None or not attempt.effective_policy_json:
-        return None
+        return {}
     try:
         payload = json.loads(attempt.effective_policy_json)
     except (TypeError, json.JSONDecodeError):
-        return None
-    controller = payload.get("controller") if isinstance(payload, dict) else None
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _controller_from_current_attempt(paths: AppPaths, task_id: str) -> str | None:
+    payload = _current_attempt_policy_payload(paths, task_id)
+    controller = payload.get("controller")
     return controller if isinstance(controller, str) and controller.strip() else None
+
+
+def _requested_executor_from_current_attempt(paths: AppPaths, task_id: str) -> str | None:
+    payload = _current_attempt_policy_payload(paths, task_id)
+    requested_executor = payload.get("requested_executor")
+    return requested_executor if isinstance(requested_executor, str) and requested_executor.strip() else None
+
+
+def _effective_policy_json(effective_policy, *, requested_executor: str | None) -> str:
+    payload = effective_policy.to_dict()
+    if requested_executor:
+        payload["requested_executor"] = requested_executor
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _execution_budget_exhausted(signal_summary) -> bool:
+    return (
+        signal_summary.execution_budget_remaining_seconds is not None
+        and signal_summary.execution_budget_remaining_seconds <= 0
+    )
+
+
+def _recovery_decision_for_task(
+    paths: AppPaths,
+    task,
+    *,
+    agent_result: dict | None,
+    signal_summary,
+    wait_outcome: str | None = None,
+    requested_executor: str | None = None,
+) -> dict[str, str | None]:
+    controller = _controller_from_current_attempt(paths, task.task_id)
+    current_executor = task.executor_backend
+    next_executor = next_eligible_executor(
+        controller=controller,
+        current_executor=current_executor,
+        requested_executor=requested_executor,
+    )
+    return choose_recovery_decision(
+        RecoveryInput(
+            task_id=task.task_id,
+            controller=controller,
+            current_executor=current_executor,
+            requested_executor=requested_executor,
+            agent_result=agent_result,
+            liveness_state=signal_summary.state,
+            wait_outcome=wait_outcome,
+            execution_budget_exhausted=_execution_budget_exhausted(signal_summary),
+            next_eligible_executor=next_executor,
+        )
+    ).to_dict()
 
 
 def _environment_payload_from_current_attempt(paths: AppPaths, task_id: str, executor_backend: str | None) -> dict:
@@ -922,6 +979,14 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         and isinstance(agent_result_payload.get("controller_action"), str)
     ):
         controller_action = agent_result_payload["controller_action"]
+    requested_executor = _requested_executor_from_current_attempt(paths, task.task_id)
+    recovery_decision = _recovery_decision_for_task(
+        paths,
+        task,
+        agent_result=agent_result_payload if isinstance(agent_result_payload, dict) else None,
+        signal_summary=signal_summary,
+        requested_executor=requested_executor,
+    )
 
     return {
         "task_id": task.task_id,
@@ -985,6 +1050,7 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "liveness_state": liveness.value if liveness is not None else None,
         "signal_state": signal_summary.to_dict(),
         "controller_action": controller_action,
+        "recovery_decision": recovery_decision,
         "waiter": _waiter_payload(waiter),
         "terminal_receipt": terminal_receipt,
         "committed_result": committed_result,
@@ -1381,7 +1447,10 @@ def start_task(
             controller_wait_seconds=wait_budget.controller_wait_seconds,
             execution_budget_seconds=wait_budget.execution_budget_seconds,
             background_ok=wait_budget.background_ok,
-            effective_policy_json=json.dumps(effective_policy.to_dict(), ensure_ascii=False, sort_keys=True),
+            effective_policy_json=_effective_policy_json(
+                effective_policy,
+                requested_executor=requested_executor,
+            ),
             environment_mode=environment.environment_mode,
             environment_mode_source=environment.environment_mode_source,
             skill_policy=environment.skill_policy,
@@ -1435,20 +1504,23 @@ def start_task(
             )
             return
 
+    dispatch_kwargs = {
+        "task_id": final_task_id,
+        "body": body,
+        "repo_path": resolved_repo_path,
+        "isolated_worktree": isolated_worktree,
+        "worktree_boundary": resolved_worktree_boundary,
+        "authorization_profile": normalized_authorization_profile,
+        "authorization_summary": normalized_authorization_summary,
+        "environment_mode": environment.environment_mode,
+        "skill_policy": environment.skill_policy,
+        "mcp_policy": environment.mcp_policy,
+        "dirty_snapshot_mode": resolved_dirty_snapshot_mode,
+    }
+    if is_local_cli_backend(selected_executor):
+        dispatch_kwargs["completion_policy"] = resolved_completion_policy_request
     try:
-        dispatch_result = exec_instance.dispatch(
-            task_id=final_task_id,
-            body=body,
-            repo_path=resolved_repo_path,
-            isolated_worktree=isolated_worktree,
-            worktree_boundary=resolved_worktree_boundary,
-            authorization_profile=normalized_authorization_profile,
-            authorization_summary=normalized_authorization_summary,
-            environment_mode=environment.environment_mode,
-            skill_policy=environment.skill_policy,
-            mcp_policy=environment.mcp_policy,
-            dirty_snapshot_mode=resolved_dirty_snapshot_mode,
-        )
+        dispatch_result = exec_instance.dispatch(**dispatch_kwargs)
     except (subprocess.SubprocessError, FileNotFoundError, BusSendError, WorktreeProvisionError, ValueError) as exc:
         reason = f"dispatch failed: {exc}"
         journal.append(final_task_id, "cli", "dispatch_failed", reason)
@@ -1608,8 +1680,17 @@ def task_status(
     typer.echo(f"is_approved: {payload['is_approved']}")
     if payload["liveness_state"] is not None:
         typer.echo(f"liveness_state: {payload['liveness_state']}")
-    typer.echo(f"signal_state: {json.dumps(payload['signal_state'], ensure_ascii=False, sort_keys=True)}")
+    human_signal_state = dict(payload["signal_state"])
+    human_signal_state.pop("last_safe_excerpt", None)
+    typer.echo(f"signal_state: {json.dumps(human_signal_state, ensure_ascii=False, sort_keys=True)}")
     typer.echo(f"controller_action: {payload['controller_action']}")
+    recovery_decision = payload.get("recovery_decision")
+    if isinstance(recovery_decision, dict):
+        typer.echo(f"recovery_action: {recovery_decision.get('action')}")
+        if recovery_decision.get("next_executor"):
+            typer.echo(f"next_executor: {recovery_decision.get('next_executor')}")
+        if recovery_decision.get("command"):
+            typer.echo(f"retry_command: {recovery_decision.get('command')}")
     terminal_receipt = payload["terminal_receipt"]
     if terminal_receipt is not None:
         typer.echo(f"terminal_receipt_schema_version: {terminal_receipt['schema_version']}")
@@ -2042,6 +2123,20 @@ def wait_task(
         recommended_action = agent_action or result.recommended_action or (
             task_payload.get("controller_action") if task_payload is not None else None
         )
+        recovery_decision = None
+        if current_task is not None:
+            wait_signal_summary = build_signal_summary(
+                current_task,
+                freshness_seconds=effective_no_progress_seconds(current_task),
+            )
+            recovery_decision = _recovery_decision_for_task(
+                paths,
+                current_task,
+                agent_result=agent_result if isinstance(agent_result, dict) else None,
+                signal_summary=wait_signal_summary,
+                wait_outcome=result.outcome,
+                requested_executor=_requested_executor_from_current_attempt(paths, current_task.task_id),
+            )
         _emit_json(
             {
                 "ok": code == 0,
@@ -2054,6 +2149,7 @@ def wait_task(
                 "controller_lease_expired": result.controller_lease_expired,
                 "agent_result": agent_result,
                 "recommended_action": recommended_action,
+                "recovery_decision": recovery_decision,
                 "status_command": f"agpair task status {task_id} --json",
                 "evidence_commands": [
                     f"agpair task logs {task_id} --include-executor-output",
@@ -2177,6 +2273,7 @@ def watch_task(
         payload = build_task_payload(paths, task)
         progress_payload = _watch_progress_payload(payload)
         signal_payload = payload.get("signal_state") if isinstance(payload.get("signal_state"), dict) else {}
+        recovery_payload = payload.get("recovery_decision") if isinstance(payload.get("recovery_decision"), dict) else None
         soft_no_progress = (
             watchdog
             and bool(task.background_ok)
@@ -2203,6 +2300,7 @@ def watch_task(
             signal_payload.get("stderr_bytes"),
             signal_payload.get("last_signal_at"),
             payload.get("controller_action"),
+            json.dumps(recovery_payload, sort_keys=True) if recovery_payload else None,
             event_cursor,
         )
 
@@ -2223,6 +2321,7 @@ def watch_task(
                 or current_state[7] != last_emitted_state[7]
                 or current_state[8] != last_emitted_state[8]
                 or current_state[9] != last_emitted_state[9]
+                or current_state[10] != last_emitted_state[10]
             )
 
         now_mono = time.monotonic()
@@ -2280,6 +2379,7 @@ def watch_task(
                     "signal_state": payload.get("signal_state"),
                     "controller_action": payload.get("controller_action"),
                     "agent_result": agent_result,
+                    "recovery_decision": recovery_payload,
                     "outcome": "soft_no_progress" if soft_no_progress else None,
                     **progress_payload,
                     "payload": payload,
@@ -2628,6 +2728,7 @@ def retry_task(
     task_id: str,
     body: str | None = typer.Option(None, "--body", "--prompt"),
     from_block: bool = typer.Option(False, "--from-block", help="Build a new attempt from structured blocked context."),
+    next_executor: bool = typer.Option(False, "--next-executor", help="Retry a blocked task on the next eligible executor."),
     authorization_profile: str | None = typer.Option(None, "--authorization-profile", help="Authorization profile for the new attempt."),
     completion_policy: str | None = typer.Option(None, "--completion-policy", help="Completion policy for the new attempt."),
     task_kind: str | None = typer.Option(None, "--task-kind", help="Task kind for the new attempt."),
@@ -2657,13 +2758,31 @@ def retry_task(
     _guard_active_waiter(paths, task_id, force=force, command="retry")
     _guard_live_task(task, force=force, command="retry")
     next_attempt = task.attempt_no + 1
-    if from_block and task.executor_backend == "gemini_cli" and not executor:
+    if next_executor and not from_block:
+        typer.echo("--next-executor requires --from-block", err=True)
+        raise typer.Exit(code=1)
+    if next_executor and executor:
+        typer.echo("--next-executor cannot be combined with --executor", err=True)
+        raise typer.Exit(code=1)
+    if from_block and task.executor_backend == "gemini_cli" and not executor and not next_executor:
         typer.echo("legacy gemini_cli retry requires --executor", err=True)
         raise typer.Exit(code=1)
+    requested_retry_executor = executor or task.executor_backend
+    if next_executor:
+        requested_retry_executor = next_eligible_executor(
+            controller=controller,
+            current_executor=task.executor_backend,
+            requested_executor=None,
+            allow_self_executor=allow_self_executor,
+            require_available=True,
+        )
+        if requested_retry_executor is None:
+            typer.echo("no_eligible_executor", err=True)
+            raise typer.Exit(code=1)
     try:
         policy_decision = resolve_controller_policy(
             controller=controller,
-            requested_executor=executor or task.executor_backend,
+            requested_executor=requested_retry_executor,
             allow_self_executor=allow_self_executor,
             require_available=True,
         )
@@ -2795,6 +2914,7 @@ def retry_task(
                 skill_policy=next_environment.skill_policy,
                 mcp_policy=next_environment.mcp_policy,
                 dirty_snapshot_mode=resolved_dirty_snapshot_mode,
+                completion_policy=next_completion_policy,
             )
         except (subprocess.SubprocessError, FileNotFoundError, BusSendError, WorktreeProvisionError, ValueError) as exc:
             reason = f"dispatch failed: {exc}"
@@ -2817,7 +2937,10 @@ def retry_task(
             controller_wait_seconds=controller_wait_seconds,
             execution_budget_seconds=execution_budget_seconds,
             background_ok=background_ok,
-            effective_policy_json=json.dumps(next_effective_policy.to_dict(), ensure_ascii=False, sort_keys=True),
+            effective_policy_json=_effective_policy_json(
+                next_effective_policy,
+                requested_executor=selected_executor,
+            ),
             environment_mode=next_environment.environment_mode,
             environment_mode_source=next_environment.environment_mode_source,
             skill_policy=next_environment.skill_policy,
@@ -2861,7 +2984,10 @@ def retry_task(
             controller_wait_seconds=controller_wait_seconds,
             execution_budget_seconds=execution_budget_seconds,
             background_ok=background_ok,
-            effective_policy_json=json.dumps(next_effective_policy.to_dict(), ensure_ascii=False, sort_keys=True),
+            effective_policy_json=_effective_policy_json(
+                next_effective_policy,
+                requested_executor=selected_executor,
+            ),
             environment_mode=next_environment.environment_mode,
             environment_mode_source=next_environment.environment_mode_source,
             skill_policy=next_environment.skill_policy,
@@ -2869,6 +2995,8 @@ def retry_task(
             dirty_snapshot_mode=resolved_dirty_snapshot_mode,
         )
         journal.append(updated.task_id, "cli", "retried", f"id={message_id} attempt={updated.attempt_no}")
+    if next_executor:
+        typer.echo(f"selected_executor: {selected_executor}", err=True)
     typer.echo(task.task_id)
 
     maybe_auto_wait(

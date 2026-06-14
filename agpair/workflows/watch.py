@@ -50,6 +50,10 @@ def workflow_status_payload(paths: AppPaths, workflow_id: str) -> dict[str, Any]
             "result": _json_object(node.result_json),
         })
     evidence_payload = _workflow_evidence_payload(workflow.evidence_path)
+    panel_result = _dict_value(evidence_payload.get("panel_result"))
+    recovery_decision = _dict_value(evidence_payload.get("recovery_decision"))
+    if not recovery_decision:
+        recovery_decision = _dict_value(panel_result.get("recovery_decision"))
     return {
         "ok": True,
         "workflow_id": workflow.workflow_id,
@@ -66,7 +70,8 @@ def workflow_status_payload(paths: AppPaths, workflow_id: str) -> dict[str, Any]
         "cancelled_at": workflow.cancelled_at,
         "error": workflow.error or workflow.stuck_reason,
         "cursor": "|".join(cursor_parts),
-        "panel_result": _dict_value(evidence_payload.get("panel_result")),
+        "panel_result": panel_result,
+        "recovery_decision": recovery_decision,
         "synthesis_result": _dict_value(evidence_payload.get("synthesis_result")),
         "lane_cards": evidence_payload.get("lane_cards") if isinstance(evidence_payload.get("lane_cards"), list) else [],
         "nodes": node_payloads,
@@ -124,6 +129,7 @@ def workflow_event_payload(paths: AppPaths, workflow_id: str, *, previous_cursor
         "receipt_path": receipt_path,
         "raw_log_path": raw_log_path,
         "evidence_path": status.get("evidence_path"),
+        "recovery_decision": status.get("recovery_decision"),
         "error": status.get("error"),
     }
 

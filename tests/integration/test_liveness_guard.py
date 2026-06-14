@@ -178,6 +178,9 @@ def test_real_executor_startup_warnings_are_not_live_output(tmp_path: Path) -> N
     assert classify_liveness(task) == LivenessState.silent
     assert is_task_live(task) is False
     assert signal.bootstrap_noise_only is True
+    assert signal.progress_quality == "bootstrap_noise"
+    assert "hook loading from settings file" in (signal.last_safe_excerpt or "")
+    assert len(signal.last_safe_excerpt or "") <= 500
     assert signal.stdout_bytes == 0
     assert signal.stderr_bytes > 0
 
@@ -217,6 +220,8 @@ def test_signal_summary_reports_output_metadata_without_log_body(tmp_path: Path)
 
     assert signal.state == LivenessState.active_via_output.value
     assert signal.last_signal_type == "stdout"
+    assert signal.progress_quality == "partial_output"
+    assert signal.last_safe_excerpt == "useful progress"
     assert signal.stdout_bytes == len("useful progress\n")
     assert signal.stderr_bytes == 0
     assert signal.controller_silence_seconds == 60

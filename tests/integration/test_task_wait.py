@@ -457,6 +457,52 @@ def test_task_wait_json_reports_lease_outcome(tmp_path: Path, monkeypatch):
     assert payload["task"]["controller_action"] in {"detach_and_continue", "inspect_logs_or_continue_background"}
 
 
+def test_task_wait_json_uses_same_recovery_decision_for_soft_no_progress(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = _make_execution_repo(tmp_path, monkeypatch)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--controller",
+            "codex",
+            "--executor",
+            "antigravity-cli",
+            "--task-id",
+            "TASK-WAIT-RECOVERY",
+            "--task-kind",
+            "quick_review",
+            "--wait-policy",
+            "lease",
+            "--controller-wait-seconds",
+            "0",
+            "--authorization-profile",
+            "local_readonly",
+            "--completion-policy",
+            "report",
+            "--no-wait",
+            "--body",
+            "Goal: Summarize the repo.\nScope: repo only.\nRequired changes: none.\nExit criteria: report findings.",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    wait = runner.invoke(
+        app,
+        ["task", "wait", "TASK-WAIT-RECOVERY", "--json", "--timeout-seconds", "1"],
+    )
+
+    assert wait.exit_code == 0, wait.output
+    payload = json.loads(wait.stdout)
+    assert payload["recommended_action"] in {"detach_and_continue", "wait_background"}
+    assert payload["recovery_decision"]["action"] == "wait_background"
+
+
 def test_task_wait_json_normalizes_committed_result_list_fields(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = _make_repo(tmp_path)

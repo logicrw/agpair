@@ -151,6 +151,7 @@ def build_workflow_evidence_pack(paths: AppPaths, workflow_id: str, *, phase: st
         "lane_cards": lane_cards,
         "synthesis_result": synthesis_result,
         "panel_result": panel_result,
+        "recovery_decision": panel_result.get("recovery_decision"),
         "nodes": node_payloads,
     }
 

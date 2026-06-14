@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from agpair.executors.policy import executor_health_snapshot, resolve_controller_policy
 from agpair.executors.registry import registered_executor_ids
+from agpair.recovery import RecoveryInput, choose_recovery_decision
 
 
 TERMINAL_OK_PHASES = {"ready_for_review", "evidence_ready", "committed"}
@@ -272,22 +273,70 @@ def _fallback_suggestion(failure_class: str | None) -> str | None:
     return "inspect_artifacts_then_retry_or_fallback"
 
 
-def _value_metric_defaults(adoptable_result: str, failure_class: str | None) -> dict[str, Any]:
+def _recovery_decision_payload(
+    *,
+    task_id: str,
+    controller: str | None,
+    executor_id: str | None,
+    agent_result: dict[str, Any] | None,
+    wait_outcome: str | None = None,
+    execution_budget_exhausted: bool = False,
+    status_payload: dict[str, Any] | None = None,
+) -> dict[str, str | None]:
+    status_decision = status_payload.get("recovery_decision") if status_payload else None
+    if isinstance(status_decision, dict) and isinstance(status_decision.get("action"), str):
+        return {
+            "action": status_decision.get("action"),
+            "reason": status_decision.get("reason"),
+            "next_executor": status_decision.get("next_executor"),
+            "command": status_decision.get("command"),
+            "alternative_command": status_decision.get("alternative_command"),
+        }
+    return choose_recovery_decision(
+        RecoveryInput(
+            task_id=task_id,
+            controller=controller,
+            current_executor=executor_id,
+            requested_executor=executor_id,
+            agent_result=agent_result,
+            liveness_state=None,
+            wait_outcome=wait_outcome,
+            execution_budget_exhausted=execution_budget_exhausted,
+        )
+    ).to_dict()
+
+
+def _value_metric_defaults(
+    adoptable_result: str,
+    failure_class: str | None,
+    *,
+    task_id: str = "TASK-NOT-STARTED",
+    controller: str | None = None,
+    executor_id: str | None = None,
+) -> dict[str, Any]:
     agent_result = _agent_result_payload(
         adoptable_result=adoptable_result,
         failure_class=failure_class,
         require_changed_files=True,
+    )
+    recovery_decision = _recovery_decision_payload(
+        task_id=task_id,
+        controller=controller,
+        executor_id=executor_id,
+        agent_result=agent_result,
     )
     return {
         "adoptable_result": adoptable_result,
         "adoptable": adoptable_result in {"yes", "partial"},
         "agent_result": agent_result,
         "controller_action": agent_result["controller_action"],
+        "recovery_decision": recovery_decision,
         "time_to_first_useful_signal_seconds": None,
         "fallback_suggestion": _fallback_suggestion(failure_class),
         "controller_rework": "none" if adoptable_result == "yes" else "unknown",
         "protocol_warnings": [],
         "failure_class": failure_class,
+        "no_progress": failure_class == "no_progress_budget_exceeded",
     }
 
 
@@ -688,7 +737,12 @@ def _executor_result(
             "reason": str(exc),
             "attempted": False,
             **_executor_runtime_metadata(executor_id),
-            **_value_metric_defaults("no", "invalid_executor"),
+            **_value_metric_defaults(
+                "no",
+                "invalid_executor",
+                controller=policy_controller,
+                executor_id=executor_id,
+            ),
         }
     if decision.rejected_executor:
         health = executor_health_snapshot(run_launch_probe=True).get(executor_id, {})
@@ -708,7 +762,12 @@ def _executor_result(
             "health": health,
             "attempted": False,
             **_executor_runtime_metadata(executor_id, health),
-            **_value_metric_defaults("no", str(blocker_type)),
+            **_value_metric_defaults(
+                "no",
+                str(blocker_type),
+                controller=policy_controller,
+                executor_id=executor_id,
+            ),
         }
 
     task_id = (
@@ -788,7 +847,13 @@ def _executor_result(
                 "start_returncode": start.returncode,
                 "health": health,
                 **_executor_runtime_metadata(executor_id, health),
-                **_value_metric_defaults("no", "task_start_timeout" if start.returncode == 124 else "task_start_failed"),
+                **_value_metric_defaults(
+                    "no",
+                    "task_start_timeout" if start.returncode == 124 else "task_start_failed",
+                    task_id=task_id,
+                    controller=policy_controller,
+                    executor_id=executor_id,
+                ),
             }
             return result_payload
         wait_returncode, wait_payload, status_payload = _wait_for_status(
@@ -887,11 +952,31 @@ def _executor_result(
             outcome = "blocked"
             blocker_type = blocker_type or adoption.get("failure_class") or "adoptable_result_missing"
         if blocker_type and not adoption["adoptable"]:
+            agent_result = _agent_result_payload(
+                adoptable_result="no",
+                failure_class=str(blocker_type),
+                require_changed_files=is_implementation,
+            )
+            adoption_blockers = list(adoption.get("adoption_blockers") or [])
+            if str(blocker_type) not in adoption_blockers:
+                adoption_blockers.append(str(blocker_type))
             adoption = {
                 **adoption,
+                "agent_result": agent_result,
+                "controller_action": agent_result["controller_action"],
+                "adoption_blockers": adoption_blockers,
                 "failure_class": blocker_type,
                 "fallback_suggestion": _fallback_suggestion(str(blocker_type)),
             }
+        recovery_decision = _recovery_decision_payload(
+            task_id=task_id,
+            controller=policy_controller,
+            executor_id=executor_id,
+            agent_result=adoption.get("agent_result") if isinstance(adoption.get("agent_result"), dict) else None,
+            wait_outcome=wait_payload.get("outcome") if isinstance(wait_payload, dict) else None,
+            execution_budget_exhausted=bool(wait_payload.get("watchdog_triggered") if isinstance(wait_payload, dict) else False),
+            status_payload=status_payload,
+        )
         health = executor_health_snapshot().get(executor_id, {})
         result_payload = {
             "executor": executor_id,
@@ -926,6 +1011,8 @@ def _executor_result(
             or ("terminal_success" if phase in TERMINAL_OK_PHASES else None),
             "time_to_first_useful_signal_seconds": wait_payload.get("time_to_first_useful_signal_seconds"),
             "time_to_first_signal_seconds": wait_payload.get("time_to_first_useful_signal_seconds"),
+            "no_progress": bool(wait_payload.get("watchdog_triggered")) or blocker_type == "no_progress_budget_exceeded",
+            "recovery_decision": recovery_decision,
             "status": status_payload,
             "artifacts": _artifact_summary(status_payload),
             **adoption,
@@ -944,6 +1031,55 @@ def _write_report(report: dict[str, Any], repo_path: Path) -> Path:
     path = reports_dir / f"{report['run_id']}.json"
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
     return path
+
+
+def _rate(results: list[dict[str, Any]], predicate) -> float:
+    if not results:
+        return 0.0
+    return round(sum(1 for result in results if predicate(result)) / len(results), 4)
+
+
+def _summary_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
+    times = [
+        float(value)
+        for value in (result.get("time_to_first_useful_signal_seconds") for result in results)
+        if isinstance(value, (int, float))
+    ]
+    sorted_times = sorted(times)
+    if sorted_times:
+        mid = len(sorted_times) // 2
+        median = (
+            sorted_times[mid]
+            if len(sorted_times) % 2
+            else round((sorted_times[mid - 1] + sorted_times[mid]) / 2, 3)
+        )
+        max_time = max(sorted_times)
+    else:
+        median = None
+        max_time = None
+
+    def _completion(result: dict[str, Any]) -> bool:
+        return result.get("outcome") in TERMINAL_OK_PHASES or result.get("phase") in TERMINAL_OK_PHASES
+
+    def _fallback(result: dict[str, Any]) -> bool:
+        decision = result.get("recovery_decision")
+        action = decision.get("action") if isinstance(decision, dict) else None
+        return action in {"retry_same_executor", "switch_executor", "native_fallback", "repair_executor"}
+
+    return {
+        "completion_rate": _rate(results, _completion),
+        "adoptable_result_rate": _rate(results, lambda result: result.get("adoptable") is True),
+        "time_to_first_useful_signal_seconds": {
+            "median": median,
+            "max": max_time,
+        },
+        "no_progress_rate": _rate(results, lambda result: bool(result.get("no_progress"))),
+        "fallback_recommended_rate": _rate(results, _fallback),
+        "controller_rework_rate": _rate(
+            results,
+            lambda result: result.get("controller_rework") not in {None, "none"},
+        ),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1026,6 +1162,7 @@ def main(argv: list[str] | None = None) -> int:
         "dirty_snapshot": args.dirty_snapshot,
         "results": results,
     }
+    report["summary_metrics"] = _summary_metrics(results)
     report["harness_completed"] = True
     report["all_selected_attempted"] = all(result.get("attempted") is True for result in results)
     report["all_success"] = all(result.get("adoptable") is True for result in results)
