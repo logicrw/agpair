@@ -155,6 +155,33 @@ def test_bootstrap_stderr_noise_is_not_live_output(tmp_path: Path) -> None:
     assert is_task_live(task) is False
 
 
+def test_real_executor_startup_warnings_are_not_live_output(tmp_path: Path) -> None:
+    repo = _seed_acked_task(tmp_path)
+    task = repo.get_task("TASK-LG1")
+    assert task is not None
+    session_dir = Path(task.executor_session_id or "")
+    session_dir.mkdir(parents=True, exist_ok=True)
+    stderr_path = session_dir / "stderr.log"
+    stderr_path.write_text(
+        "WARN config.toml has unrecognized key(s): legacyProvider\n"
+        "WARN manifest path escapes plugin root; skipping path=/Users/example/.claude/plugins/foo\n"
+        "WARN plugin name collision resolved by scope precedence name=tools scope=user\n"
+        "WARN skill name does not match expected name from path: file=skills/foo/SKILL.md\n"
+        "WARN skill name shadowed by a higher-precedence skill name=review-work\n"
+        "WARN hooks: skipped unrecognized event names: PreToolUse\n"
+        "WARN hook loading from settings file: failed to parse hook file hooks.json\n",
+        encoding="utf-8",
+    )
+
+    signal = build_signal_summary(task, freshness_seconds=300)
+
+    assert classify_liveness(task) == LivenessState.silent
+    assert is_task_live(task) is False
+    assert signal.bootstrap_noise_only is True
+    assert signal.stdout_bytes == 0
+    assert signal.stderr_bytes > 0
+
+
 def test_stale_output_activity_is_silent(tmp_path: Path) -> None:
     repo = _seed_acked_task(tmp_path)
     _make_live_via_output(tmp_path, repo, "TASK-LG1", stale=True)
@@ -218,6 +245,53 @@ def test_recommend_controller_action_detaches_live_background_task(tmp_path: Pat
 
     assert signal.state == LivenessState.active_via_workspace.value
     assert recommend_controller_action(task, signal) == "detach_and_continue"
+
+
+def test_recommend_controller_action_retries_when_only_bootstrap_noise(tmp_path: Path) -> None:
+    repo = _seed_acked_task(tmp_path)
+    with sqlite3.connect(_make_paths(tmp_path).db_path) as conn:
+        conn.execute(
+            "UPDATE tasks SET wait_policy=?, controller_wait_seconds=?, execution_budget_seconds=?, background_ok=? WHERE task_id=?",
+            ("lease", 30, 3600, 1, "TASK-LG1"),
+        )
+        conn.commit()
+    _make_bootstrap_noise_stderr(tmp_path, repo, "TASK-LG1")
+    task = repo.get_task("TASK-LG1")
+    assert task is not None
+
+    signal = build_signal_summary(task, freshness_seconds=300)
+
+    assert signal.bootstrap_noise_only is True
+    assert recommend_controller_action(task, signal) == "retry_or_switch_executor"
+
+
+def test_recommend_controller_action_retries_when_execution_budget_is_exhausted(tmp_path: Path) -> None:
+    repo = _seed_acked_task(tmp_path)
+    with sqlite3.connect(_make_paths(tmp_path).db_path) as conn:
+        conn.execute(
+            "UPDATE tasks SET wait_policy=?, controller_wait_seconds=?, execution_budget_seconds=?, background_ok=?, created_at=? WHERE task_id=?",
+            (
+                "lease",
+                30,
+                60,
+                1,
+                datetime(2026, 3, 24, 11, 58, tzinfo=UTC).isoformat(),
+                "TASK-LG1",
+            ),
+        )
+        conn.commit()
+    _make_live_via_output(tmp_path, repo, "TASK-LG1")
+    task = repo.get_task("TASK-LG1")
+    assert task is not None
+
+    signal = build_signal_summary(
+        task,
+        now=datetime(2026, 3, 24, 12, 0, tzinfo=UTC),
+        freshness_seconds=300,
+    )
+
+    assert signal.execution_budget_remaining_seconds == 0.0
+    assert recommend_controller_action(task, signal) == "retry_or_switch_executor"
 
 
 def test_classify_stale_signals_are_silent(tmp_path: Path) -> None:

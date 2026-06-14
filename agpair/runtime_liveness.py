@@ -72,13 +72,22 @@ def _is_fresh(iso_timestamp: str | None, cutoff: datetime) -> bool:
 
 
 _BOOTSTRAP_STDERR_NOISE_MARKERS = (
+    "config.toml has unrecognized key",
     "plugin discovered",
     "plugin manifest",
+    "manifest path escapes plugin root",
+    "plugin name collision resolved by scope precedence",
     "skill name mismatch",
+    "skill name does not match expected name from path",
+    "skill name shadowed by a higher-precedence skill",
     "agent definition parse failure",
+    "hooks: skipped unrecognized event names",
+    "hook loading from settings file",
+    "failed to parse hook file",
     "mcp-debugger",
     "broken pipe",
     "session registry sync",
+    "session registry summary sync failed",
     "grep timed out",
 )
 
@@ -316,6 +325,13 @@ def recommend_controller_action(task: TaskRecord, signal: SignalSummary) -> str 
         return "retry_switch_or_native_fallback"
     if task.phase != "acked":
         return None
+    if (
+        signal.execution_budget_remaining_seconds is not None
+        and signal.execution_budget_remaining_seconds <= 0
+    ):
+        return "retry_or_switch_executor"
+    if signal.bootstrap_noise_only and signal.stdout_bytes == 0:
+        return "retry_or_switch_executor"
     if (
         task.background_ok
         and task.controller_wait_seconds is not None

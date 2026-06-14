@@ -25,7 +25,7 @@ from agpair.cli.wait import (
     maybe_auto_wait,
     wait_for_terminal_phase,
 )
-from agpair.artifacts import live_artifact_metadata, read_excerpt
+from agpair.artifacts import copy_artifact, ensure_attempt_dir, live_artifact_metadata, read_excerpt
 from agpair.completion import derive_effective_task_safety, resolve_effective_task_policy
 from agpair.config import AppPaths
 from agpair.executors.policy import resolve_controller_policy, resolve_environment_metadata
@@ -301,6 +301,64 @@ def _artifact_payload(paths: AppPaths, task) -> tuple[dict[str, str], dict[str, 
     }
 
 
+def _archive_active_attempt_artifacts(paths: AppPaths, tasks: TaskRepository, task) -> dict[str, str]:
+    session_id = task.executor_session_id or task.antigravity_session_id
+    if not session_id:
+        return {}
+    session_dir = Path(session_id)
+    attempt_dir = ensure_attempt_dir(paths.root, task.task_id, task.attempt_no)
+    archived: dict[str, str] = {}
+    for artifact_type, filename in (
+        ("stdout", "stdout.log"),
+        ("stderr", "stderr.log"),
+        ("receipt", "receipt.json"),
+        ("report", "report.md"),
+    ):
+        copied = copy_artifact(session_dir / filename, attempt_dir / filename)
+        if copied is None:
+            continue
+        tasks.record_artifact(
+            task_id=task.task_id,
+            attempt_no=task.attempt_no,
+            artifact_type=artifact_type,
+            path=copied,
+        )
+        archived[artifact_type] = copied
+    return archived
+
+
+def _no_useful_signal_agent_result(task, signal_summary, artifact_top_level: dict[str, object | None]) -> dict | None:
+    if task.phase != "acked":
+        return None
+    if artifact_top_level.get("receipt_path") or artifact_top_level.get("report_path"):
+        return None
+    budget_exhausted = (
+        signal_summary.execution_budget_remaining_seconds is not None
+        and signal_summary.execution_budget_remaining_seconds <= 0
+    )
+    if not budget_exhausted and (not signal_summary.bootstrap_noise_only or signal_summary.stdout_bytes > 0):
+        return None
+    hard_blockers = ["terminal_receipt_missing", "report_missing"]
+    soft_warnings: list[str] = []
+    if signal_summary.bootstrap_noise_only:
+        soft_warnings.append("bootstrap_noise_only")
+    if signal_summary.stdout_bytes == 0:
+        hard_blockers.insert(0, "no_useful_executor_signal")
+    else:
+        soft_warnings.append("stdout_available_without_receipt")
+    if budget_exhausted:
+        hard_blockers.insert(0, "execution_budget_exhausted")
+    if signal_summary.process_alive is True:
+        soft_warnings.append("process_still_alive")
+    return {
+        "state": "blocked",
+        "controller_action": "retry_or_switch_executor",
+        "summary": "Executor attempt has no terminal report or receipt that the controller can adopt.",
+        "hard_blockers": hard_blockers,
+        "soft_warnings": soft_warnings,
+    }
+
+
 def _iso_is_newer(candidate: str | None, baseline: str | None) -> bool:
     from datetime import UTC, datetime
 
@@ -469,7 +527,8 @@ def _environment_payload_from_current_attempt(paths: AppPaths, task_id: str, exe
 
 
 def _attempt_protocol_adoption_payload(paths: AppPaths, task_id: str) -> dict:
-    attempt = TaskRepository(paths.db_path).current_attempt(task_id)
+    tasks = TaskRepository(paths.db_path)
+    attempt = tasks.current_attempt(task_id)
     if attempt is None:
         return {
             "protocol_result": None,
@@ -490,9 +549,15 @@ def _attempt_protocol_adoption_payload(paths: AppPaths, task_id: str) -> dict:
         }
     agent_result = adoption.get("agent_result")
     if not isinstance(agent_result, dict):
+        task = tasks.get_task(task_id)
         adoptable_result = str(adoption.get("adoptable_result") or attempt.adoptable_result or "unknown")
         blockers = adoption.get("blockers") if isinstance(adoption.get("blockers"), list) else []
         soft_warnings = adoption.get("warnings") if isinstance(adoption.get("warnings"), list) else []
+        if task is not None and task.phase in {"blocked", "stuck", "abandoned"} and adoptable_result == "unknown":
+            adoptable_result = "no"
+            blockers = [*blockers, f"task_phase_{task.phase}"]
+            adoption["adoptable_result"] = adoptable_result
+            adoption["blockers"] = blockers
         state = "blocked" if adoptable_result == "no" else "usable" if adoptable_result == "yes" else "needs_review"
         agent_result = {
             "state": state,
@@ -834,6 +899,22 @@ def build_task_payload(paths: AppPaths, task) -> dict:
     current_attempt = TaskRepository(paths.db_path).current_attempt(task.task_id)
     protocol_adoption_payload = _attempt_protocol_adoption_payload(paths, task.task_id)
     executor_state_payload = _executor_state_payload(task, current_attempt)
+    no_useful_signal_result = _no_useful_signal_agent_result(task, signal_summary, artifact_top_level)
+    if no_useful_signal_result is not None:
+        protocol_adoption_payload = dict(protocol_adoption_payload)
+        protocol_adoption_payload["agent_result"] = no_useful_signal_result
+        adoption_result = dict(protocol_adoption_payload.get("adoption_result") or {})
+        adoption_result["adoptable_result"] = "no"
+        adoption_result["controller_rework"] = "redone"
+        adoption_result["blockers"] = sorted(
+            set(adoption_result.get("blockers") or []) | set(no_useful_signal_result["hard_blockers"])
+        )
+        adoption_result["warnings"] = sorted(
+            set(adoption_result.get("warnings") or []) | set(no_useful_signal_result["soft_warnings"])
+        )
+        adoption_result["agent_result"] = no_useful_signal_result
+        protocol_adoption_payload["adoption_result"] = adoption_result
+        controller_action = no_useful_signal_result["controller_action"]
     agent_result_payload = protocol_adoption_payload.get("agent_result")
     if (
         task.phase in TERMINAL_PHASES
@@ -1693,8 +1774,8 @@ def abandon_task(
     task_id: str,
     reason: str = typer.Option("abandoned locally", "--reason"),
     force: bool = typer.Option(False, "--force", help="Bypass liveness and waiter guards."),
+    json_output: bool = _JSON_OPTION,
 ) -> None:
-    """Retry a task. Wait controls: --wait/--no-wait, --interval-seconds, --timeout-seconds."""
     from agpair.executors import get_executor, is_local_cli_backend
 
     paths = _paths()
@@ -1702,7 +1783,10 @@ def abandon_task(
     journal = JournalRepository(paths.db_path)
     task = tasks.get_task(task_id)
     if task is None:
-        typer.echo(f"task not found: {task_id}", err=True)
+        if json_output:
+            _emit_json(_not_found_payload(task_id))
+        else:
+            typer.echo(f"task not found: {task_id}", err=True)
         raise typer.Exit(code=1)
     _guard_active_waiter(paths, task_id, force=force, command="abandon")
     _guard_live_task(task, force=force, command="abandon")
@@ -1735,11 +1819,31 @@ def abandon_task(
                     f"warning: bridge task release failed; abandoning locally anyway ({bridge_message})",
                     err=True,
                 )
+    _archive_active_attempt_artifacts(paths, tasks, task)
     tasks.mark_abandoned(task_id=task_id, reason=reason)
     journal.append(task_id, "cli", "abandoned", reason)
     if not bridge_cancel_attempted and not is_local_cli_backend(task.executor_backend):
         journal.append(task_id, "cli", "bridge_cancel_skipped", "task had no live bridge session to release")
-    typer.echo(task_id)
+    updated = tasks.get_task(task_id)
+    if json_output and updated is not None:
+        payload = build_task_payload(paths, updated)
+        _emit_json(
+            {
+                "ok": True,
+                "task_id": task_id,
+                "phase": updated.phase,
+                "reason": reason,
+                "artifact_paths": payload["artifact_paths"],
+                "stdout_path": payload.get("stdout_path"),
+                "stderr_path": payload.get("stderr_path"),
+                "receipt_path": payload.get("receipt_path"),
+                "report_path": payload.get("report_path"),
+                "agent_result": payload.get("agent_result"),
+                "controller_action": payload.get("controller_action"),
+            }
+        )
+    else:
+        typer.echo(task_id)
 
 
 @app.command("accept")

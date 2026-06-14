@@ -649,6 +649,86 @@ def test_task_status_json_and_human_include_live_attempt_artifact_metadata(tmp_p
     assert "live output line" not in human.stdout
 
 
+def test_task_status_json_marks_bootstrap_noise_only_as_blocked_signal(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(
+        task_id="TASK-NO-USEFUL-SIGNAL",
+        repo_path="/tmp/repo",
+        authorization_profile="local_readonly",
+        completion_policy="report",
+        wait_policy="lease",
+        controller_wait_seconds=30,
+        background_ok=True,
+    )
+    session_dir = tmp_path / "noise-session"
+    session_dir.mkdir()
+    stderr_path = session_dir / "stderr.log"
+    stderr_path.write_text(
+        "WARN config.toml has unrecognized key(s): legacyProvider\n"
+        "WARN manifest path escapes plugin root; skipping path=/Users/example/.claude/plugins/foo\n"
+        "WARN plugin name collision resolved by scope precedence name=tools scope=user\n"
+        "WARN skill name does not match expected name from path: file=skills/foo/SKILL.md\n"
+        "WARN skill name shadowed by a higher-precedence skill name=review-work\n"
+        "WARN hooks: skipped unrecognized event names: PreToolUse\n"
+        "WARN hook loading from settings file: failed to parse hook file hooks.json\n",
+        encoding="utf-8",
+    )
+    repo.mark_acked(task_id="TASK-NO-USEFUL-SIGNAL", session_id=str(session_dir))
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-NO-USEFUL-SIGNAL", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["signal_state"]["bootstrap_noise_only"] is True
+    assert payload["liveness_state"] == "silent"
+    assert payload["stderr_path"] == str(stderr_path)
+    assert payload["controller_action"] == "retry_or_switch_executor"
+    assert payload["agent_result"]["state"] == "blocked"
+    assert payload["agent_result"]["controller_action"] == "retry_or_switch_executor"
+    assert "no_useful_executor_signal" in payload["agent_result"]["hard_blockers"]
+    assert "terminal_receipt_missing" in payload["agent_result"]["hard_blockers"]
+    assert "report_missing" in payload["agent_result"]["hard_blockers"]
+
+
+def test_task_status_json_marks_budget_exhausted_without_receipt_as_blocked_signal(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(
+        task_id="TASK-BUDGET-NO-RECEIPT",
+        repo_path="/tmp/repo",
+        authorization_profile="local_readonly",
+        completion_policy="report",
+        wait_policy="lease",
+        controller_wait_seconds=30,
+        execution_budget_seconds=1,
+        background_ok=True,
+    )
+    with sqlite3.connect(make_paths(tmp_path).db_path) as conn:
+        conn.execute(
+            "UPDATE tasks SET created_at=datetime('now', '-5 seconds') WHERE task_id=?",
+            ("TASK-BUDGET-NO-RECEIPT",),
+        )
+        conn.commit()
+    session_dir = tmp_path / "budget-session"
+    session_dir.mkdir()
+    stdout_path = session_dir / "stdout.log"
+    stdout_path.write_text("partial analysis without final receipt\n", encoding="utf-8")
+    repo.mark_acked(task_id="TASK-BUDGET-NO-RECEIPT", session_id=str(session_dir))
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-BUDGET-NO-RECEIPT", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["stdout_path"] == str(stdout_path)
+    assert payload["controller_action"] == "retry_or_switch_executor"
+    assert payload["agent_result"]["state"] == "blocked"
+    assert payload["agent_result"]["controller_action"] == "retry_or_switch_executor"
+    assert "execution_budget_exhausted" in payload["agent_result"]["hard_blockers"]
+    assert "terminal_receipt_missing" in payload["agent_result"]["hard_blockers"]
+    assert "stdout_available_without_receipt" in payload["agent_result"]["soft_warnings"]
+
+
 def test_task_status_json_includes_structured_terminal_receipt(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = make_task_repo(tmp_path)
@@ -1060,6 +1140,46 @@ def test_task_abandon_marks_task_terminal_locally(tmp_path: Path, monkeypatch) -
     assert task.stuck_reason == "manual cleanup"
     rows = journal.tail("TASK-1", limit=5)
     assert any(row.event == "abandoned" and row.source == "cli" for row in rows)
+
+
+def test_task_abandon_json_archives_live_attempt_artifacts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    journal = make_journal_repo(tmp_path)
+    repo.create_task(task_id="TASK-ABANDON-JSON", repo_path="/tmp/repo")
+    session_dir = tmp_path / "abandon-session"
+    session_dir.mkdir()
+    stdout_path = session_dir / "stdout.log"
+    stderr_path = session_dir / "stderr.log"
+    stdout_path.write_text("", encoding="utf-8")
+    stderr_path.write_text(
+        "WARN config.toml has unrecognized key(s): legacyProvider\n"
+        "WARN skill name shadowed by a higher-precedence skill name=review-work\n",
+        encoding="utf-8",
+    )
+    repo.mark_acked(task_id="TASK-ABANDON-JSON", session_id=str(session_dir))
+    journal.append("TASK-ABANDON-JSON", "daemon", "acked", f"session_id={session_dir}")
+
+    result = CliRunner().invoke(
+        app,
+        ["task", "abandon", "TASK-ABANDON-JSON", "--reason", "no useful signal", "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["phase"] == "abandoned"
+    assert payload["artifact_paths"]["stdout"].endswith("/tasks/TASK-ABANDON-JSON/attempt-1/stdout.log")
+    assert payload["artifact_paths"]["stderr"].endswith("/tasks/TASK-ABANDON-JSON/attempt-1/stderr.log")
+    assert Path(payload["artifact_paths"]["stdout"]).read_text(encoding="utf-8") == ""
+    assert "skill name shadowed" in Path(payload["artifact_paths"]["stderr"]).read_text(encoding="utf-8")
+    assert payload["agent_result"]["state"] == "blocked"
+    assert payload["agent_result"]["controller_action"] == "retry_or_switch_executor"
+    assert "task_phase_abandoned" in payload["agent_result"]["hard_blockers"]
+    task = repo.get_task("TASK-ABANDON-JSON")
+    assert task is not None
+    assert task.phase == "abandoned"
+    assert task.stuck_reason == "no useful signal"
 
 
 def test_task_abandon_notifies_bridge_cancel_when_auth_marker_present(tmp_path: Path, monkeypatch) -> None:
