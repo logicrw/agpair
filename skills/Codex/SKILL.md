@@ -3,7 +3,7 @@ name: agpair-codex
 description: "Use when Codex handles non-trivial coding, refactor, test-fix, research, review, or multi-file work where AGPair external CLI agents can produce implementation candidates, alternative analysis, or verification evidence."
 ---
 
-# AGPair 3.0 for Codex
+# AGPair for Codex
 
 IRON LAW: Non-trivial work requires an explicit routing budget. Use external AGPair lanes by default, but fan out only when each lane has a distinct role, scope, hypothesis, or verification value. Multiple `grok-cli` lanes are valid when they are not duplicate prompts.
 
@@ -278,7 +278,7 @@ Workflow `ready_for_review` means AGPair has an evidence pack for Codex verifica
 agpair task retry TASK-123 --from-block --authorization-profile local_mutating
 ```
 
-`blocked(approval_required)` is terminal in AGPair 3.0. Retry starts a new attempt with structured blocked context and a dispatch-time authorization profile.
+`blocked(approval_required)` is terminal. Retry starts a new attempt with structured blocked context and a dispatch-time authorization profile.
 
 ## Executor Order
 

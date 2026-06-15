@@ -1,6 +1,6 @@
-# AGPair 3.0 Usage
+# AGPair 1.0 Usage
 
-`agpair` is the AGPair 3.0 durable task lifecycle layer for external CLI executors.
+`agpair` is the AGPair 1.0 durable task lifecycle layer for external CLI executors.
 
 Use it when:
 - Your AI coding agent is the main controller
@@ -432,7 +432,7 @@ run `task accept` only after controller verification.
 agpair task retry TASK-SMOKE-001 --body "Retry with a fresh executor session."
 ```
 
-`retry` is always explicit CLI control in AGPair 3.0. The daemon only marks `retry_recommended=true`; it does not auto-retry.
+`retry` is always explicit CLI control in AGPair 1.0. The daemon only marks `retry_recommended=true`; it does not auto-retry.
 It also waits by default unless you pass `--no-wait`.
 
 For an approval block, retry from the structured terminal context:

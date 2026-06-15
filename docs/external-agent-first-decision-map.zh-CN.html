@@ -791,7 +791,7 @@
 <body>
   <div class="topbar">
     <nav class="nav" aria-label="页面导航">
-      <div class="brand"><strong>AGPair 3.0</strong><span>External Agent First</span></div>
+      <div class="brand"><strong>AGPair 1.0</strong><span>External Agent First</span></div>
       <div class="links">
         <a href="#decisions">决策点</a>
         <a href="#flow">运行流</a>
@@ -806,7 +806,7 @@
     <header class="hero">
       <div class="hero-main reveal">
         <div>
-          <p class="eyebrow">给人看的 AGPair 3.0 决策地图 / 不是给 AI 执行的长计划</p>
+          <p class="eyebrow">给人看的 AGPair 1.0 决策地图 / 不是给 AI 执行的长计划</p>
           <h1><span>让主控少</span><span>干体力活，</span><span>外部 Agent</span><span>先上。</span></h1>
           <p class="hero-copy">
             这次改造的核心不是“多接几个 CLI”，而是重新规定责任边界：
@@ -890,7 +890,7 @@
         <article class="decision-card reveal" data-no="05">
           <span class="tag">权限模型</span>
           <h3>派发时授权，越界就停</h3>
-          <p>executor 没有人帮它点 approve。AGPair 3.0 在派发时给授权预算，超出预算写结构化 blocked。</p>
+          <p>executor 没有人帮它点 approve。AGPair 1.0 在派发时给授权预算，超出预算写结构化 blocked。</p>
           <div class="do-dont">
             <div class="mini"><b>要</b>dispatch-time profile</div>
             <div class="mini"><b>不要</b>运行中模拟审批</div>
@@ -932,7 +932,7 @@
     <section id="flow">
       <div class="section-head">
         <h2>一次任务怎么跑</h2>
-        <p class="section-note">AGPair 3.0 的精髓是终态 blocked + 新 attempt retry。看起来不如原进程 resume 优雅，但更稳、更可审计。</p>
+        <p class="section-note">AGPair 1.0 的精髓是终态 blocked + 新 attempt retry。看起来不如原进程 resume 优雅，但更稳、更可审计。</p>
       </div>
 
       <div class="flow-band reveal">
@@ -967,7 +967,7 @@
 
       <div class="split" style="margin-top:18px;">
         <div class="panel reveal">
-          <h3>AGPair 3.0：当前做法</h3>
+          <h3>AGPair 1.0：当前做法</h3>
           <div class="state-machine">
             <div class="state-row"><div class="state-name">new</div><div class="state-desc">任务创建，brief 和授权预算已确定。</div></div>
             <div class="state-row"><div class="state-name">acked</div><div class="state-desc">executor 已启动，AGPair 可 wait/watch。</div></div>
@@ -1093,7 +1093,7 @@
     </section>
 
     <footer class="footer">
-      <div>当前版本：AGPair 3.0。历史计划只作背景，不替代 README / usage / skills。</div>
+      <div>当前版本：AGPair 1.0。历史计划只作背景，不替代 README / usage / skills。</div>
       <div>目的：给人快速看懂决策，不替代当前行为文档。</div>
     </footer>
   </main>

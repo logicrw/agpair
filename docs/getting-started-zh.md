@@ -1,6 +1,6 @@
-# AGPair 3.0 新手教程
+# AGPair 1.0 新手教程
 
-这份教程帮助你让 Codex 或 Claude Code 通过 AGPair 3.0 派发外部 CLI agent。
+这份教程帮助你让 Codex 或 Claude Code 通过 AGPair 1.0 派发外部 CLI agent。
 
 ## 1. 安装
 

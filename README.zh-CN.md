@@ -1,17 +1,17 @@
-# AGPair 3.0
+# AGPair 1.0
 
 ![Python](https://img.shields.io/badge/python-≥3.12-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-3.0.0-blueviolet)
+![Version](https://img.shields.io/badge/version-1.0.0-blueviolet)
 
 [English](README.md) | [新手教程](docs/getting-started-zh.md) | [命令参考](docs/usage.zh-CN.md)
 
-AGPair 3.0 是一个本地任务生命周期和证据层，让 Codex 或 Claude Code 把有边界的工作委派给外部 CLI agent，然后用结构化证据等待、验收、采纳、retry 或 fallback。
+AGPair 1.0 是一个本地任务生命周期和证据层，让 Codex 或 Claude Code 把有边界的工作委派给外部 CLI agent，然后用结构化证据等待、验收、采纳、retry 或 fallback。
 
 主控 agent 负责规划和验收。AGPair 负责把任务派给外部 CLI executor、持久化任务状态、低噪等待、校验结构化 receipt，并在 executor 阻塞时支持带上下文的 retry。
 
-## AGPair 3.0 模型
+## AGPair 1.0 模型
 
 - 默认第一外部 executor：`grok-cli`；当 prompt、scope 或验收标准不同，
   可以并行启动多个 `grok-cli` task
@@ -211,7 +211,7 @@ AGPair 管理的 hook 是提示和护栏，AGPair 不可用时 fail open。安�
 - `local_test_heavy`：更重的本地测试 / 构建。
 - `external_network`：任务明确需要外部网络访问。
 
-AGPair 3.0 不做“运行中暂停等待授权”。越界时 executor 应返回 `blocked(approval_required)`，主控再发起新 retry attempt。
+AGPair 1.0 不做“运行中暂停等待授权”。越界时 executor 应返回 `blocked(approval_required)`，主控再发起新 retry attempt。
 
 ## 验收门
 
@@ -289,7 +289,7 @@ AGPair 不是语义控制器。规划、范围决策、review 和最终验证仍
 
 ## 兼容性
 
-仓库仍保留旧 companion 和 bridge 诊断，供已有安装读取。当前任务派发使用 AGPair 3.0 模型中列出的注册 CLI executor。
+仓库仍保留旧 companion 和 bridge 诊断，供已有安装读取。当前任务派发使用 AGPair 1.0 模型中列出的注册 CLI executor。
 
 ## License
 

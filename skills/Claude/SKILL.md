@@ -3,7 +3,7 @@ name: agpair
 description: "Use when Claude Code handles non-trivial coding, refactor, test-fix, research, review, or multi-file work where AGPair external CLI agents can produce implementation candidates, alternative analysis, or verification evidence."
 ---
 
-# AGPair 3.0 For Claude Code
+# AGPair for Claude Code
 
 IRON LAW: Non-trivial work requires an explicit routing budget. Use external AGPair lanes by default, but fan out only when each lane has a distinct role, scope, hypothesis, or verification value. Multiple `grok-cli` lanes are valid when they are not duplicate prompts.
 
@@ -263,7 +263,7 @@ Pick the narrowest dispatch-time authorization profile that can finish the task:
 - `local_test_heavy`: long or heavy local validation.
 - `external_network`: work that needs external network access.
 
-AGPair 3.0 does not pause a running executor for live approval. If an executor needs more authority, it must return `blocked(approval_required)`.
+AGPair does not pause a running executor for live approval. If an executor needs more authority, it must return `blocked(approval_required)`.
 
 ## Blocked Retry
 

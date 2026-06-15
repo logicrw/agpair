@@ -1,4 +1,4 @@
-# AGPair 3.0 工作流
+# AGPair 1.0 工作流
 
 AGPair 工作流用于高价值、多节点的本地工程编排。普通单任务委派仍应优先使用 `agpair task start`。
 

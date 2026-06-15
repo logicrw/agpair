@@ -4,7 +4,7 @@
 
 **Goal:** Make AGPair external handoffs fail fast, fail clearly, recover predictably, and preserve useful work so Codex and Claude Code can prefer external agents without frequent manual rescue.
 
-**Architecture:** Keep the AGPair 3.0 model: `managed-natural`, inherited skills/MCP/provider config, external-first routing, lease-based waiting, useful-result-first adoption, and controller verification. Do not add a new orchestration stack. Refactor the remaining rough edges into one recovery decision layer that reads existing task state, liveness, artifacts, policy, and executor health, then exposes a native-agent-like controller action: use, review/apply, continue waiting, retry, switch executor, or fall back to a native helper.
+**Architecture:** Keep the AGPair 1.0 model: `managed-natural`, inherited skills/MCP/provider config, external-first routing, lease-based waiting, useful-result-first adoption, and controller verification. Do not add a new orchestration stack. Refactor the remaining rough edges into one recovery decision layer that reads existing task state, liveness, artifacts, policy, and executor health, then exposes a native-agent-like controller action: use, review/apply, continue waiting, retry, switch executor, or fall back to a native helper.
 
 **Tech Stack:** Python 3.12, Typer, SQLite, AGPair task/attempt records, local CLI executors, terminal receipts, runtime liveness, executor policy, isolated worktrees, pytest, real executor smoke harness, Codex / Claude Code skills.
 

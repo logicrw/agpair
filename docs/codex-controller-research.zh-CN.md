@@ -1,6 +1,6 @@
 # Codex 主控适配结论
 
-旧的 v0.121 结论已经过时。AGPair 3.0 的当前定位如下：
+旧的 v0.121 结论已经过时。AGPair 1.0 的当前定位如下：
 
 - Codex 可以作为 AGPair controller：负责拆任务、派发、等待、复核 diff/receipt/evidence，并最终向用户汇报。
 - AGPair 提供低 token 的等待层：`task wait` / `task watch --json`，不要用反复提示 Codex 的方式轮询外部任务。

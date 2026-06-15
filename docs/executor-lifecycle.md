@@ -1,6 +1,6 @@
-# AGPair 3.0 External Executor Lifecycle
+# AGPair 1.0 External Executor Lifecycle
 
-AGPair 3.0 treats every external CLI executor as a registered module. Add, disable,
+AGPair 1.0 treats every external CLI executor as a registered module. Add, disable,
 deprecate, or remove executors through the shared profile contract, not through
 task-state-machine branches.
 

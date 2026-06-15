@@ -18,7 +18,7 @@ Use GoalBuddy to make the V2.8 AGPair plan the final改造 and彻底解决所有
 - Goal oracle: The V2.8 plan's acceptance criteria are implemented in code/docs/skills, verified by tests and smoke evidence, and a final Judge/PM audit records `full_outcome_complete: true`.
 - Likely misfire: Completing planning, wrappers, or partial docs while AGPair still has ambiguous `acked/silent`, lost stdout evidence, fragmented action vocabulary, or unreliable controller recovery.
 - Blind spots considered: scope creep, hidden fallback modes, public JSON compatibility, workflow/fanout action drift, real executor auth variance, privacy leakage, and over-strict task admission.
-- Existing plan facts: Preserve and execute `docs/superpowers/plans/2026-06-14-resilient-external-handoff-v2-8.md`; keep AGPair 3.0 `managed-natural + inherit`; keep executor ids `grok-cli`, `antigravity-cli`, `claude-code`, `codex`; keep Codex/Claude self-executor suppression; do not reintroduce Gemini, Antigravity IDE, hidden launch modes, capability bundles, or runtime pause/resume approval.
+- Existing plan facts: Preserve and execute `docs/superpowers/plans/2026-06-14-resilient-external-handoff-v2-8.md`; keep AGPair 1.0 `managed-natural + inherit`; keep executor ids `grok-cli`, `antigravity-cli`, `claude-code`, `codex`; keep Codex/Claude self-executor suppression; do not reintroduce Gemini, Antigravity IDE, hidden launch modes, capability bundles, or runtime pause/resume approval.
 
 ## Goal Oracle
 

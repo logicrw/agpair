@@ -1,6 +1,6 @@
-# Getting Started with AGPair 3.0
+# Getting Started with AGPair 1.0
 
-This guide gets AGPair 3.0 installed and dispatching external CLI agents from Codex or Claude Code.
+This guide gets AGPair 1.0 installed and dispatching external CLI agents from Codex or Claude Code.
 
 ## 1. Install
 

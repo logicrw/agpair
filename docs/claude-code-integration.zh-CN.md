@@ -1,6 +1,6 @@
 # Claude Code 集成
 
-AGPair 3.0 面向 Claude Code 的定位很简单：Claude Code 是主控和验收者，AGPair 是外部 CLI agent 的持久化控制面。
+AGPair 1.0 面向 Claude Code 的定位很简单：Claude Code 是主控和验收者，AGPair 是外部 CLI agent 的持久化控制面。
 
 ## 推荐安装
 

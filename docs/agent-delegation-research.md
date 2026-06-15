@@ -3,7 +3,7 @@
 > 文档状态：历史研究归档
 > 最后核实日期：2026-03-29
 > 适用对象：维护者、AI 执行器、AI reviewer、后续接手本项目的人
-> 核心目标：保留早期 agent delegation 调研证据。AGPair 3.0 的当前行为以 README、usage、executor lifecycle、workflow 文档和 skills 为准。
+> 核心目标：保留早期 agent delegation 调研证据。AGPair 1.0 的当前行为以 README、usage、executor lifecycle、workflow 文档和 skills 为准。
 
 ---
 
@@ -19,7 +19,7 @@
 4. 开始实施前，严格遵守 **第 6 节统一执行规则**
 5. 需要查外部背景时，只使用 **第 8 节已核实来源**
 
-如果这份文档与 AGPair 3.0 当前文档或仓库代码冲突：
+如果这份文档与 AGPair 1.0 当前文档或仓库代码冲突：
 
 - **代码行为优先**
 - 先更新本文档，再继续实施

@@ -1,17 +1,17 @@
-# AGPair 3.0
+# AGPair 1.0
 
 ![Python](https://img.shields.io/badge/python-≥3.12-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-3.0.0-blueviolet)
+![Version](https://img.shields.io/badge/version-1.0.0-blueviolet)
 
 [中文说明](README.zh-CN.md) | [Getting Started](docs/getting-started.en.md) | [Command Reference](docs/usage.md)
 
-AGPair 3.0 is a local task lifecycle and evidence layer that lets Codex or Claude Code delegate bounded work to external CLI agents, then wait, verify, adopt, retry, or fall back with structured evidence.
+AGPair 1.0 is a local task lifecycle and evidence layer that lets Codex or Claude Code delegate bounded work to external CLI agents, then wait, verify, adopt, retry, or fall back with structured evidence.
 
 Controllers plan and verify. AGPair dispatches external CLI executors, persists task state, waits cheaply, validates structured receipts, and supports state-aware retry when an executor blocks.
 
-## AGPair 3.0 Model
+## AGPair 1.0 Model
 
 - Default first external executor: `grok-cli`; multiple `grok-cli` tasks may run
   in parallel when their prompts, scopes, or acceptance criteria are distinct
@@ -213,7 +213,7 @@ Use the narrowest dispatch-time budget that can finish the work:
 - `local_test_heavy`: broad local builds/tests.
 - `external_network`: external network access required by the task.
 
-AGPair 3.0 does not pause a running executor for live approval. Out-of-scope work should return `blocked(approval_required)`, and the controller starts a new retry attempt.
+AGPair 1.0 does not pause a running executor for live approval. Out-of-scope work should return `blocked(approval_required)`, and the controller starts a new retry attempt.
 
 ## Review Gate
 
@@ -291,7 +291,7 @@ AGPair is not a semantic controller. The AI controller still owns planning, scop
 
 ## Compatibility
 
-The repository keeps legacy companion and bridge diagnostics for existing installations. Current task dispatch uses the registered CLI executors listed in the AGPair 3.0 model.
+The repository keeps legacy companion and bridge diagnostics for existing installations. Current task dispatch uses the registered CLI executors listed in the AGPair 1.0 model.
 
 ## License
 

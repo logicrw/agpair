@@ -1,4 +1,4 @@
-# AGPair 3.0 Workflows
+# AGPair 1.0 Workflows
 
 AGPair workflows are for high-value, multi-part local engineering orchestration. Use normal `agpair task start` for ordinary single-task delegation.
 
