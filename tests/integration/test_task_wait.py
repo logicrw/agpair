@@ -19,6 +19,7 @@ from agpair.cli.wait import (
     FAILURE_PHASES,
     TERMINAL_PHASES,
     WaitResult,
+    _adaptive_poll_interval_seconds,
     exit_code_for_approve,
     exit_code_for_dispatch,
     wait_for_terminal_phase,
@@ -64,11 +65,13 @@ class FakeClock:
 
     def __init__(self, start: float = 0.0):
         self._now = start
+        self.sleeps: list[float] = []
 
     def time(self) -> float:
         return self._now
 
     def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
         self._now += seconds
 
 
@@ -176,6 +179,75 @@ def test_wait_polls_until_phase_changes(tmp_path: Path):
     assert result.phase == "committed"
     assert result.timed_out is False
     assert poll_count == 2
+
+
+def test_wait_uses_fast_polling_during_initial_window(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-FAST-POLL", repo_path="/r")
+    repo.mark_acked(task_id="T-FAST-POLL", session_id="s-fast")
+
+    paths = _make_paths(tmp_path)
+    poll_count = 0
+
+    class TrackingClock(FakeClock):
+        def sleep(self, seconds: float) -> None:
+            nonlocal poll_count
+            poll_count += 1
+            super().sleep(seconds)
+            if poll_count == 3:
+                repo.mark_committed(task_id="T-FAST-POLL")
+
+    clock = TrackingClock()
+    result = wait_for_terminal_phase(
+        paths.db_path, "T-FAST-POLL", interval_seconds=5, timeout_seconds=60, _clock=clock,
+    )
+
+    assert result.phase == "committed"
+    assert clock.sleeps == [1.0, 1.0, 1.0]
+    assert clock.time() == 3.0
+
+
+def test_wait_does_not_oversleep_timeout_deadline(tmp_path: Path):
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-NO-OVERSLEEP", repo_path="/r")
+    repo.mark_acked(task_id="T-NO-OVERSLEEP", session_id="s-slow")
+
+    clock = FakeClock()
+    result = wait_for_terminal_phase(
+        _make_paths(tmp_path).db_path,
+        "T-NO-OVERSLEEP",
+        interval_seconds=5,
+        timeout_seconds=2.5,
+        _clock=clock,
+    )
+
+    assert result.timed_out is True
+    assert clock.sleeps == [1.0, 1.0, 0.5]
+    assert clock.time() == 2.5
+
+
+def test_adaptive_polling_respects_explicit_fast_interval() -> None:
+    assert _adaptive_poll_interval_seconds(
+        elapsed_seconds=0,
+        requested_interval_seconds=0.5,
+        remaining_seconds=60,
+    ) == 0.5
+
+
+def test_adaptive_polling_uses_requested_interval_after_fast_window() -> None:
+    assert _adaptive_poll_interval_seconds(
+        elapsed_seconds=90,
+        requested_interval_seconds=5,
+        remaining_seconds=60,
+    ) == 5
+
+
+def test_adaptive_polling_caps_sleep_to_remaining_deadline() -> None:
+    assert _adaptive_poll_interval_seconds(
+        elapsed_seconds=0,
+        requested_interval_seconds=5,
+        remaining_seconds=0.25,
+    ) == 0.25
 
 
 def test_wait_times_out(tmp_path: Path):
@@ -1285,16 +1357,14 @@ def test_task_watch_deduplicates_output(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = _make_repo(tmp_path)
     repo.create_task(task_id="T-WATCH-DEDUP", repo_path="/r")
+    repo.mark_acked(task_id="T-WATCH-DEDUP", session_id="s-del")
+    repo.record_heartbeat(task_id="T-WATCH-DEDUP")
 
     import threading
     import time
 
     def advance_state():
-        time.sleep(0.15)
-        # Heartbeat change
-        repo.mark_acked(task_id="T-WATCH-DEDUP", session_id="s-del")
-        repo.record_heartbeat(task_id="T-WATCH-DEDUP")
-        time.sleep(0.25)
+        time.sleep(0.4)
         repo.mark_committed(task_id="T-WATCH-DEDUP")
 
     threading.Thread(target=advance_state, daemon=True).start()
@@ -1306,9 +1376,8 @@ def test_task_watch_deduplicates_output(tmp_path: Path, monkeypatch):
         ])
     assert result.exit_code == 0
 
-    # We should see the transitions and no duplicate "phase: acked" outputs
     stdout = result.stdout
     assert "Watching task T-WATCH-DEDUP" in stdout
-    # Ensure it only prints "phase: acked" once, even though it loops multiple times while waiting for committed
     assert stdout.count("phase: acked") == 1
+    assert stdout.count("phase: committed") == 1
     assert stdout.count("Heartbeat:") == 1

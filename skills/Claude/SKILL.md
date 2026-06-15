@@ -13,13 +13,13 @@ Claude Code is the controller and verifier. AGPair is the durable external-agent
 
 Use AGPair before Claude Code native subagents for non-trivial implementation, refactor, test-fix, research, review, or multi-file work.
 
-Actively outsource low-value, repetitive, time-consuming, or easily verifiable work through AGPair: repo scans, alternative reviews, focused test-fix attempts, multi-file mechanical edits, smoke checks, and implementation slices with clear acceptance criteria. For ordinary non-trivial work, start with the strongest external lane, usually `grok-cli`; add more lanes when they reduce controller labor or create independent evidence. It is acceptable to run several `grok-cli` attempts at once for parallel review, competing implementation approaches, or file-sliced work, but each attempt needs a distinct task id and role.
+Actively outsource low-value, repetitive, time-consuming, or easily verifiable work through AGPair: repo scans, alternative reviews, focused test-fix attempts, multi-file mechanical edits, smoke checks, and implementation slices with clear acceptance criteria. For ordinary non-trivial work, start with a strong external lane: `grok-cli` and `antigravity-cli` are peer first choices. Use both when independent evidence, implementation contrast, or latency hedging is useful. It is acceptable to run several attempts from the same executor at once for parallel review, competing implementation approaches, or file-sliced work, but each attempt needs a distinct task id, role, prompt, or scope.
 
-Prefer executors in this order:
+Prefer these external lanes:
 
-1. `grok-cli` for the default fast external lane, review, research, and implementation attempts.
-2. `antigravity-cli` for strong implementation work or a second opinion when Grok is insufficient.
-3. `codex` when an AGPair-managed external Codex CLI worker is useful as a fallback executor.
+1. `grok-cli` and `antigravity-cli` as peer first choices for review, research, and implementation attempts.
+2. Additional `grok-cli` or `antigravity-cli` lanes when prompts, scopes, or acceptance criteria are distinct.
+3. `codex` when an AGPair-managed external Codex CLI worker is useful as a fallback or challenger executor.
 
 `codex` is the AGPair-managed external Codex CLI worker for Claude Code controllers. It is the cross-controller fallback lane, not a Claude Code native subagent.
 
@@ -67,8 +67,8 @@ Recommended shapes:
 
 | Work type | Default external shape | Claude Code controller lanes |
 | --- | --- | --- |
-| Non-trivial research/review/diagnosis/design | 1 strong external lane by default; 2-4 role-based lanes for high-risk or multi-angle work | `grok-cli` first; add a second `grok-cli`, `antigravity-cli`, or `codex` only with a distinct angle |
-| Non-trivial implementation/refactor/test-fix | 1 isolated implementation lane first; add a challenger or review/test lane when risk justifies it | `grok-cli` implementation lane first; `antigravity-cli` or `codex` as challenger/reviewer when useful |
+| Non-trivial research/review/diagnosis/design | 1-2 strong external lanes by default; 2-4 role-based lanes for high-risk or multi-angle work | `grok-cli` and `antigravity-cli` are peer first lanes; add another same-executor lane or `codex` only with a distinct angle |
+| Non-trivial implementation/refactor/test-fix | 1 isolated implementation lane first; add a challenger or review/test lane when risk justifies it | `grok-cli` or `antigravity-cli` implementation lane first; use the other as challenger/reviewer when useful; add `codex` for high-value escalation |
 | Tiny/sensitive/context-heavy work | 0-1 lane | State the skip reason if AGPair is skipped, then work directly or use a narrow helper |
 
 Give each external lane the same goal, explicit scope, and comparable exit
@@ -146,7 +146,8 @@ agpair workflow fanout \
   --topic "$TOPIC" \
   --scope "$ALLOWED_SCOPE" \
   --lane grok-cli:candidate-a \
-  --lane codex:candidate-b \
+  --lane antigravity-cli:candidate-b \
+  --lane codex:reviewer \
   --isolated-worktree \
   --repo-path "$REPO" \
   --dry-run --json

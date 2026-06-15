@@ -17,8 +17,8 @@ from agpair.workflows.schema import validate_manifest
 
 def _default_lanes(controller: str) -> list[str]:
     if controller == "claude-code":
-        return ["grok-cli:primary", "codex:challenger"]
-    return ["grok-cli:primary", "claude-code:challenger"]
+        return ["antigravity-cli:antigravity", "grok-cli:grok", "codex:codex"]
+    return ["antigravity-cli:antigravity", "grok-cli:grok", "claude-code:claude-code"]
 
 
 def _node_kinds(manifest: dict[str, Any]) -> list[str]:

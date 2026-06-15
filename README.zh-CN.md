@@ -13,9 +13,8 @@ AGPair 1.0 是一个本地任务生命周期和证据层，让 Codex 或 Claude 
 
 ## AGPair 1.0 模型
 
-- 默认第一外部 executor：`grok-cli`；当 prompt、scope 或验收标准不同，
-  可以并行启动多个 `grok-cli` task
-- 强实现 / 第二意见 executor：`antigravity-cli`
+- 常用起手外部 executor：`grok-cli` 与 `antigravity-cli`；当 prompt、
+  scope 或验收标准不同，可以并行启动多个外部 lane
 - 质量升级：`claude-code`
 - 外部 Codex CLI worker fallback：`codex`
 - Codex / Claude Code 原生 subagent：在能明显提升验证或恢复质量时作为
@@ -28,8 +27,8 @@ AGPair 1.0 是一个本地任务生命周期和证据层，让 Codex 或 Claude 
 历史 executor 记录仍可为兼容性读取。新任务只使用上面的 active executor id。
 
 非平凡任务不应习惯性只派一个默认 lane。主控应优先使用有价值的并行度：
-一个或多个 `grok-cli` lane 起手；当 `antigravity-cli` 或 `claude-code`
-能提升置信度时加入；原生 subagent 可作为窄范围 reviewer/helper 补充主控
+`grok-cli` 与 `antigravity-cli` 可作为平级外部起手 lane；当第二个
+`grok-cli` 或 `claude-code` 能提升置信度时加入；原生 subagent 可作为窄范围 reviewer/helper 补充主控
 验证。并行写代码必须使用 isolated worktree 或互不重叠的 scope。
 
 所有 active 外部 CLI executor 默认都使用 `managed-natural`。AGPair 负责任务边界、
@@ -130,7 +129,7 @@ agpair task start \
   --body "Goal: 做一个有边界的修改。Scope: 写清允许文件。Required changes: 写清要改什么。Exit criteria: 跑聚焦验证。"
 ```
 
-`--wait-policy lease` 会让主控在有界窗口里低噪等待。如果 executor 仍在运行，AGPair 会返回结构化的 background-running 结果，而不是让主控浪费模型轮次轮询，或过早杀掉任务。
+`--wait-policy lease` 会让主控在有界窗口里低噪等待。等待使用自适应轮询：初始完成窗口内更快检查，长任务自动退回到 `--interval-seconds` 指定的最大间隔。如果 executor 仍在运行，AGPair 会返回结构化的 background-running 结果，而不是让主控浪费模型轮次轮询，或过早杀掉任务。
 
 isolated 代码改动需要显式 review 和采纳：
 

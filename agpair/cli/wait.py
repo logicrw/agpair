@@ -54,6 +54,8 @@ FAILURE_PHASES: frozenset[str] = frozenset({"blocked", "stuck", "abandoned"})
 DEFAULT_INTERVAL_SECONDS: float = 5.0
 DEFAULT_TIMEOUT_SECONDS: float = 3600.0  # 60 min — intentionally > daemon stuck timeout (1800s)
 DEFAULT_HEARTBEAT_SILENCE_SECONDS: float = 300.0  # 5 min — if no heartbeat for this long, treat as silent
+FAST_POLL_INTERVAL_SECONDS: float = 1.0
+FAST_POLL_WINDOW_SECONDS: float = 90.0
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +133,23 @@ def is_watchdog_triggered(
         if (now_dt - dt).total_seconds() < effective_silence_seconds:
             return False
     return True
+
+
+def _adaptive_poll_interval_seconds(
+    *,
+    elapsed_seconds: float,
+    requested_interval_seconds: float,
+    remaining_seconds: float,
+) -> float:
+    if requested_interval_seconds <= 0:
+        raise ValueError("interval_seconds must be > 0")
+    if remaining_seconds <= 0:
+        return 0.0
+    if requested_interval_seconds <= FAST_POLL_INTERVAL_SECONDS:
+        return min(requested_interval_seconds, remaining_seconds)
+    if elapsed_seconds < FAST_POLL_WINDOW_SECONDS:
+        return min(FAST_POLL_INTERVAL_SECONDS, remaining_seconds)
+    return min(requested_interval_seconds, remaining_seconds)
 
 
 def _try_inline_poll(
@@ -250,6 +269,8 @@ def wait_for_terminal_phase(
 
     clock = _clock or time
     utcnow_fn = _utcnow or (lambda: datetime.now(UTC))
+    if interval_seconds <= 0:
+        raise ValueError("interval_seconds must be > 0")
     tasks = TaskRepository(db_path)
     waiters = WaiterRepository(db_path)
     journal = JournalRepository(db_path)
@@ -362,7 +383,18 @@ def wait_for_terminal_phase(
             if waiter:
                 waiters.update_poll(waiter.waiter_id)
 
-            clock.sleep(interval_seconds)  # type: ignore[union-attr]
+            now = clock.time()  # type: ignore[union-attr]
+            next_deadline = deadline
+            if lease_deadline is not None:
+                next_deadline = min(next_deadline, lease_deadline)
+            sleep_seconds = _adaptive_poll_interval_seconds(
+                elapsed_seconds=now - started_at,
+                requested_interval_seconds=interval_seconds,
+                remaining_seconds=max(0.0, next_deadline - now),
+            )
+            if sleep_seconds <= 0:
+                continue
+            clock.sleep(sleep_seconds)  # type: ignore[union-attr]
     except BaseException:
         # On any unhandled exception, finalize to avoid orphan waiters
         if waiter:

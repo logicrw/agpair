@@ -347,7 +347,7 @@ AGPair 会返回结构化的 background-running 结果，而不是让主控浪�
 | `--execution-budget-seconds` | 由 task-kind 决定 | daemon 标记 stuck 前的硬执行预算 |
 | `--background-ok / --no-background-ok` | 由 task-kind 决定 | lease 到期时是否允许 executor 继续在后台跑 |
 | `--wait / --no-wait` | `--wait` | 发单后等待，或立即返回 |
-| `--interval-seconds` | `5` | 本地轮询间隔 |
+| `--interval-seconds` | `5` | 本地轮询最大间隔；等待初始完成窗口内会自动更快轮询 |
 | `--timeout-seconds` | `3600` | terminal/strict wait 的本地最长等待时间 |
 
 `implementation` 和 `test_fix` 任务会把 `--completion-policy auto` 默认解析为

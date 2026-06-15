@@ -1202,7 +1202,7 @@ _WAIT_OPTION = typer.Option(
     "--wait/--no-wait",
     help="Wait for a terminal phase after dispatch (default: on). Tune with --interval-seconds and --timeout-seconds.",
 )
-_INTERVAL_OPTION = typer.Option(DEFAULT_INTERVAL_SECONDS, "--interval-seconds", help="Seconds between status polls during wait.")
+_INTERVAL_OPTION = typer.Option(DEFAULT_INTERVAL_SECONDS, "--interval-seconds", help="Requested max seconds between status polls; waits poll faster during the initial completion window.")
 _TIMEOUT_OPTION = typer.Option(DEFAULT_TIMEOUT_SECONDS, "--timeout-seconds", help="Maximum seconds to wait before timing out.")
 _JSON_OPTION = typer.Option(False, "--json", help="Emit machine-readable JSON.")
 

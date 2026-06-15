@@ -329,7 +329,7 @@ All dispatching commands (`start`, `retry`) accept:
 | `--execution-budget-seconds` | task-kind default | hard execution budget before daemon marks the task stuck |
 | `--background-ok / --no-background-ok` | task-kind default | whether lease expiry can detach while the executor continues |
 | `--wait / --no-wait` | `--wait` | wait after dispatch or return immediately |
-| `--interval-seconds` | `5` | local polling interval in seconds |
+| `--interval-seconds` | `5` | requested max local polling interval; waits poll faster during the initial completion window |
 | `--timeout-seconds` | `3600` | maximum local wait duration for terminal/strict waits |
 
 For implementation and test-fix tasks, AGPair defaults `--completion-policy auto`

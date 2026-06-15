@@ -9,7 +9,7 @@ IRON LAW: Non-trivial work requires an explicit routing budget. Use external AGP
 
 Default: external AGPair executor first for non-trivial work. Codex remains the controller and verifier.
 
-Actively outsource low-value, repetitive, time-consuming, or easily verifiable work through AGPair: repo scans, alternative reviews, focused test-fix attempts, multi-file mechanical edits, smoke checks, and implementation slices with clear acceptance criteria. For ordinary non-trivial work, start with the strongest external lane, usually `grok-cli`; add more lanes when they reduce controller labor or create independent evidence. It is acceptable to run several `grok-cli` attempts at once for parallel review, competing implementation approaches, or file-sliced work, but each attempt needs a distinct task id and role.
+Actively outsource low-value, repetitive, time-consuming, or easily verifiable work through AGPair: repo scans, alternative reviews, focused test-fix attempts, multi-file mechanical edits, smoke checks, and implementation slices with clear acceptance criteria. For ordinary non-trivial work, start with a strong external lane: `grok-cli` and `antigravity-cli` are peer first choices. Use both when independent evidence, implementation contrast, or latency hedging is useful. It is acceptable to run several attempts from the same executor at once for parallel review, competing implementation approaches, or file-sliced work, but each attempt needs a distinct task id, role, prompt, or scope.
 
 Use direct Codex edits for tiny local fixes, sensitive judgment-heavy work, or when AGPair is unavailable. If skipping external AGPair entirely for non-trivial work, state the skip reason before proceeding. Use Codex native subagents as narrow controller-side reviewers/helpers when they add clear value, and as fallback when external executors are unavailable, unsuitable, or not good enough.
 
@@ -95,8 +95,8 @@ Recommended shapes:
 
 | Work type | Default external shape | Codex controller lanes |
 | --- | --- | --- |
-| Non-trivial research/review/diagnosis/design | 1 strong external lane by default; 2-4 role-based lanes for high-risk or multi-angle work | `grok-cli` first; add a second `grok-cli`, `antigravity-cli`, or `claude-code` only with a distinct angle |
-| Non-trivial implementation/refactor/test-fix | 1 isolated implementation lane first; add a challenger or review/test lane when risk justifies it | `grok-cli` implementation lane first; `antigravity-cli` or `claude-code` as challenger/reviewer when useful |
+| Non-trivial research/review/diagnosis/design | 1-2 strong external lanes by default; 2-4 role-based lanes for high-risk or multi-angle work | `grok-cli` and `antigravity-cli` are peer first lanes; add another `grok-cli` or `claude-code` only with a distinct angle |
+| Non-trivial implementation/refactor/test-fix | 1 isolated implementation lane first; add a challenger or review/test lane when risk justifies it | `grok-cli` or `antigravity-cli` implementation lane first; use the other as challenger/reviewer when useful; add `claude-code` for high-value escalation |
 | Tiny/sensitive/context-heavy work | 0-1 lane | State the skip reason if AGPair is skipped, then work directly or use a narrow helper |
 
 Give each external lane the same goal, explicit scope, and comparable exit
@@ -174,7 +174,8 @@ agpair workflow fanout \
   --topic "$TOPIC" \
   --scope "$ALLOWED_SCOPE" \
   --lane grok-cli:candidate-a \
-  --lane claude-code:candidate-b \
+  --lane antigravity-cli:candidate-b \
+  --lane claude-code:reviewer \
   --isolated-worktree \
   --repo-path "$REPO" \
   --dry-run --json
@@ -189,9 +190,10 @@ fall back to a native helper.
 
 For non-trivial implementation, refactor, or test-fix work, dispatch one bounded
 isolated implementation slice first unless AGPair is unavailable, unsafe, or
-already low quality for this task. Add a second external implementation or
-review/test lane only when risk, uncertainty, or verification value justifies
-the extra coordination:
+already low quality for this task. Choose `grok-cli` or `antigravity-cli` based
+on fit and current health; use both when contrast or latency hedging is worth
+the extra coordination. Add a second external implementation or review/test lane
+only when risk, uncertainty, or verification value justifies it:
 
 ```bash
 agpair task start \

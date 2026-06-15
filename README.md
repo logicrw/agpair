@@ -13,9 +13,8 @@ Controllers plan and verify. AGPair dispatches external CLI executors, persists 
 
 ## AGPair 1.0 Model
 
-- Default first external executor: `grok-cli`; multiple `grok-cli` tasks may run
-  in parallel when their prompts, scopes, or acceptance criteria are distinct
-- Strong implementation / second-opinion executor: `antigravity-cli`
+- Common first external executors: `grok-cli` and `antigravity-cli`; multiple
+  external lanes may run when their prompts, scopes, or acceptance criteria are distinct
 - Quality escalation: `claude-code`
 - Fallback external Codex CLI worker: `codex`
 - Native Codex / Claude Code subagents: review/helper/fallback lanes when they
@@ -28,8 +27,8 @@ Operationally, `codex` is the external Codex CLI worker for Claude Code controll
 Historical executor records remain inspectable for compatibility. New dispatch uses the active executor ids above.
 
 For non-trivial work, the controller should prefer useful breadth over a single
-default lane: run one or more `grok-cli` lanes, add `antigravity-cli` or
-`claude-code` when their output can improve confidence, and use native
+default lane: use `grok-cli` and `antigravity-cli` as peer first lanes, add a
+second `grok-cli` or `claude-code` when their output can improve confidence, and use native
 subagents as narrow reviewers/helpers when they add controller-side value.
 Mutating parallel lanes must use isolated worktrees or disjoint scopes.
 
@@ -128,7 +127,7 @@ agpair task start \
   --body "Goal: make the bounded change. Scope: name allowed files. Required changes: describe edits. Exit criteria: focused validation."
 ```
 
-`--wait-policy lease` lets the controller wait cheaply for a bounded window. If the executor is still running, AGPair returns a structured background-running result instead of forcing the controller to burn model turns polling or killing the task early.
+`--wait-policy lease` lets the controller wait cheaply for a bounded window. Waits use adaptive polling: the initial completion window is checked faster, and long tasks fall back to the requested `--interval-seconds` maximum. If the executor is still running, AGPair returns a structured background-running result instead of forcing the controller to burn model turns polling or killing the task early.
 
 Review and adopt isolated code changes explicitly:
 
