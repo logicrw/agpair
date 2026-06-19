@@ -171,6 +171,13 @@ agpair claude config
 agpair claude config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
+Hermes：
+
+```bash
+agpair hermes config
+agpair hermes config --install --scope user --sync-skill
+```
+
 要让 Codex 调用外部 `claude-code` worker，AGPair 默认使用 Claude auth
 mode `auto`：先尝试有效的本机 Claude Code OAuth / 订阅登录；如果没有登录或
 live probe 失败，就复用 CC Switch 当前选中的 Anthropic-compatible Claude
@@ -246,17 +253,21 @@ export AGPAIR_HOME=/path/to/agpair-state
 
 - `skills/Codex/SKILL.md`
 - `skills/Claude/SKILL.md`
+- `skills/Hermes/SKILL.md`
 - `agpair/cli/codex.py`
 - `agpair/cli/claude.py`
+- `agpair/cli/hermes.py`
 
 本机安装副本：
 
 - `~/.codex/skills/agpair-codex/SKILL.md`
 - `~/.claude/skills/agpair/SKILL.md`
+- `~/.hermes/skills/autonomous-ai-agents/agpair/SKILL.md`
 - Codex hook config
 - `~/.claude/settings.json`
+- `~/.hermes/config.yaml`
 
-`.claude/settings.json` 或 Codex 项目 hook 只有在已经清理并明确要共享时才应提交。
+`.claude/settings.json` 或 Codex 项目 hook 只有在已经清理并明确要共享时才应提交。用户级 Hermes 配置应留在本机。
 
 ## 架构
 

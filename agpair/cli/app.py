@@ -6,6 +6,7 @@ from agpair.cli.claude import app as claude_app
 from agpair.cli.codex import app as codex_app
 from agpair.cli.daemon import app as daemon_app
 from agpair.cli.doctor import emit_doctor_json
+from agpair.cli.hermes import app as hermes_app
 from agpair.cli.task import app as task_app
 from agpair.cli.workflow import app as workflow_app
 from agpair.cli.policy import app as policy_app
@@ -16,6 +17,7 @@ app = typer.Typer(no_args_is_help=True)
 
 app.add_typer(claude_app, name="claude")
 app.add_typer(codex_app, name="codex")
+app.add_typer(hermes_app, name="hermes")
 app.add_typer(task_app, name="task")
 app.add_typer(policy_app, name="policy")
 app.add_typer(workflow_app, name="workflow")

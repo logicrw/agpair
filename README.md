@@ -170,6 +170,13 @@ agpair claude config
 agpair claude config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
+Hermes:
+
+```bash
+agpair hermes config
+agpair hermes config --install --scope user --sync-skill
+```
+
 To let Codex use the external `claude-code` worker, AGPair uses Claude auth
 mode `auto` by default. It first tries a valid local Claude Code
 OAuth/subscription login; if that is absent or the live probe fails, it reuses
@@ -248,17 +255,21 @@ Repository source files:
 
 - `skills/Codex/SKILL.md`
 - `skills/Claude/SKILL.md`
+- `skills/Hermes/SKILL.md`
 - `agpair/cli/codex.py`
 - `agpair/cli/claude.py`
+- `agpair/cli/hermes.py`
 
 Local installed copies:
 
 - `~/.codex/skills/agpair-codex/SKILL.md`
 - `~/.claude/skills/agpair/SKILL.md`
+- `~/.hermes/skills/autonomous-ai-agents/agpair/SKILL.md`
 - Codex hook config
 - `~/.claude/settings.json`
+- `~/.hermes/config.yaml`
 
-Project config such as `.claude/settings.json` or Codex project hooks should be committed only when sanitized and intentionally shared.
+Project config such as `.claude/settings.json` or Codex project hooks should be committed only when sanitized and intentionally shared. User-level Hermes config should stay local.
 
 ## Architecture
 
