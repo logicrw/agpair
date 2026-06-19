@@ -305,6 +305,151 @@ def test_codex_stop_does_not_block_approved_ready_for_review(tmp_path: Path, mon
     assert result.stdout.strip() == ""
 
 
+def test_codex_stop_allows_readonly_report_only_without_effective_changes(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    init_git_repo(repo_path)
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    tasks = TaskRepository(paths.db_path)
+    tasks.create_task(
+        task_id="TASK-CODEX-REPORT",
+        repo_path=str(repo_path),
+        executor_backend="grok-cli",
+        authorization_profile="local_readonly",
+        completion_policy="report",
+    )
+    tasks.mark_acked(task_id="TASK-CODEX-REPORT", session_id="session-report")
+    tasks.mark_ready_for_review(
+        task_id="TASK-CODEX-REPORT",
+        terminal_source="daemon",
+        terminal_receipt_json=json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "TASK-CODEX-REPORT",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "EVIDENCE_PACK",
+                "summary": "Read-only report ready",
+                "payload": {
+                    "raw_log_path": "/tmp/stdout-report.log",
+                    "receipt_path": "/tmp/receipt-report.json",
+                    "report_path": "/tmp/report.md",
+                    "scope_validation": {
+                        "effective_changed_files": [],
+                        "scope_violations": [],
+                    },
+                },
+            }
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["codex", "hook", "stop"], input=hook_input(repo_path))
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == ""
+
+
+def test_codex_stop_allows_auto_readonly_effective_report_without_effective_changes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    init_git_repo(repo_path)
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    tasks = TaskRepository(paths.db_path)
+    tasks.create_task(
+        task_id="TASK-CODEX-AUTO-REPORT",
+        repo_path=str(repo_path),
+        executor_backend="grok-cli",
+        authorization_profile="local_readonly",
+        completion_policy="auto",
+    )
+    tasks.mark_acked(task_id="TASK-CODEX-AUTO-REPORT", session_id="session-auto-report")
+    tasks.mark_ready_for_review(
+        task_id="TASK-CODEX-AUTO-REPORT",
+        terminal_source="daemon",
+        terminal_receipt_json=json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "TASK-CODEX-AUTO-REPORT",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "EVIDENCE_PACK",
+                "summary": "Read-only report ready",
+                "payload": {
+                    "raw_log_path": "/tmp/stdout-auto-report.log",
+                    "receipt_path": "/tmp/receipt-auto-report.json",
+                    "report_path": "/tmp/report.md",
+                    "effective_task_policy": {
+                        "authorization_profile": "local_readonly",
+                        "effective_completion_policy": "report",
+                        "report_only": True,
+                    },
+                    "scope_validation": {
+                        "effective_changed_files": [],
+                        "ok": True,
+                    },
+                },
+            }
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["codex", "hook", "stop"], input=hook_input(repo_path))
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == ""
+
+
+def test_codex_stop_blocks_readonly_report_only_with_effective_changes(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    init_git_repo(repo_path)
+    paths = make_paths(tmp_path)
+    ensure_database(paths.db_path)
+    tasks = TaskRepository(paths.db_path)
+    tasks.create_task(
+        task_id="TASK-CODEX-REPORT-CHANGED",
+        repo_path=str(repo_path),
+        executor_backend="grok-cli",
+        authorization_profile="local_readonly",
+        completion_policy="report",
+    )
+    tasks.mark_acked(task_id="TASK-CODEX-REPORT-CHANGED", session_id="session-report-changed")
+    tasks.mark_ready_for_review(
+        task_id="TASK-CODEX-REPORT-CHANGED",
+        terminal_source="daemon",
+        terminal_receipt_json=json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "TASK-CODEX-REPORT-CHANGED",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "EVIDENCE_PACK",
+                "summary": "Read-only report changed files",
+                "payload": {
+                    "raw_log_path": "/tmp/stdout-report-changed.log",
+                    "receipt_path": "/tmp/receipt-report-changed.json",
+                    "report_path": "/tmp/report.md",
+                    "scope_validation": {
+                        "effective_changed_files": ["agpair/cli/codex.py"],
+                        "ok": True,
+                    },
+                },
+            }
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["codex", "hook", "stop"], input=hook_input(repo_path))
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "block"
+    assert "TASK-CODEX-REPORT-CHANGED" in payload["reason"]
+
+
 def test_codex_stop_reports_unapproved_task_after_approved_task(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"
@@ -393,7 +538,19 @@ def test_codex_stop_blocks_for_approval_required(tmp_path: Path, monkeypatch) ->
                 "review_round": 0,
                 "status": "BLOCKED",
                 "summary": "Need expanded authorization",
-                "payload": {"blocker_type": "approval_required", "recoverable": True},
+                "payload": {
+                    "blocker_type": "approval_required",
+                    "recoverable": True,
+                    "effective_task_policy": {
+                        "authorization_profile": "local_readonly",
+                        "effective_completion_policy": "report",
+                        "report_only": True,
+                    },
+                    "scope_validation": {
+                        "effective_changed_files": [],
+                        "ok": True,
+                    },
+                },
             }
         ),
     )

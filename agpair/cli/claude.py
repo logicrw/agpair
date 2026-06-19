@@ -10,12 +10,14 @@ from typing import Any
 import typer
 
 from agpair.config import AppPaths
+from agpair.cli.hook_lifecycle import (
+    is_readonly_report_only_without_effective_changes,
+    terminal_receipt_for_task,
+)
 from agpair.internal_context import client_hooks_suppressed
 from agpair.storage.db import ensure_database
-from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
 from agpair.targets import resolve_repo_path
-from agpair.terminal_receipts import parse_structured_terminal_receipt
 from agpair.cli.skill_sync import bundled_skill_path, plan_skill_sync
 
 app = typer.Typer(no_args_is_help=True)
@@ -325,17 +327,6 @@ def _hook_specific_output(event_name: str, context: str) -> dict[str, Any]:
     }
 
 
-def _latest_terminal_receipt(paths: AppPaths, task_id: str):
-    journal = JournalRepository(paths.db_path)
-    for row in journal.tail(task_id, limit=20):
-        if row.event not in {"ready_for_review", "committed", "blocked", "evidence_ready"}:
-            continue
-        receipt = parse_structured_terminal_receipt(row.body, expected_task_id=task_id)
-        if receipt is not None:
-            return receipt
-    return None
-
-
 @app.command("statusline")
 def statusline() -> None:
     """Read Claude Code statusline JSON on stdin and print a compact AGPair summary."""
@@ -525,8 +516,10 @@ def hook_stop() -> None:
     if task is None:
         return
 
-    receipt = _latest_terminal_receipt(paths, task.task_id)
+    receipt = terminal_receipt_for_task(paths, task)
     if task.is_approved:
+        return
+    if is_readonly_report_only_without_effective_changes(task, receipt):
         return
     if task.phase in {"ready_for_review", "committed", "evidence_ready"}:
         reason = (

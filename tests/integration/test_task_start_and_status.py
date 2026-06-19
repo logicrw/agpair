@@ -2143,6 +2143,10 @@ def test_task_start_accepts_common_aliases_for_first_attempts(tmp_path: Path, mo
             "readonly",
             "--completion-policy",
             "report",
+            "--controller-wait-lease",
+            "7",
+            "--execution-budget",
+            "60",
             "--prompt",
             "Read-only review. Do not edit files. Inspect current configuration and report risks.",
             "--no-wait",
@@ -2151,8 +2155,11 @@ def test_task_start_accepts_common_aliases_for_first_attempts(tmp_path: Path, mo
 
     assert result.exit_code == 0
     task = make_task_repo(tmp_path).get_task(result.stdout.strip().splitlines()[-1])
+    assert task is not None
     assert task.authorization_profile == "local_readonly"
     assert task.completion_policy == "report"
+    assert task.controller_wait_seconds == 7
+    assert task.execution_budget_seconds == 60
 
 
 def test_task_start_rejects_placeholder(tmp_path: Path, monkeypatch) -> None:

@@ -505,6 +505,103 @@ def test_claude_stop_hook_does_not_block_approved_ready_for_review(tmp_path: Pat
     assert result.stdout.strip() == ""
 
 
+def test_claude_stop_hook_allows_readonly_report_only_without_effective_changes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    init_git_repo(repo_path)
+
+    tasks = make_task_repo(tmp_path)
+    tasks.create_task(
+        task_id="TASK-CLAUDE-REPORT",
+        repo_path=str(repo_path),
+        authorization_profile="local_readonly",
+        completion_policy="auto",
+    )
+    tasks.mark_acked(task_id="TASK-CLAUDE-REPORT", session_id="session-report")
+    tasks.mark_ready_for_review(
+        task_id="TASK-CLAUDE-REPORT",
+        terminal_source="executor",
+        terminal_receipt_json=terminal_receipt(
+            "TASK-CLAUDE-REPORT",
+            status="EVIDENCE_PACK",
+            payload={
+                "report_path": "/tmp/report.md",
+                "raw_log_path": "/tmp/raw.log",
+                "receipt_path": "/tmp/receipt.json",
+                "effective_task_policy": {
+                    "authorization_profile": "local_readonly",
+                    "effective_completion_policy": "report",
+                    "report_only": True,
+                },
+                "scope_validation": {
+                    "effective_changed_files": [],
+                    "ok": True,
+                },
+            },
+        ),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["claude", "hook", "stop"],
+        input=hook_input(repo_path, event="Stop"),
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == ""
+
+
+def test_claude_stop_hook_blocks_readonly_report_only_with_effective_changes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    init_git_repo(repo_path)
+
+    tasks = make_task_repo(tmp_path)
+    tasks.create_task(
+        task_id="TASK-CLAUDE-REPORT-CHANGED",
+        repo_path=str(repo_path),
+        authorization_profile="local_readonly",
+        completion_policy="report",
+    )
+    tasks.mark_acked(task_id="TASK-CLAUDE-REPORT-CHANGED", session_id="session-report-changed")
+    tasks.mark_ready_for_review(
+        task_id="TASK-CLAUDE-REPORT-CHANGED",
+        terminal_source="executor",
+        terminal_receipt_json=terminal_receipt(
+            "TASK-CLAUDE-REPORT-CHANGED",
+            status="EVIDENCE_PACK",
+            payload={
+                "report_path": "/tmp/report.md",
+                "raw_log_path": "/tmp/raw.log",
+                "receipt_path": "/tmp/receipt.json",
+                "scope_validation": {
+                    "effective_changed_files": ["agpair/cli/claude.py"],
+                    "ok": True,
+                },
+            },
+        ),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["claude", "hook", "stop"],
+        input=hook_input(repo_path, event="Stop"),
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "block"
+    assert "TASK-CLAUDE-REPORT-CHANGED" in payload["reason"]
+
+
 def test_claude_stop_hook_blocks_approval_required_blocker(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"
@@ -522,7 +619,19 @@ def test_claude_stop_hook_blocks_approval_required_blocker(tmp_path: Path, monke
         terminal_receipt(
             "TASK-CLAUDE-APPROVAL",
             status="BLOCKED",
-            payload={"blocker_type": "approval_required", "raw_log_path": "/tmp/raw.log"},
+            payload={
+                "blocker_type": "approval_required",
+                "raw_log_path": "/tmp/raw.log",
+                "effective_task_policy": {
+                    "authorization_profile": "local_readonly",
+                    "effective_completion_policy": "report",
+                    "report_only": True,
+                },
+                "scope_validation": {
+                    "effective_changed_files": [],
+                    "ok": True,
+                },
+            },
             summary="needs local_mutating authorization",
         ),
     )
