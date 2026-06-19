@@ -16,7 +16,6 @@ import typer
 from agpair.config import AppPaths
 from agpair.internal_context import client_hooks_suppressed
 from agpair.storage.db import ensure_database
-from agpair.targets import resolve_repo_path
 from agpair.cli.skill_sync import bundled_skill_path, plan_skill_sync
 
 app = typer.Typer(no_args_is_help=True)
@@ -25,8 +24,9 @@ app.add_typer(hook_app, name="hook")
 
 HERMES_PRE_LLM_HOOK_COMMAND_FALLBACK = "agpair hermes hook pre-llm-call"
 HERMES_PRE_LLM_HOOK_COMMAND_PATTERN = re.compile(
-    r"""^\s*-\s+command:\s*["']?.*?\bagpair\s+hermes\s+hook\s+pre-llm-call["']?\s*$"""
+    r"""^\s*(?:-\s+)?command:\s*["']?.*?\bagpair["']?\s+hermes\s+hook\s+pre-llm-call["']?\s*$"""
 )
+HERMES_MANAGED_MARKER_PATTERN = re.compile(r"^\s*agpair_managed:\s*true\s*(?:#.*)?$")
 
 EXTERNAL_FIRST_CONTEXT = (
     "AGPair external-first routing is available in this repository. For non-trivial "
@@ -73,12 +73,24 @@ def _resolve_repo_from_hook(payload: dict[str, Any]) -> Path | None:
     cwd = payload.get("cwd")
     if isinstance(cwd, str) and cwd.strip():
         candidates.append(Path(cwd).expanduser())
+    workspace = payload.get("workspace")
+    if isinstance(workspace, dict):
+        for key in ("current_dir", "project_dir"):
+            value = workspace.get(key)
+            if isinstance(value, str) and value.strip():
+                candidates.append(Path(value).expanduser())
     extra = payload.get("extra")
     if isinstance(extra, dict):
         for key in ("cwd", "project_dir", "current_dir"):
             value = extra.get(key)
             if isinstance(value, str) and value.strip():
                 candidates.append(Path(value).expanduser())
+        nested_workspace = extra.get("workspace")
+        if isinstance(nested_workspace, dict):
+            for key in ("current_dir", "project_dir"):
+                value = nested_workspace.get(key)
+                if isinstance(value, str) and value.strip():
+                    candidates.append(Path(value).expanduser())
     for candidate in candidates:
         try:
             if not candidate.exists():
@@ -117,6 +129,7 @@ def _managed_config_payload() -> dict[str, Any]:
                 {
                     "command": _managed_hook_command(),
                     "timeout": 10,
+                    "agpair_managed": True,
                 }
             ]
         }
@@ -131,6 +144,12 @@ def _managed_hook_command() -> str:
     if executable:
         return f"{shlex.quote(executable)} hermes hook pre-llm-call"
     return HERMES_PRE_LLM_HOOK_COMMAND_FALLBACK
+
+
+def _yaml_double_quote(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    escaped = escaped.replace("\n", "\\n").replace("\r", "\\r")
+    return f'"{escaped}"'
 
 
 def _render_settings_text(payload: str) -> str:
@@ -169,10 +188,15 @@ def _top_level_block(lines: list[str], key: str) -> tuple[int, int] | None:
     return start, end
 
 
+def _without_yaml_comment(line: str) -> str:
+    return line.split("#", 1)[0].strip()
+
+
 def _managed_hook_lines() -> list[str]:
     return [
-        f'    - command: "{_managed_hook_command()}"',
+        f"    - command: {_yaml_double_quote(_managed_hook_command())}",
         "      timeout: 10",
+        "      agpair_managed: true",
     ]
 
 
@@ -211,7 +235,7 @@ def _merge_managed_config(current: str) -> str:
         return "\n".join(lines) + "\n"
 
     start, end = block
-    hooks_header = lines[start].strip()
+    hooks_header = _without_yaml_comment(lines[start])
     if hooks_header in {"hooks: {}", "hooks: null", "hooks:"}:
         if hooks_header != "hooks:":
             lines[start : start + 1] = _managed_hooks_block()
@@ -226,10 +250,14 @@ def _merge_managed_config(current: str) -> str:
         lines[end:end] = ["  pre_llm_call:", *_managed_hook_lines()]
         return "\n".join(lines) + "\n"
 
-    event_line = lines[event_start].strip()
+    event_line = _without_yaml_comment(lines[event_start])
     if event_line in {"pre_llm_call: []", "pre_llm_call: null"}:
         lines[event_start : event_start + 1] = ["  pre_llm_call:", *_managed_hook_lines()]
         return "\n".join(lines) + "\n"
+    if event_line != "pre_llm_call:":
+        raise RuntimeError(
+            "Existing Hermes hooks.pre_llm_call uses inline YAML; edit manually or expand it to block style before installing AGPair."
+        )
 
     insert_at = _event_block_end(lines, event_start, end)
     lines[insert_at:insert_at] = _managed_hook_lines()
@@ -238,24 +266,62 @@ def _merge_managed_config(current: str) -> str:
 
 def _remove_managed_config(current: str) -> str:
     text = _render_settings_text(current) if current else ""
-    if "agpair hermes hook pre-llm-call" not in text:
-        return text
     lines = text.splitlines()
-    i = 0
-    while i < len(lines):
-        if not HERMES_PRE_LLM_HOOK_COMMAND_PATTERN.match(lines[i]):
+    block = _top_level_block(lines, "hooks")
+    if block is None:
+        return text
+    start, end = block
+    event_start = _event_line_index(lines, start, end, "pre_llm_call")
+    if event_start is None:
+        return _prune_empty_hooks(lines)
+    event_end = _event_block_end(lines, event_start, end)
+    i = event_start + 1
+    while i < event_end:
+        if not re.match(r"^\s*-\s+", lines[i]):
             i += 1
             continue
         item_indent = len(lines[i]) - len(lines[i].lstrip())
-        end = i + 1
-        while end < len(lines):
-            stripped = lines[end].strip()
-            next_indent = len(lines[end]) - len(lines[end].lstrip())
+        item_end = i + 1
+        while item_end < event_end:
+            stripped = lines[item_end].strip()
+            next_indent = len(lines[item_end]) - len(lines[item_end].lstrip())
             if stripped and next_indent <= item_indent:
                 break
-            end += 1
-        del lines[i:end]
-        continue
+            item_end += 1
+        item_lines = lines[i:item_end]
+        if any(HERMES_PRE_LLM_HOOK_COMMAND_PATTERN.match(line) for line in item_lines) or any(
+            HERMES_MANAGED_MARKER_PATTERN.match(line) for line in item_lines
+        ):
+            del lines[i:item_end]
+            removed_count = item_end - i
+            event_end -= removed_count
+            end -= removed_count
+            continue
+        i = item_end
+    return _prune_empty_hooks(lines)
+
+
+def _prune_empty_hooks(lines: list[str]) -> str:
+    block = _top_level_block(lines, "hooks")
+    if block is None:
+        return "\n".join(lines) + "\n"
+    start, end = block
+    i = start + 1
+    while i < end:
+        if not re.match(r"^  [A-Za-z_][A-Za-z0-9_-]*:", lines[i]):
+            i += 1
+            continue
+        event_end = _event_block_end(lines, i, end)
+        if not _without_yaml_comment(lines[i]).endswith(":"):
+            i = event_end
+            continue
+        if not any(line.strip() for line in lines[i + 1 : event_end]):
+            del lines[i:event_end]
+            end -= event_end - i
+            continue
+        i = event_end
+    if not any(line.strip() for line in lines[start + 1 : end]):
+        lines[start:end] = ["hooks: {}"]
     return "\n".join(lines) + "\n"
 
 
@@ -315,9 +381,11 @@ def hook_pre_llm_call() -> None:
     payload = _read_stdin_json()
     repo_path = _resolve_repo_from_hook(payload)
     if repo_path is None:
+        _emit_noop_hook()
         return
     try:
         _paths()
     except Exception:
+        _emit_noop_hook()
         return
     _emit_json({"context": EXTERNAL_FIRST_CONTEXT})
