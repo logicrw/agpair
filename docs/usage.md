@@ -485,9 +485,11 @@ agpair claude hook subagent-start
 - `SessionStart` hook → `agpair claude hook session-start`
 - `PreCompact` hook → `agpair claude hook precompact`
 - `UserPromptSubmit` hook → `agpair claude hook user-prompt-submit`
-- `Stop` hook → `agpair claude hook stop`
 - `SubagentStart` hook → `agpair claude hook subagent-start`
 - `SubagentStop` / `TaskCreated` / `TaskCompleted` observability hooks
+
+Pass `--include-stop-hook` only when you explicitly want the optional
+post-answer `Stop` hook → `agpair claude hook stop` guardrail.
 
 Config management flags:
 
@@ -498,6 +500,7 @@ Config management flags:
 - `--uninstall`: remove only AGPair-managed entries
 - `--sync-skill/--no-sync-skill`: manage the AGPair skill at `.claude/skills/agpair/SKILL.md` or `~/.claude/skills/agpair/SKILL.md`; sync is enabled by default during install/uninstall
 - `--force`: replace a conflicting non-AGPair `statusLine`
+- `--include-stop-hook`: also install the optional post-answer Stop guardrail
 
 Safety rules:
 
@@ -512,7 +515,7 @@ Notes:
 - `session-start` injects a short reminder that AGPair external-first routing is available in the current repo.
 - `precompact` blocks compaction only while an AGPair task is `acked` or `evidence_ready`; other visible states may still appear in the status line without blocking compaction.
 - `user-prompt-submit` injects external-first routing context.
-- `stop` blocks only actionable terminal states such as unaccepted `ready_for_review` and `approval_required`.
+- `stop` blocks only actionable terminal states such as unaccepted `ready_for_review` and `approval_required` when the optional Stop hook is installed.
 - `subagent-start` is advisory; Claude Code native subagents remain fallback/review resources.
 - AGPair intentionally does **not** provide a default `InstructionsLoaded` reminder hook because Claude Code documents that event as observability-only.
 - AGPair intentionally does **not** provide a default `WorktreeCreate` hook because that hook replaces Claude Code’s built-in git-worktree behavior entirely.
@@ -529,13 +532,20 @@ agpair codex config --install --scope project --repo-path "$REPO" --sync-skill
 Managed hooks:
 
 - `UserPromptSubmit`: adds short external-first context.
-- `Stop`: blocks only actionable AGPair terminal states such as unaccepted `ready_for_review` and `approval_required`.
 - `SubagentStart`: advisory context only; Codex native subagents remain fallback/review resources.
+
+Codex and Claude Code do not install the post-answer `Stop` hook by default, because it can
+surface as a separate after-final hook block. Pass `--include-stop-hook` only
+when you want that hard guardrail; it blocks only actionable AGPair terminal
+states such as unaccepted `ready_for_review` and `approval_required`.
 
 `--install`, `--uninstall`, and `--dry-run` manage the Codex AGPair skill by
 default at `.codex/skills/agpair-codex/SKILL.md` or
 `~/.codex/skills/agpair-codex/SKILL.md`. Pass `--no-sync-skill` to manage only
 hooks. AGPair refuses to overwrite a non-AGPair skill at that path.
+
+Codex config accepts the same `--include-stop-hook` opt-in flag when you want to
+install the optional post-answer Stop guardrail.
 
 ### How to judge AGPair value
 

@@ -46,13 +46,16 @@ Codex:
 agpair codex config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
+Codex and Claude Code avoid post-answer Stop hooks by default. Add
+`--include-stop-hook` only if you want that hard guardrail.
+
 Claude Code:
 
 ```bash
 agpair claude config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
-Hooks fail open if AGPair is unavailable. They are routing hints and completion guardrails, not a replacement for controller verification.
+Hooks fail open if AGPair is unavailable. They are routing hints; optional Stop hooks are completion guardrails, not a replacement for controller verification.
 
 ## 4. Dispatch A Task
 

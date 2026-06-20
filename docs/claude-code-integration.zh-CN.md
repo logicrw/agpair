@@ -17,9 +17,10 @@ agpair claude config --install --scope project --repo-path "$REPO" --sync-skill
 - `SessionStart`: 注入简短 AGPair 可用提示。
 - `PreCompact`: 有活跃 AGPair 任务时阻止过早 compact。
 - `UserPromptSubmit`: 注入 external-first 路由提示。
-- `Stop`: 只在 `ready_for_review`、`approval_required` 等需要主控决策的状态阻止结束。
 - `SubagentStart`: 提醒 Claude 原生 subagent 只作为 fallback/review lane。
 - `SubagentStop`、`TaskCreated`、`TaskCompleted`: 仅作为 observability hook。
+
+`Stop` 是可选项。只有明确需要回答结束后的硬防护时，才传 `--include-stop-hook`；它只在 `ready_for_review`、`approval_required` 等需要主控决策的状态阻止结束。
 
 安装器只按 AGPair 命令身份追加或移除配置。它不会覆盖非 AGPair `statusLine`，除非显式传 `--force`；也不会删除其他 Claude Code hook。
 

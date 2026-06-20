@@ -163,12 +163,18 @@ agpair codex config
 agpair codex config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
+Codex installs prompt-time advisory hooks by default. If you explicitly want the
+post-answer Stop guardrail, add `--include-stop-hook`.
+
 Claude Code:
 
 ```bash
 agpair claude config
 agpair claude config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
+
+Claude Code also avoids the post-answer Stop hook by default. Add
+`--include-stop-hook` only if you explicitly want that hard guardrail.
 
 Hermes:
 
@@ -208,7 +214,7 @@ export AGPAIR_CLAUDE_CODE_SETTINGS="$HOME/.agpair/claude-worker-settings.json"
 export ANTHROPIC_API_KEY="..."
 ```
 
-The managed hooks are advisory and fail open when AGPair state is unavailable. They preserve unrelated local settings and remove only AGPair-managed entries on uninstall.
+The default managed hooks are advisory and fail open when AGPair state is unavailable. They preserve unrelated local settings and remove only AGPair-managed entries on uninstall.
 
 ## Authorization Profiles
 
@@ -227,7 +233,7 @@ AGPair 1.0 does not pause a running executor for live approval. Out-of-scope wor
 
 Useful value metrics are completion rate, usable `agent_result` rate, time to first useful signal, fallback recommendation rate, controller rework rate, and abandoned/no-progress rate. Use `task status --json`, `task list --json`, and `scripts/smoke_real_executors.py` to inspect `summary_metrics` and per-executor `recovery_decision`.
 
-After the controller accepts the evidence, mark the task accepted so Stop hooks do not keep blocking on the same receipt:
+If the optional Stop hook is enabled, mark accepted evidence so it does not keep blocking on the same receipt:
 
 ```bash
 agpair task accept TASK-123 --adoptable-result yes --controller-rework none

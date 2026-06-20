@@ -329,10 +329,13 @@ agpair claude config --install --scope project --repo-path "$REPO" --sync-skill
 Managed hooks:
 
 - `UserPromptSubmit`: injects external-first routing context.
-- `Stop`: blocks only actionable AGPair terminal states such as `ready_for_review` and `approval_required`.
 - `SubagentStart`: advisory fallback-scope context.
 - `SubagentStop`, `TaskCreated`, `TaskCompleted`: observability-only.
 - `SessionStart` and `PreCompact`: lightweight status/compaction guardrails.
+
+`Stop` is optional. Pass `--include-stop-hook` only when you explicitly want a
+post-answer hard guardrail for actionable AGPair terminal states such as
+`ready_for_review` and `approval_required`.
 
 Hooks fail open when AGPair state is unavailable. They preserve unrelated Claude Code settings and remove only AGPair-managed entries on uninstall.
 

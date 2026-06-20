@@ -46,13 +46,15 @@ Codex：
 agpair codex config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
+Codex 和 Claude Code 默认都不安装回答结束后的 Stop hook。只有明确需要这个硬防护时，再加 `--include-stop-hook`。
+
 Claude Code：
 
 ```bash
 agpair claude config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
-AGPair 不可用时 hook 会 fail open。它们只是路由提示和结束护栏，不能替代主控验收。
+AGPair 不可用时 hook 会 fail open。它们主要是路由提示；可选 Stop hook 才是结束护栏，不能替代主控验收。
 
 ## 4. 派发任务
 

@@ -460,9 +460,10 @@ agpair claude hook subagent-start
 - `SessionStart` hook → `agpair claude hook session-start`
 - `PreCompact` hook → `agpair claude hook precompact`
 - `UserPromptSubmit` hook → `agpair claude hook user-prompt-submit`
-- `Stop` hook → `agpair claude hook stop`
 - `SubagentStart` hook → `agpair claude hook subagent-start`
 - `SubagentStop` / `TaskCreated` / `TaskCompleted` observability hooks
+
+只有明确需要回答结束后的硬防护时，才传 `--include-stop-hook`，额外安装可选的 `Stop` hook → `agpair claude hook stop`。
 
 配置管理参数：
 
@@ -473,6 +474,7 @@ agpair claude hook subagent-start
 - `--uninstall`：只移除 AGPair 自己管理的条目
 - `--sync-skill/--no-sync-skill`：管理 `.claude/skills/agpair/SKILL.md` 或 `~/.claude/skills/agpair/SKILL.md`；安装/卸载时默认同步
 - `--force`：显式覆盖非 AGPair 管理的 `statusLine`
+- `--include-stop-hook`：额外安装可选的回答后 Stop 硬防护
 
 安全约束：
 
@@ -487,7 +489,7 @@ agpair claude hook subagent-start
 - `session-start` 会给当前 repo 注入一段很短的 AGPair 提示上下文，提醒主控优先用外部 executor。
 - `precompact` 只会在 AGPair 任务处于 `acked` 或 `evidence_ready` 时阻止 compact；其他可见状态可能仍显示在 status line，但不会因此拦截 compact。
 - `user-prompt-submit` 注入 external-first 路由上下文。
-- `stop` 只在未接受的 `ready_for_review`、`approval_required` 等需要主控决策的状态阻止过早结束。
+- `stop` 只在安装了可选 Stop hook 时，才会针对未接受的 `ready_for_review`、`approval_required` 等需要主控决策的状态阻止过早结束。
 - `subagent-start` 只做 advisory；Claude Code 原生 subagent 仍是 fallback / review 资源。
 - 默认**不**提供 `InstructionsLoaded` 提示 hook，因为 Claude Code 官方把这个事件定义为 observability-only，不能可靠地做上下文提醒。
 - 默认**不**提供 `WorktreeCreate` hook，因为这个 hook 会完全替换 Claude Code 内建的 git worktree 行为，默认启用太重。
@@ -504,12 +506,15 @@ agpair codex config --install --scope project --repo-path "$REPO" --sync-skill
 AGPair 管理的 hooks：
 
 - `UserPromptSubmit`：注入简短 external-first 上下文。
-- `Stop`：只在未接受的 `ready_for_review`、`approval_required` 等需要 Codex 决策的状态阻止过早结束。
 - `SubagentStart`：只给 advisory context；Codex native subagents 仍是 fallback / review 资源。
+
+Codex 和 Claude Code 默认都不安装回答结束后的 `Stop` hook，因为它可能在 UI 上表现成单独的 after-final hook 块。只有明确需要这个硬防护时再传 `--include-stop-hook`；它只会在未接受的 `ready_for_review`、`approval_required` 等需要主控决策的状态阻止过早结束。
 
 `--install`、`--uninstall` 和 `--dry-run` 默认同步 Codex AGPair skill，只管理
 `.codex/skills/agpair-codex/SKILL.md` 或 `~/.codex/skills/agpair-codex/SKILL.md`
 这一条 AGPair skill 路径。需要只管理 hook 时传 `--no-sync-skill`。AGPair 遇到非 AGPair skill 会拒绝覆盖。
+
+需要安装可选的回答后 Stop 硬防护时，Codex config 同样使用 `--include-stop-hook`。
 
 ### 如何判断 AGPair 是否真的有价值
 

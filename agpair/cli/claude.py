@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 from difflib import unified_diff
@@ -51,6 +52,17 @@ MANAGED_HOOK_COMMANDS = {
     "TaskCreated": "agpair claude hook task-created",
     "TaskCompleted": "agpair claude hook task-completed",
 }
+
+DEFAULT_MANAGED_HOOK_EVENTS = (
+    "SessionStart",
+    "PreCompact",
+    "UserPromptSubmit",
+    "SubagentStart",
+    "SubagentStop",
+    "TaskCreated",
+    "TaskCompleted",
+)
+ALL_MANAGED_HOOK_EVENTS = (*DEFAULT_MANAGED_HOOK_EVENTS, "Stop")
 
 
 def _paths() -> AppPaths:
@@ -171,19 +183,18 @@ def _managed_hook_entry(command: str, *, timeout: int | None = None) -> dict[str
     return {"hooks": [hook]}
 
 
-def _managed_config_payload() -> dict[str, Any]:
+def _managed_config_payload(*, include_stop_hook: bool = False) -> dict[str, Any]:
+    events = list(DEFAULT_MANAGED_HOOK_EVENTS)
+    if include_stop_hook:
+        events.insert(3, "Stop")
+    hooks = {}
+    for event_name in events:
+        command = MANAGED_HOOK_COMMANDS[event_name]
+        timeout = 30 if event_name == "Stop" else None
+        hooks[event_name] = [_managed_hook_entry(command, timeout=timeout)]
     return {
         "statusLine": _managed_statusline(),
-        "hooks": {
-            "SessionStart": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["SessionStart"])],
-            "PreCompact": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["PreCompact"])],
-            "UserPromptSubmit": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["UserPromptSubmit"])],
-            "Stop": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["Stop"], timeout=30)],
-            "SubagentStart": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["SubagentStart"])],
-            "SubagentStop": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["SubagentStop"])],
-            "TaskCreated": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["TaskCreated"])],
-            "TaskCompleted": [_managed_hook_entry(MANAGED_HOOK_COMMANDS["TaskCompleted"])],
-        },
+        "hooks": hooks,
     }
 
 
@@ -199,6 +210,25 @@ def _managed_hook_command_for_event(event_name: str) -> str | None:
     return MANAGED_HOOK_COMMANDS.get(event_name)
 
 
+def _command_matches_managed_agpair(actual: str, expected: str) -> bool:
+    if actual == expected:
+        return True
+    try:
+        actual_parts = shlex.split(actual)
+        expected_parts = shlex.split(expected)
+    except ValueError:
+        return False
+    if not actual_parts or not expected_parts:
+        return False
+    for index, part in enumerate(actual_parts):
+        if Path(part).name != expected_parts[0]:
+            continue
+        end = index + len(expected_parts)
+        if end == len(actual_parts) and actual_parts[index + 1 : end] == expected_parts[1:]:
+            return True
+    return False
+
+
 def _is_managed_hook_entry(event_name: str, entry: Any) -> bool:
     expected = _managed_hook_command_for_event(event_name)
     if expected is None or not isinstance(entry, dict):
@@ -211,7 +241,7 @@ def _is_managed_hook_entry(event_name: str, entry: Any) -> bool:
         for hook in hooks
         if isinstance(hook, dict) and isinstance(hook.get("command"), str)
     ]
-    return expected in commands
+    return any(_command_matches_managed_agpair(command, expected) for command in commands)
 
 
 def _project_settings_path(paths: AppPaths, repo_path: str | None, target: str | None) -> Path:
@@ -245,9 +275,9 @@ def _render_settings(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
-def _merge_managed_config(current: dict[str, Any], *, force: bool) -> dict[str, Any]:
-    updated = json.loads(json.dumps(current))
-    managed = _managed_config_payload()
+def _merge_managed_config(current: dict[str, Any], *, force: bool, include_stop_hook: bool = False) -> dict[str, Any]:
+    updated = _uninstall_managed_config(current)
+    managed = _managed_config_payload(include_stop_hook=include_stop_hook)
 
     existing_statusline = updated.get("statusLine")
     if existing_statusline is None or _is_managed_statusline(existing_statusline):
@@ -286,7 +316,7 @@ def _uninstall_managed_config(current: dict[str, Any]) -> dict[str, Any]:
 
     hooks = updated.get("hooks")
     if isinstance(hooks, dict):
-        for event_name in MANAGED_HOOK_COMMANDS:
+        for event_name in ALL_MANAGED_HOOK_EVENTS:
             existing_entries = hooks.get(event_name)
             if not isinstance(existing_entries, list):
                 continue
@@ -358,6 +388,11 @@ def config(
     scope: str = typer.Option("project", "--scope", help="Where to manage Claude Code settings: project or user."),
     repo_path: str | None = typer.Option(None, "--repo-path", help="Project repo path for --scope project."),
     target: str | None = typer.Option(None, "--target", help="Target alias for --scope project."),
+    include_stop_hook: bool = typer.Option(
+        False,
+        "--include-stop-hook",
+        help="Also install the post-answer Stop guardrail hook. Disabled by default to avoid a separate after-final hook.",
+    ),
 ) -> None:
     """Emit or manage a Claude Code settings snippet for AGPair statusline and lightweight hooks."""
     if scope not in {"project", "user"}:
@@ -367,7 +402,7 @@ def config(
 
     write_mode = install or merge or uninstall
     if not write_mode:
-        _emit_json(_managed_config_payload())
+        _emit_json(_managed_config_payload(include_stop_hook=include_stop_hook))
         return
 
     paths = _paths()
@@ -378,7 +413,7 @@ def config(
         if uninstall:
             updated = _uninstall_managed_config(current)
         else:
-            updated = _merge_managed_config(current, force=force)
+            updated = _merge_managed_config(current, force=force, include_stop_hook=include_stop_hook)
         skill_plan = None
         if sync_skill:
             skill_plan = plan_skill_sync(
@@ -397,8 +432,11 @@ def config(
             typer.echo(skill_plan.diff(), nl=False)
         return
 
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(after, encoding="utf-8")
+    if after:
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(after, encoding="utf-8")
+    elif settings_path.exists():
+        settings_path.unlink()
     if skill_plan is not None:
         skill_plan.apply()
         typer.echo(f"Updated {skill_plan.target_path}")
@@ -435,9 +473,11 @@ def hook_session_start() -> None:
         paths = _paths()
         repo_path = _resolve_repo_path(payload)
         if repo_path is None:
+            _emit_noop_hook()
             return
         task = _most_relevant_claude_task(paths, repo_path)
     except Exception:
+        _emit_noop_hook()
         return
     context = (
         "AGPair external-first routing is available in this repo. "
@@ -467,8 +507,10 @@ def hook_precompact() -> None:
         repo_path = _resolve_repo_path(payload)
         task = _most_relevant_claude_task(_paths(), repo_path)
     except Exception:
+        _emit_noop_hook()
         return
     if task is None or task.phase not in {"acked", "evidence_ready"}:
+        _emit_noop_hook()
         return
     _emit_json(
         {
@@ -490,10 +532,12 @@ def hook_user_prompt_submit() -> None:
     payload = _read_stdin_json()
     repo_path = _resolve_repo_path(payload)
     if repo_path is None:
+        _emit_noop_hook()
         return
     try:
         _paths()
     except Exception:
+        _emit_noop_hook()
         return
     _emit_json(_hook_specific_output("UserPromptSubmit", EXTERNAL_FIRST_CONTEXT))
 
@@ -507,19 +551,24 @@ def hook_stop() -> None:
     payload = _read_stdin_json()
     repo_path = _resolve_repo_path(payload)
     if repo_path is None:
+        _emit_noop_hook()
         return
     try:
         paths = _paths()
         task = TaskRepository(paths.db_path).get_most_relevant_active_task(str(repo_path))
     except Exception:
+        _emit_noop_hook()
         return
     if task is None:
+        _emit_noop_hook()
         return
 
     receipt = terminal_receipt_for_task(paths, task)
     if task.is_approved:
+        _emit_noop_hook()
         return
     if is_readonly_report_only_without_effective_changes(task, receipt):
+        _emit_noop_hook()
         return
     if task.phase in {"ready_for_review", "committed", "evidence_ready"}:
         reason = (
@@ -543,6 +592,8 @@ def hook_stop() -> None:
                 "or report the blocker."
             )
             _emit_json({"decision": "block", "reason": reason})
+            return
+    _emit_noop_hook()
 
 
 @hook_app.command("subagent-start")
@@ -554,10 +605,12 @@ def hook_subagent_start() -> None:
     payload = _read_stdin_json()
     repo_path = _resolve_repo_path(payload)
     if repo_path is None:
+        _emit_noop_hook()
         return
     try:
         _paths()
     except Exception:
+        _emit_noop_hook()
         return
     _emit_json(_hook_specific_output("SubagentStart", SUBAGENT_ADVISORY_CONTEXT))
 
@@ -572,7 +625,9 @@ def hook_subagent_stop() -> None:
     try:
         _paths()
     except Exception:
+        _emit_noop_hook()
         return
+    _emit_noop_hook()
 
 
 @hook_app.command("task-created")
@@ -585,7 +640,9 @@ def hook_task_created() -> None:
     try:
         _paths()
     except Exception:
+        _emit_noop_hook()
         return
+    _emit_noop_hook()
 
 
 @hook_app.command("task-completed")
@@ -598,4 +655,6 @@ def hook_task_completed() -> None:
     try:
         _paths()
     except Exception:
+        _emit_noop_hook()
         return
+    _emit_noop_hook()

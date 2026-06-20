@@ -164,12 +164,16 @@ agpair codex config
 agpair codex config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
 
+Codex 默认只安装提示前 advisory hooks。若明确需要回答结束后的 Stop 防护，再加 `--include-stop-hook`。
+
 Claude Code：
 
 ```bash
 agpair claude config
 agpair claude config --install --scope project --repo-path /path/to/repo --sync-skill
 ```
+
+Claude Code 也默认不安装回答结束后的 Stop hook。只有明确需要这个硬防护时，再加 `--include-stop-hook`。
 
 Hermes：
 
@@ -206,7 +210,7 @@ export AGPAIR_CLAUDE_CODE_SETTINGS="$HOME/.agpair/claude-worker-settings.json"
 export ANTHROPIC_API_KEY="..."
 ```
 
-AGPair 管理的 hook 是提示和护栏，AGPair 不可用时 fail open。安装器会保留无关本地设置，卸载时只移除 AGPair 自己管理的条目。
+AGPair 默认管理的 hook 是提示型，AGPair 不可用时 fail open。安装器会保留无关本地设置，卸载时只移除 AGPair 自己管理的条目。
 
 ## 授权 Profile
 
@@ -225,7 +229,7 @@ AGPair 1.0 不做“运行中暂停等待授权”。越界时 executor 应返�
 
 判断 AGPair 是否真的有价值，主要看 completion rate、可用 `agent_result` rate、time-to-first-useful-signal、fallback recommendation rate、controller rework rate，以及 abandoned/no-progress rate。用 `task status --json`、`task list --json` 和 `scripts/smoke_real_executors.py` 查看 `summary_metrics` 与每个 executor 的 `recovery_decision`。
 
-主控验收 evidence 后，用下面的命令标记任务已接受，避免 Stop hook 对同一个 receipt 反复阻塞：
+如果启用了可选 Stop hook，主控验收 evidence 后，用下面的命令标记任务已接受，避免它对同一个 receipt 反复阻塞：
 
 ```bash
 agpair task accept TASK-123 --adoptable-result yes --controller-rework none

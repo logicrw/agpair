@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 from difflib import unified_diff
@@ -33,6 +34,8 @@ EXTERNAL_FIRST_CONTEXT = (
     "Codex main remains the controller and verifier. Use native subagents only when AGPair "
     "is unavailable, an external executor is unsuitable, or external results are not good enough."
 )
+
+ALL_MANAGED_EVENTS = ("UserPromptSubmit", "Stop", "SubagentStart")
 
 SUBAGENT_ADVISORY_CONTEXT = (
     "AGPair external-first routing is active in the parent repo. If this native subagent "
@@ -102,12 +105,18 @@ def _managed_hook_entry(command: str, *, timeout: int | None = None) -> dict[str
     return {"hooks": [hook]}
 
 
-def _managed_config_payload() -> dict[str, Any]:
+def _managed_config_payload(*, include_stop_hook: bool = False) -> dict[str, Any]:
+    hooks = {
+        "UserPromptSubmit": [_managed_hook_entry("agpair codex hook user-prompt-submit")],
+        "SubagentStart": [_managed_hook_entry("agpair codex hook subagent-start")],
+    }
+    if include_stop_hook:
+        hooks["Stop"] = [_managed_hook_entry("agpair codex hook stop", timeout=30)]
     return {
         "hooks": {
-            "UserPromptSubmit": [_managed_hook_entry("agpair codex hook user-prompt-submit")],
-            "Stop": [_managed_hook_entry("agpair codex hook stop", timeout=30)],
-            "SubagentStart": [_managed_hook_entry("agpair codex hook subagent-start")],
+            event_name: hooks[event_name]
+            for event_name in ALL_MANAGED_EVENTS
+            if event_name in hooks
         }
     }
 
@@ -121,6 +130,25 @@ def _managed_command_for_event(event_name: str) -> str | None:
     return mapping.get(event_name)
 
 
+def _command_matches_managed_agpair(actual: str, expected: str) -> bool:
+    if actual == expected:
+        return True
+    try:
+        actual_parts = shlex.split(actual)
+        expected_parts = shlex.split(expected)
+    except ValueError:
+        return False
+    if not actual_parts or not expected_parts:
+        return False
+    for index, part in enumerate(actual_parts):
+        if Path(part).name != expected_parts[0]:
+            continue
+        end = index + len(expected_parts)
+        if end == len(actual_parts) and actual_parts[index + 1 : end] == expected_parts[1:]:
+            return True
+    return False
+
+
 def _entry_has_command(entry: Any, command: str) -> bool:
     if not isinstance(entry, dict):
         return False
@@ -128,7 +156,9 @@ def _entry_has_command(entry: Any, command: str) -> bool:
     if not isinstance(hooks, list):
         return False
     return any(
-        isinstance(hook, dict) and hook.get("command") == command
+        isinstance(hook, dict)
+        and isinstance(hook.get("command"), str)
+        and _command_matches_managed_agpair(hook["command"], command)
         for hook in hooks
     )
 
@@ -169,12 +199,12 @@ def _emit_diff(path: Path, before: str, after: str) -> None:
         typer.echo(diff, nl=False)
 
 
-def _merge_managed_config(current: dict[str, Any]) -> dict[str, Any]:
-    updated = json.loads(json.dumps(current))
+def _merge_managed_config(current: dict[str, Any], *, include_stop_hook: bool = False) -> dict[str, Any]:
+    updated = _uninstall_managed_config(current)
     hooks = updated.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         raise RuntimeError("Existing hooks value is not a JSON object; manual merge required.")
-    for event_name, desired_entries in _managed_config_payload()["hooks"].items():
+    for event_name, desired_entries in _managed_config_payload(include_stop_hook=include_stop_hook)["hooks"].items():
         command = _managed_command_for_event(event_name)
         assert command is not None
         existing_entries = hooks.setdefault(event_name, [])
@@ -190,7 +220,7 @@ def _uninstall_managed_config(current: dict[str, Any]) -> dict[str, Any]:
     hooks = updated.get("hooks")
     if not isinstance(hooks, dict):
         return updated
-    for event_name in ("UserPromptSubmit", "Stop", "SubagentStart"):
+    for event_name in ALL_MANAGED_EVENTS:
         command = _managed_command_for_event(event_name)
         if command is None:
             continue
@@ -227,20 +257,28 @@ def config(
     sync_skill: bool = typer.Option(True, "--sync-skill/--no-sync-skill", help="Sync the AGPair Codex skill into the selected scope."),
     scope: str = typer.Option("project", "--scope", help="project or user"),
     repo_path: str | None = typer.Option(None, "--repo-path"),
+    include_stop_hook: bool = typer.Option(
+        False,
+        "--include-stop-hook",
+        help="Also install the post-answer Stop guardrail hook. Disabled by default to avoid a separate after-final hook.",
+    ),
 ) -> None:
     if scope not in {"project", "user"}:
         raise typer.BadParameter("--scope must be project or user")
     if install and uninstall:
         raise typer.BadParameter("choose only one of --install or --uninstall")
     if not install and not uninstall:
-        _emit_json(_managed_config_payload())
+        _emit_json(_managed_config_payload(include_stop_hook=include_stop_hook))
         return
 
     paths = _paths()
     path = _settings_path(scope=scope, paths=paths, repo_path=repo_path)
     current = _load_settings(path)
     before = _render_settings(current) if current else ""
-    updated = _uninstall_managed_config(current) if uninstall else _merge_managed_config(current)
+    updated = _uninstall_managed_config(current) if uninstall else _merge_managed_config(
+        current,
+        include_stop_hook=include_stop_hook,
+    )
     after = _render_settings(updated) if updated else ""
     skill_plan = None
     if sync_skill:
@@ -258,8 +296,11 @@ def config(
         if skill_plan is not None:
             typer.echo(skill_plan.diff(), nl=False)
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(after, encoding="utf-8")
+    if after:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(after, encoding="utf-8")
+    elif path.exists():
+        path.unlink()
     if skill_plan is not None:
         skill_plan.apply()
         typer.echo(str(skill_plan.target_path))
@@ -283,10 +324,12 @@ def hook_user_prompt_submit() -> None:
     payload = _read_stdin_json()
     repo_path = _resolve_repo_from_hook(payload)
     if repo_path is None:
+        _emit_noop_hook()
         return
     try:
         _paths()
     except Exception:
+        _emit_noop_hook()
         return
     _emit_json(_hook_specific_output("UserPromptSubmit", EXTERNAL_FIRST_CONTEXT))
 
@@ -299,18 +342,23 @@ def hook_stop() -> None:
     payload = _read_stdin_json()
     repo_path = _resolve_repo_from_hook(payload)
     if repo_path is None:
+        _emit_noop_hook()
         return
     try:
         paths = _paths()
         task = TaskRepository(paths.db_path).get_most_relevant_active_task(str(repo_path))
     except Exception:
+        _emit_noop_hook()
         return
     if task is None:
+        _emit_noop_hook()
         return
     receipt = terminal_receipt_for_task(paths, task)
     if task.is_approved:
+        _emit_noop_hook()
         return
     if is_readonly_report_only_without_effective_changes(task, receipt):
+        _emit_noop_hook()
         return
     if task.phase in {"ready_for_review", "committed", "evidence_ready"}:
         reason = (
@@ -333,6 +381,8 @@ def hook_stop() -> None:
                 "or report the blocker."
             )
             _emit_json({"decision": "block", "reason": reason})
+            return
+    _emit_noop_hook()
 
 
 @hook_app.command("subagent-start")
@@ -343,9 +393,11 @@ def hook_subagent_start() -> None:
     payload = _read_stdin_json()
     repo_path = _resolve_repo_from_hook(payload)
     if repo_path is None:
+        _emit_noop_hook()
         return
     try:
         _paths()
     except Exception:
+        _emit_noop_hook()
         return
     _emit_json(_hook_specific_output("SubagentStart", SUBAGENT_ADVISORY_CONTEXT))

@@ -12,6 +12,8 @@ from agpair.storage.db import ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
 
+NOOP_HOOK_OUTPUT = {"continue": True, "suppressOutput": True}
+
 
 def make_paths(tmp_path: Path) -> AppPaths:
     return AppPaths.from_root(tmp_path / ".agpair")
@@ -163,11 +165,20 @@ def test_claude_config_emits_statusline_and_hook_commands() -> None:
     assert hook_commands(payload, "SessionStart") == ["agpair claude hook session-start"]
     assert hook_commands(payload, "PreCompact") == ["agpair claude hook precompact"]
     assert hook_commands(payload, "UserPromptSubmit") == ["agpair claude hook user-prompt-submit"]
-    assert hook_commands(payload, "Stop") == ["agpair claude hook stop"]
+    assert "Stop" not in payload["hooks"]
     assert hook_commands(payload, "SubagentStart") == ["agpair claude hook subagent-start"]
     assert hook_commands(payload, "SubagentStop") == ["agpair claude hook subagent-stop"]
     assert hook_commands(payload, "TaskCreated") == ["agpair claude hook task-created"]
     assert hook_commands(payload, "TaskCompleted") == ["agpair claude hook task-completed"]
+
+
+def test_claude_config_can_emit_optional_stop_hook() -> None:
+    result = CliRunner().invoke(app, ["claude", "config", "--include-stop-hook"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert hook_commands(payload, "Stop") == ["agpair claude hook stop"]
+    assert payload["hooks"]["Stop"][0]["hooks"][0]["timeout"] == 30
 
 
 def test_claude_config_install_writes_project_settings(tmp_path: Path, monkeypatch) -> None:
@@ -183,7 +194,38 @@ def test_claude_config_install_writes_project_settings(tmp_path: Path, monkeypat
     payload = json.loads(settings_path.read_text())
     assert payload["statusLine"]["command"] == "agpair claude statusline"
     assert "agpair claude hook session-start" in hook_commands(payload, "SessionStart")
+    assert "Stop" not in payload["hooks"]
+
+
+def test_claude_config_install_can_include_optional_stop_hook(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+
+    result = CliRunner().invoke(app, ["claude", "config", "--install", "--include-stop-hook"])
+
+    assert result.exit_code == 0
+    settings_path = repo_path / ".claude" / "settings.json"
+    payload = json.loads(settings_path.read_text())
     assert "agpair claude hook stop" in hook_commands(payload, "Stop")
+
+
+def test_claude_config_reinstall_without_stop_downgrades_optional_stop_hook(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+
+    first = CliRunner().invoke(app, ["claude", "config", "--install", "--include-stop-hook"])
+    second = CliRunner().invoke(app, ["claude", "config", "--install"])
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    settings_path = repo_path / ".claude" / "settings.json"
+    payload = json.loads(settings_path.read_text())
+    assert "Stop" not in payload["hooks"]
+    assert "UserPromptSubmit" in payload["hooks"]
 
 
 def test_claude_config_dry_run_prints_diff_without_writing(tmp_path: Path, monkeypatch) -> None:
@@ -279,6 +321,80 @@ def test_claude_config_install_preserves_foreign_event_hooks_without_force(tmp_p
     assert "agpair claude hook session-start" in commands
 
 
+def test_claude_config_install_migrates_legacy_managed_stop_hook(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+    settings_dir = repo_path / ".claude"
+    settings_dir.mkdir()
+    settings_payload = {
+        "hooks": {
+            "Stop": [
+                {"hooks": [{"type": "command", "command": "/tmp/foreign-stop.sh"}]},
+                {"hooks": [{"type": "command", "command": "agpair claude hook stop"}]},
+            ]
+        }
+    }
+    (settings_dir / "settings.json").write_text(json.dumps(settings_payload, indent=2), encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["claude", "config", "--install"])
+
+    assert result.exit_code == 0
+    updated = json.loads((settings_dir / "settings.json").read_text())
+    assert hook_commands(updated, "Stop") == ["/tmp/foreign-stop.sh"]
+    assert "agpair claude hook user-prompt-submit" in hook_commands(updated, "UserPromptSubmit")
+
+
+def test_claude_config_install_migrates_only_legacy_managed_stop_hook(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+    settings_dir = repo_path / ".claude"
+    settings_dir.mkdir()
+    settings_payload = {
+        "hooks": {
+            "Stop": [
+                {"hooks": [{"type": "command", "command": "agpair claude hook stop"}]}
+            ]
+        }
+    }
+    (settings_dir / "settings.json").write_text(json.dumps(settings_payload, indent=2), encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["claude", "config", "--install"])
+
+    assert result.exit_code == 0
+    updated = json.loads((settings_dir / "settings.json").read_text())
+    assert "Stop" not in updated["hooks"]
+    assert "agpair claude hook user-prompt-submit" in hook_commands(updated, "UserPromptSubmit")
+
+
+def test_claude_config_install_migrates_absolute_path_managed_stop_hook(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+    settings_dir = repo_path / ".claude"
+    settings_dir.mkdir()
+    absolute_agpair = tmp_path / "bin" / "agpair"
+    settings_payload = {
+        "hooks": {
+            "Stop": [
+                {"hooks": [{"type": "command", "command": f"{absolute_agpair} claude hook stop"}]}
+            ]
+        }
+    }
+    (settings_dir / "settings.json").write_text(json.dumps(settings_payload, indent=2), encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["claude", "config", "--install"])
+
+    assert result.exit_code == 0
+    updated = json.loads((settings_dir / "settings.json").read_text())
+    assert "Stop" not in updated["hooks"]
+    assert "agpair claude hook user-prompt-submit" in hook_commands(updated, "UserPromptSubmit")
+
+
 def test_claude_config_force_replaces_conflicting_managed_slots(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"
@@ -351,6 +467,33 @@ def test_claude_config_uninstall_removes_only_managed_entries(tmp_path: Path, mo
     assert updated["hooks"]["Notification"][0]["hooks"][0]["command"] == "/tmp/notify-me.sh"
 
 
+def test_claude_config_uninstall_removes_empty_settings_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    monkeypatch.chdir(repo_path)
+    settings_dir = repo_path / ".claude"
+    settings_dir.mkdir()
+    settings_payload = {
+        "statusLine": {"type": "command", "command": "agpair claude statusline", "refreshInterval": 5},
+        "hooks": {
+            "SessionStart": [
+                {"hooks": [{"type": "command", "command": "agpair claude hook session-start"}]}
+            ],
+            "Stop": [
+                {"hooks": [{"type": "command", "command": "agpair claude hook stop"}]}
+            ],
+        },
+    }
+    settings_path = settings_dir / "settings.json"
+    settings_path.write_text(json.dumps(settings_payload, indent=2), encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["claude", "config", "--uninstall"])
+
+    assert result.exit_code == 0
+    assert not settings_path.exists()
+
+
 def test_claude_session_start_hook_emits_agpair_context(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo_path = tmp_path / "repo"
@@ -418,7 +561,30 @@ def test_claude_hooks_noop_inside_agpair_internal_executor(tmp_path: Path, monke
         )
 
         assert result.exit_code == 0
-        assert json.loads(result.stdout) == {"continue": True, "suppressOutput": True}
+        assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT
+
+
+def test_claude_hooks_noop_without_repo_payload(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+
+    for command, event_name in (
+        ("session-start", "SessionStart"),
+        ("precompact", "PreCompact"),
+        ("user-prompt-submit", "UserPromptSubmit"),
+        ("stop", "Stop"),
+        ("subagent-start", "SubagentStart"),
+        ("subagent-stop", "SubagentStop"),
+        ("task-created", "TaskCreated"),
+        ("task-completed", "TaskCompleted"),
+    ):
+        result = CliRunner().invoke(
+            app,
+            ["claude", "hook", command],
+            input=json.dumps({"hook_event_name": event_name}),
+        )
+
+        assert result.exit_code == 0
+        assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT
 
 
 def test_claude_stop_hook_blocks_ready_for_review_terminal_receipt(tmp_path: Path, monkeypatch) -> None:
@@ -502,7 +668,7 @@ def test_claude_stop_hook_does_not_block_approved_ready_for_review(tmp_path: Pat
     )
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == ""
+    assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT
 
 
 def test_claude_stop_hook_allows_readonly_report_only_without_effective_changes(
@@ -552,7 +718,7 @@ def test_claude_stop_hook_allows_readonly_report_only_without_effective_changes(
     )
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == ""
+    assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT
 
 
 def test_claude_stop_hook_blocks_readonly_report_only_with_effective_changes(
@@ -667,7 +833,7 @@ def test_claude_stop_hook_allows_plain_acked_task(tmp_path: Path, monkeypatch) -
     )
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == ""
+    assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT
 
 
 def test_claude_subagent_start_hook_is_advisory(tmp_path: Path, monkeypatch) -> None:
@@ -708,7 +874,7 @@ def test_claude_observability_hooks_fail_open_without_output(tmp_path: Path, mon
             input=hook_input(repo_path, event=event_name),
         )
         assert result.exit_code == 0
-        assert result.stdout.strip() == ""
+        assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT
 
 
 def test_claude_external_first_hooks_fail_open_when_state_unavailable(tmp_path: Path, monkeypatch) -> None:
@@ -730,7 +896,7 @@ def test_claude_external_first_hooks_fail_open_when_state_unavailable(tmp_path: 
             input=hook_input(repo_path, event=event_name),
         )
         assert result.exit_code == 0
-        assert result.stdout.strip() == ""
+        assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT
 
 
 def test_claude_precompact_hook_blocks_when_live_task_exists(tmp_path: Path, monkeypatch) -> None:
@@ -773,4 +939,4 @@ def test_claude_precompact_hook_allows_when_no_live_task_exists(tmp_path: Path, 
     )
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == ""
+    assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT

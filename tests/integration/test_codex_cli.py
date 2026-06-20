@@ -12,6 +12,8 @@ from agpair.storage.db import ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
 
+NOOP_HOOK_OUTPUT = {"continue": True, "suppressOutput": True}
+
 
 def make_paths(tmp_path: Path) -> AppPaths:
     return AppPaths.from_root(tmp_path / ".agpair")
@@ -26,14 +28,23 @@ def hook_input(cwd: Path, *, event: str = "Stop") -> str:
     return json.dumps({"cwd": str(cwd), "hook_event_name": event})
 
 
-def test_codex_config_emits_userprompt_and_stop_hooks() -> None:
+def test_codex_config_emits_prompt_and_subagent_hooks_by_default() -> None:
     result = CliRunner().invoke(app, ["codex", "config"])
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"] == "agpair codex hook user-prompt-submit"
-    assert payload["hooks"]["Stop"][0]["hooks"][0]["command"] == "agpair codex hook stop"
+    assert "Stop" not in payload["hooks"]
     assert payload["hooks"]["SubagentStart"][0]["hooks"][0]["command"] == "agpair codex hook subagent-start"
+
+
+def test_codex_config_can_emit_optional_stop_hook() -> None:
+    result = CliRunner().invoke(app, ["codex", "config", "--include-stop-hook"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["hooks"]["Stop"][0]["hooks"][0]["command"] == "agpair codex hook stop"
+    assert payload["hooks"]["Stop"][0]["hooks"][0]["timeout"] == 30
 
 
 def test_codex_config_install_preserves_foreign_hooks(tmp_path: Path, monkeypatch) -> None:
@@ -62,7 +73,163 @@ def test_codex_config_install_preserves_foreign_hooks(tmp_path: Path, monkeypatc
         for hook in entry["hooks"]
     ]
     assert "/tmp/foreign-stop.sh" in stop_commands
+    assert "agpair codex hook stop" not in stop_commands
+
+
+def test_codex_config_install_can_include_optional_stop_hook(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    settings_path = tmp_path / ".codex" / "hooks.json"
+    settings_path.parent.mkdir()
+    settings_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [{"hooks": [{"type": "command", "command": "/tmp/foreign-stop.sh"}]}]
+                }
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["codex", "config", "--install", "--include-stop-hook", "--repo-path", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    updated = json.loads(settings_path.read_text())
+    stop_commands = [
+        hook["command"]
+        for entry in updated["hooks"]["Stop"]
+        for hook in entry["hooks"]
+    ]
+    assert "/tmp/foreign-stop.sh" in stop_commands
     assert "agpair codex hook stop" in stop_commands
+
+
+def test_codex_config_reinstall_without_stop_downgrades_optional_stop_hook(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    init_git_repo(tmp_path)
+
+    first = CliRunner().invoke(
+        app,
+        ["codex", "config", "--install", "--include-stop-hook", "--repo-path", str(tmp_path)],
+    )
+    second = CliRunner().invoke(app, ["codex", "config", "--install", "--repo-path", str(tmp_path)])
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    updated = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
+    assert "Stop" not in updated["hooks"]
+    assert "UserPromptSubmit" in updated["hooks"]
+
+
+def test_codex_config_install_migrates_legacy_managed_stop_hook(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    settings_path = tmp_path / ".codex" / "hooks.json"
+    settings_path.parent.mkdir()
+    settings_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "agpair codex hook user-prompt-submit"}]}],
+                    "Stop": [{"hooks": [{"type": "command", "command": "agpair codex hook stop", "timeout": 30}]}],
+                    "SubagentStart": [{"hooks": [{"type": "command", "command": "agpair codex hook subagent-start"}]}],
+                }
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(app, ["codex", "config", "--install", "--repo-path", str(tmp_path)])
+
+    assert result.exit_code == 0
+    updated = json.loads(settings_path.read_text())
+    assert "Stop" not in updated["hooks"]
+    assert updated["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"] == "agpair codex hook user-prompt-submit"
+    assert updated["hooks"]["SubagentStart"][0]["hooks"][0]["command"] == "agpair codex hook subagent-start"
+
+
+def test_codex_config_install_migrates_absolute_path_managed_stop_hook(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    settings_path = tmp_path / ".codex" / "hooks.json"
+    settings_path.parent.mkdir()
+    absolute_agpair = tmp_path / "bin" / "agpair"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [{"hooks": [{"type": "command", "command": f"{absolute_agpair} codex hook stop"}]}]
+                }
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(app, ["codex", "config", "--install", "--repo-path", str(tmp_path)])
+
+    assert result.exit_code == 0
+    updated = json.loads(settings_path.read_text())
+    assert "Stop" not in updated["hooks"]
+    assert "UserPromptSubmit" in updated["hooks"]
+
+
+def test_codex_config_uninstall_removes_empty_managed_hook_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    settings_path = tmp_path / ".codex" / "hooks.json"
+    settings_path.parent.mkdir()
+    settings_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "agpair codex hook user-prompt-submit"}]}],
+                    "Stop": [{"hooks": [{"type": "command", "command": "agpair codex hook stop"}]}],
+                    "SubagentStart": [{"hooks": [{"type": "command", "command": "agpair codex hook subagent-start"}]}],
+                }
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(app, ["codex", "config", "--uninstall", "--repo-path", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert not settings_path.exists()
+
+
+def test_codex_config_uninstall_preserves_foreign_hooks(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    settings_path = tmp_path / ".codex" / "hooks.json"
+    settings_path.parent.mkdir()
+    settings_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [
+                        {"hooks": [{"type": "command", "command": "/tmp/foreign-stop.sh"}]},
+                        {"hooks": [{"type": "command", "command": "agpair codex hook stop"}]},
+                    ]
+                }
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(app, ["codex", "config", "--uninstall", "--repo-path", str(tmp_path)])
+
+    assert result.exit_code == 0
+    updated = json.loads(settings_path.read_text())
+    stop_commands = [
+        hook["command"]
+        for entry in updated["hooks"]["Stop"]
+        for hook in entry["hooks"]
+    ]
+    assert stop_commands == ["/tmp/foreign-stop.sh"]
 
 
 def test_codex_config_install_dry_run_prints_diff_without_writing(tmp_path: Path, monkeypatch) -> None:
@@ -160,7 +327,7 @@ def test_codex_hooks_fail_open_when_state_is_unreadable(monkeypatch) -> None:
     result = CliRunner().invoke(app, ["codex", "hook", "stop"], input="{}")
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == ""
+    assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT
 
 
 def test_codex_user_prompt_submit_emits_external_first_context(tmp_path: Path, monkeypatch) -> None:
@@ -199,7 +366,21 @@ def test_codex_hooks_noop_inside_agpair_internal_probe(tmp_path: Path, monkeypat
         )
 
         assert result.exit_code == 0
-        assert json.loads(result.stdout) == {"continue": True, "suppressOutput": True}
+        assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT
+
+
+def test_codex_advisory_hooks_noop_without_repo_payload(monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", "/path/that/does/not/exist")
+
+    for command in ("user-prompt-submit", "subagent-start"):
+        result = CliRunner().invoke(
+            app,
+            ["codex", "hook", command],
+            input="{}",
+        )
+
+        assert result.exit_code == 0
+        assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT
 
 
 def test_codex_stop_does_not_block_for_plain_acked_state(tmp_path: Path, monkeypatch) -> None:
@@ -215,7 +396,7 @@ def test_codex_stop_does_not_block_for_plain_acked_state(tmp_path: Path, monkeyp
     result = CliRunner().invoke(app, ["codex", "hook", "stop"], input=hook_input(repo_path))
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == ""
+    assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT
 
 
 def test_codex_stop_blocks_for_ready_for_review_receipt(tmp_path: Path, monkeypatch) -> None:
@@ -302,7 +483,7 @@ def test_codex_stop_does_not_block_approved_ready_for_review(tmp_path: Path, mon
     result = CliRunner().invoke(app, ["codex", "hook", "stop"], input=hook_input(repo_path))
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == ""
+    assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT
 
 
 def test_codex_stop_allows_readonly_report_only_without_effective_changes(tmp_path: Path, monkeypatch) -> None:
@@ -347,7 +528,7 @@ def test_codex_stop_allows_readonly_report_only_without_effective_changes(tmp_pa
     result = CliRunner().invoke(app, ["codex", "hook", "stop"], input=hook_input(repo_path))
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == ""
+    assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT
 
 
 def test_codex_stop_allows_auto_readonly_effective_report_without_effective_changes(
@@ -400,7 +581,7 @@ def test_codex_stop_allows_auto_readonly_effective_report_without_effective_chan
     result = CliRunner().invoke(app, ["codex", "hook", "stop"], input=hook_input(repo_path))
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == ""
+    assert json.loads(result.stdout) == NOOP_HOOK_OUTPUT
 
 
 def test_codex_stop_blocks_readonly_report_only_with_effective_changes(tmp_path: Path, monkeypatch) -> None:

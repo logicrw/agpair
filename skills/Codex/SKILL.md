@@ -235,6 +235,27 @@ Do not use repeated Codex prompts as a polling loop. Use `agpair task watch <TAS
 
 Use Codex App thread automation only for very long tasks that should wake the same thread later.
 
+## Codex Integration
+
+Install or print the managed hooks snippet:
+
+```bash
+agpair codex config
+agpair codex config --install --scope project --repo-path "$REPO" --sync-skill
+```
+
+Managed hooks:
+
+- `UserPromptSubmit`: injects external-first routing context.
+- `SubagentStart`: advisory fallback-scope context.
+
+`Stop` is optional. Pass `--include-stop-hook` only when you explicitly want a
+post-answer hard guardrail for actionable AGPair terminal states such as
+`ready_for_review` and `approval_required`.
+
+Hooks fail open when AGPair state is unavailable. They preserve unrelated Codex
+hook settings and remove only AGPair-managed entries on uninstall.
+
 ## Review And Adoption
 
 Always inspect:
