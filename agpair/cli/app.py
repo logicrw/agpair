@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import typer
 
+from agpair import __version__
 from agpair.cli.claude import app as claude_app
 from agpair.cli.codex import app as codex_app
 from agpair.cli.daemon import app as daemon_app
@@ -23,6 +24,26 @@ app.add_typer(policy_app, name="policy")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(target_app, name="target")
+
+
+def _version_callback(value: bool) -> None:
+    if not value:
+        return
+    typer.echo(f"agpair {__version__}")
+    raise typer.Exit
+
+
+@app.callback()
+def root(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+) -> None:
+    return
 
 
 @app.command("doctor")
