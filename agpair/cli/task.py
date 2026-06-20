@@ -41,12 +41,12 @@ from agpair.models import (
     authorization_profile_summary,
     validate_authorization_profile,
 )
+from agpair.executor_errors import is_bootstrap_noise
 from agpair.runtime_liveness import (
     LivenessState,
     build_signal_summary,
     classify_liveness,
     effective_no_progress_seconds,
-    is_bootstrap_noise,
     is_task_live,
     recommend_controller_action,
 )
@@ -140,6 +140,58 @@ def _not_found_payload(task_id: str) -> dict:
         "error": "task_not_found",
         "task_id": task_id,
     }
+
+
+def _resolve_requested_repo_context(
+    paths: AppPaths,
+    repo_path: str | None,
+    target: str | None,
+) -> str | None:
+    if repo_path is None and target is None:
+        return None
+    from agpair.targets import resolve_repo_path
+
+    resolved = resolve_repo_path(repo_path, target, paths)
+    if resolved is None:
+        return None
+    return str(Path(resolved).expanduser().resolve(strict=False))
+
+
+def _repo_mismatch_payload(task, requested_repo_path: str) -> dict:
+    return {
+        "ok": False,
+        "error": "task_repo_mismatch",
+        "task_id": task.task_id,
+        "repo_path": str(Path(task.repo_path).expanduser().resolve(strict=False)),
+        "requested_repo_path": requested_repo_path,
+    }
+
+
+def _ensure_task_repo_context(
+    paths: AppPaths,
+    task,
+    *,
+    repo_path: str | None,
+    target: str | None,
+    json_output: bool,
+) -> None:
+    requested_repo_path = _resolve_requested_repo_context(paths, repo_path, target)
+    if requested_repo_path is None:
+        return
+    stored_repo_path = str(Path(task.repo_path).expanduser().resolve(strict=False))
+    if stored_repo_path == requested_repo_path:
+        return
+    payload = _repo_mismatch_payload(task, requested_repo_path)
+    if json_output:
+        _emit_json(payload)
+    else:
+        typer.echo(
+            "task repo mismatch: "
+            f"{task.task_id} belongs to {payload['repo_path']}, "
+            f"not {payload['requested_repo_path']}",
+            err=True,
+        )
+    raise typer.Exit(code=1)
 
 
 def _waiter_payload(waiter) -> dict | None:
@@ -1073,6 +1125,20 @@ def _journal_row_payload(row) -> dict:
     }
 
 
+def _compact_log_value_for_human(value):
+    if isinstance(value, dict):
+        return {key: _compact_log_value_for_human(child) for key, child in value.items()}
+    if isinstance(value, list) and len(value) > 12:
+        omitted = len(value) - 10
+        return [
+            *(_compact_log_value_for_human(child) for child in value[:10]),
+            f"... {omitted} more item(s) omitted; use --json for full payload",
+        ]
+    if isinstance(value, list):
+        return [_compact_log_value_for_human(child) for child in value]
+    return value
+
+
 def _bridge_marker_candidates(
     repo_path: str | None,
     marker_name: str,
@@ -1244,6 +1310,172 @@ def _normalize_task_body_for_cli(
     return brief.normalized_body, list(brief.warnings)
 
 
+def _task_start_json_payload(
+    paths: AppPaths,
+    task_id: str,
+    *,
+    wait: bool,
+    interval_seconds: float,
+    timeout_seconds: float,
+    waiter_command: str,
+    start_status: str,
+    auto_structured_sections: list[str],
+    selected_executor: str | None = None,
+) -> tuple[dict, int]:
+    tasks = TaskRepository(paths.db_path)
+    current_task = tasks.get_task(task_id)
+    if current_task is None:
+        payload = _not_found_payload(task_id)
+        payload["start_status"] = start_status
+        payload["exit_code"] = 1
+        return payload, 1
+
+    if not wait:
+        task_payload = build_task_payload(paths, current_task)
+        return (
+            {
+                "ok": True,
+                "task_id": task_id,
+                "phase": current_task.phase,
+                "outcome": "not_waited",
+                "wait_requested": False,
+                "start_status": start_status,
+                "selected_executor": selected_executor or current_task.executor_backend,
+                "auto_structured_sections": auto_structured_sections,
+                "status_command": f"agpair task status {task_id} --json",
+                "watch_command": f"agpair task watch {task_id} --json",
+                "wait_command": f"agpair task wait {task_id} --json",
+                "task": task_payload,
+                "exit_code": 0,
+            },
+            0,
+        )
+
+    if current_task.wait_policy == "background":
+        task_payload = build_task_payload(paths, current_task)
+        return (
+            {
+                "ok": True,
+                "task_id": task_id,
+                "phase": current_task.phase,
+                "outcome": "background_started",
+                "wait_requested": True,
+                "start_status": start_status,
+                "selected_executor": selected_executor or current_task.executor_backend,
+                "auto_structured_sections": auto_structured_sections,
+                "status_command": f"agpair task status {task_id} --json",
+                "watch_command": f"agpair task watch {task_id} --json",
+                "wait_command": f"agpair task wait {task_id} --json",
+                "task": task_payload,
+                "exit_code": 0,
+            },
+            0,
+        )
+
+    result = wait_for_terminal_phase(
+        paths.db_path,
+        task_id,
+        interval_seconds=interval_seconds,
+        timeout_seconds=timeout_seconds,
+        controller_wait_seconds=current_task.controller_wait_seconds,
+        background_ok=bool(current_task.background_ok),
+        strict_watchdog=current_task.wait_policy in {"terminal", "strict"},
+        terminal_phases=TERMINAL_PHASES,
+        waiter_command=waiter_command,
+    )
+    code = exit_code_for_dispatch(result)
+    current_task = tasks.get_task(task_id)
+    task_payload = build_task_payload(paths, current_task) if current_task is not None else None
+    failure_context = task_payload["failure_context"] if task_payload is not None else None
+    blocker_type = failure_context["blocker_type"] if failure_context else None
+    agent_result = task_payload.get("agent_result") if task_payload is not None else None
+    agent_action = (
+        agent_result.get("controller_action")
+        if result.phase in TERMINAL_PHASES
+        and isinstance(agent_result, dict)
+        and isinstance(agent_result.get("controller_action"), str)
+        else None
+    )
+    recommended_action = agent_action or result.recommended_action or (
+        task_payload.get("controller_action") if task_payload is not None else None
+    )
+    recovery_decision = None
+    if current_task is not None:
+        wait_signal_summary = build_signal_summary(
+            current_task,
+            freshness_seconds=effective_no_progress_seconds(current_task),
+        )
+        recovery_decision = _recovery_decision_for_task(
+            paths,
+            current_task,
+            agent_result=agent_result if isinstance(agent_result, dict) else None,
+            signal_summary=wait_signal_summary,
+            wait_outcome=result.outcome,
+            requested_executor=_requested_executor_from_current_attempt(paths, current_task.task_id),
+        )
+    return (
+        {
+            "ok": code == 0,
+            "task_id": task_id,
+            "phase": result.phase,
+            "a2a_state_hint": a2a_state_hint_from_phase(result.phase, blocker_type=blocker_type),
+            "timed_out": result.timed_out,
+            "watchdog_triggered": result.watchdog_triggered,
+            "outcome": result.outcome,
+            "controller_lease_expired": result.controller_lease_expired,
+            "wait_requested": True,
+            "start_status": start_status,
+            "selected_executor": selected_executor or (current_task.executor_backend if current_task is not None else None),
+            "auto_structured_sections": auto_structured_sections,
+            "agent_result": agent_result,
+            "recommended_action": recommended_action,
+            "recovery_decision": recovery_decision,
+            "status_command": f"agpair task status {task_id} --json",
+            "watch_command": f"agpair task watch {task_id} --json",
+            "wait_command": f"agpair task wait {task_id} --json",
+            "evidence_commands": [
+                f"agpair task logs {task_id} --include-executor-output",
+                f"agpair task diff {task_id}",
+                f"agpair task apply {task_id} --check",
+            ],
+            "background_ok": bool(current_task.background_ok) if current_task is not None else False,
+            "exit_code": code,
+            "task": task_payload,
+            "committed_result": task_payload["committed_result"] if task_payload is not None else None,
+            "failure_context": failure_context,
+        },
+        code,
+    )
+
+
+def _emit_task_start_json(
+    paths: AppPaths,
+    task_id: str,
+    *,
+    wait: bool,
+    interval_seconds: float,
+    timeout_seconds: float,
+    waiter_command: str,
+    start_status: str,
+    auto_structured_sections: list[str],
+    selected_executor: str | None = None,
+) -> None:
+    payload, code = _task_start_json_payload(
+        paths,
+        task_id,
+        wait=wait,
+        interval_seconds=interval_seconds,
+        timeout_seconds=timeout_seconds,
+        waiter_command=waiter_command,
+        start_status=start_status,
+        auto_structured_sections=auto_structured_sections,
+        selected_executor=selected_executor,
+    )
+    _emit_json(payload)
+    if code != 0:
+        raise typer.Exit(code=code)
+
+
 
 @app.command("start", help="Start a task. Wait controls: --wait/--no-wait, --interval-seconds, --timeout-seconds.")
 def start_task(
@@ -1288,6 +1520,7 @@ def start_task(
     wait: bool = _WAIT_OPTION,
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
+    json_output: bool = _JSON_OPTION,
 ) -> None:
     """Start a task. Wait controls: --wait/--no-wait, --interval-seconds, --timeout-seconds."""
     from agpair.executors import get_executor, is_local_cli_backend
@@ -1306,7 +1539,9 @@ def start_task(
         if not allow_nested_delegation:
             raise typer.BadParameter(
                 "nested_delegation_blocked: external executors may not start nested AGPair tasks by default; "
-                "pass --allow-nested-delegation only for an explicitly bounded orchestration task"
+                "finish the current AGPair task directly with local commands and a report, or ask the controller "
+                "to start a separate lane. Pass --allow-nested-delegation only for an explicitly bounded "
+                "orchestration task"
             )
         if not nested_delegation_authorized():
             raise typer.BadParameter(
@@ -1331,12 +1566,6 @@ def start_task(
         authorization_profile=normalized_authorization_profile,
         completion_policy=resolved_completion_policy_request,
     )
-    if auto_structured_missing_sections:
-        typer.echo(
-            "Auto-structured task body: added missing sections "
-            f"({', '.join(auto_structured_missing_sections)}).",
-            err=True,
-        )
     normalized_authorization_summary = authorization_profile_summary(normalized_authorization_profile)
     try:
         effective_policy = resolve_effective_task_policy(
@@ -1411,6 +1640,18 @@ def start_task(
             client_idempotency_key=idempotency_key,
         )
         if existing_task is not None:
+            if json_output:
+                _emit_task_start_json(
+                    paths,
+                    existing_task.task_id,
+                    wait=wait,
+                    interval_seconds=interval_seconds,
+                    timeout_seconds=timeout_seconds,
+                    waiter_command="task_start_auto_wait",
+                    start_status="idempotent_existing",
+                    auto_structured_sections=auto_structured_missing_sections,
+                )
+                return
             typer.echo(existing_task.task_id)
             maybe_auto_wait(
                 paths.db_path,
@@ -1478,6 +1719,18 @@ def start_task(
         )
         if existing_task is None:
             raise
+        if json_output:
+            _emit_task_start_json(
+                paths,
+                existing_task.task_id,
+                wait=wait,
+                interval_seconds=interval_seconds,
+                timeout_seconds=timeout_seconds,
+                waiter_command="task_start_auto_wait",
+                start_status="idempotent_existing",
+                auto_structured_sections=auto_structured_missing_sections,
+            )
+            return
         typer.echo(existing_task.task_id)
         maybe_auto_wait(
             paths.db_path,
@@ -1504,6 +1757,19 @@ def start_task(
                 "deferred",
                 f"dependencies not yet satisfied: {parsed_dep_ids}; daemon will auto-advance",
             )
+            if json_output:
+                _emit_task_start_json(
+                    paths,
+                    final_task_id,
+                    wait=wait,
+                    interval_seconds=interval_seconds,
+                    timeout_seconds=timeout_seconds,
+                    waiter_command="task_start_auto_wait",
+                    start_status="deferred_dependencies",
+                    auto_structured_sections=auto_structured_missing_sections,
+                    selected_executor=selected_executor,
+                )
+                return
             typer.echo(final_task_id)
             maybe_auto_wait(
                 paths.db_path,
@@ -1569,6 +1835,20 @@ def start_task(
             f"dispatched {selected_executor} task",
         )
 
+    if json_output:
+        _emit_task_start_json(
+            paths,
+            final_task_id,
+            wait=wait,
+            interval_seconds=interval_seconds,
+            timeout_seconds=timeout_seconds,
+            waiter_command="task_start_auto_wait",
+            start_status="dispatched",
+            auto_structured_sections=auto_structured_missing_sections,
+            selected_executor=selected_executor,
+        )
+        return
+
     typer.echo(final_task_id)
 
     maybe_auto_wait(
@@ -1590,6 +1870,8 @@ def start_task(
 @app.command("status")
 def task_status(
     task_id: str,
+    repo_path: str | None = typer.Option(None, "--repo-path", "--repo", help="Optional repo context; must match the task's stored repo."),
+    target: str | None = typer.Option(None, "--target", help="Optional target context; must match the task's stored repo."),
     json_output: bool = _JSON_OPTION,
 ) -> None:
     paths = _paths()
@@ -1599,6 +1881,13 @@ def task_status(
         if json_output:
             _emit_json(_not_found_payload(task_id))
         raise typer.Exit(code=1)
+    _ensure_task_repo_context(
+        paths,
+        task,
+        repo_path=repo_path,
+        target=target,
+        json_output=json_output,
+    )
     payload = build_task_payload(paths, task)
     if json_output:
         _emit_json({"ok": True, **payload})
@@ -1803,6 +2092,8 @@ def active_waits() -> None:
 @app.command("logs")
 def task_logs(
     task_id: str,
+    repo_path: str | None = typer.Option(None, "--repo-path", "--repo", help="Optional repo context; must match the task's stored repo."),
+    target: str | None = typer.Option(None, "--target", help="Optional target context; must match the task's stored repo."),
     limit: int = typer.Option(20, "--limit"),
     all_events: bool = typer.Option(False, "--all", help="Include transient operational noise."),
     include_executor_output: bool = typer.Option(False, "--include-executor-output", help="Include safe excerpts from durable stdout/stderr artifacts."),
@@ -1817,6 +2108,13 @@ def task_logs(
         if json_output:
             _emit_json(_not_found_payload(task_id))
         raise typer.Exit(code=1)
+    _ensure_task_repo_context(
+        paths,
+        task,
+        repo_path=repo_path,
+        target=target,
+        json_output=json_output,
+    )
     artifact_paths, artifact_top_level = _artifact_payload(paths, task)
     if raw is not None:
         raw_kind = raw.strip().lower()
@@ -1855,7 +2153,11 @@ def task_logs(
         typer.echo(f"{row.created_at} [{row.source}] {row.event}: {structured_receipt['summary']}")
         typer.echo(
             "  payload: "
-            + json.dumps(structured_receipt["payload"], ensure_ascii=False, sort_keys=True)
+            + json.dumps(
+                _compact_log_value_for_human(structured_receipt["payload"]),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
         )
     if include_executor_output and artifact_top_level.get("executor_output_excerpt"):
         typer.echo("executor_output_excerpt:")
@@ -2083,6 +2385,8 @@ def adopt_task(
 @app.command("wait")
 def wait_task(
     task_id: str,
+    repo_path: str | None = typer.Option(None, "--repo-path", "--repo", help="Optional repo context; must match the task's stored repo."),
+    target: str | None = typer.Option(None, "--target", help="Optional target context; must match the task's stored repo."),
     interval_seconds: float = _INTERVAL_OPTION,
     timeout_seconds: float = _TIMEOUT_OPTION,
     json_output: bool = _JSON_OPTION,
@@ -2097,16 +2401,24 @@ def wait_task(
     """
     paths = _paths()
     tasks = TaskRepository(paths.db_path)
-    if tasks.get_task(task_id) is None:
+    task = tasks.get_task(task_id)
+    if task is None:
         if json_output:
             _emit_json(_not_found_payload(task_id))
             raise typer.Exit(code=1)
         typer.echo(f"task not found: {task_id}", err=True)
         raise typer.Exit(code=1)
+    _ensure_task_repo_context(
+        paths,
+        task,
+        repo_path=repo_path,
+        target=target,
+        json_output=json_output,
+    )
 
     if not json_output:
         typer.echo(f"Waiting for task {task_id} to reach a terminal phase …")
-    task_before_wait = tasks.get_task(task_id)
+    task_before_wait = task
     result = wait_for_terminal_phase(
         paths.db_path,
         task_id,
@@ -2896,12 +3208,6 @@ def retry_task(
             authorization_profile=next_authorization_profile,
             completion_policy=next_completion_policy,
         )
-        if auto_structured_missing_sections:
-            typer.echo(
-                "Auto-structured retry body: added missing sections "
-                f"({', '.join(auto_structured_missing_sections)}).",
-                err=True,
-            )
     try:
         next_effective_policy = resolve_effective_task_policy(
             requested_completion_policy=next_completion_policy,

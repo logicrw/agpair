@@ -503,6 +503,55 @@ def test_task_wait_json_returns_structured_terminal_payload(tmp_path: Path, monk
     assert payload["committed_result"]["validation"] == ["npm test"]
 
 
+def test_task_wait_accepts_matching_repo_context(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WJ-CONTEXT", repo_path=str(repo_path.resolve()))
+    repo.mark_acked(task_id="T-WJ-CONTEXT", session_id="session-json-wait-context")
+    repo.mark_evidence_ready(task_id="T-WJ-CONTEXT")
+
+    result = CliRunner().invoke(
+        app,
+        ["task", "wait", "T-WJ-CONTEXT", "--repo-path", str(repo_path), "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["task_id"] == "T-WJ-CONTEXT"
+
+
+def test_task_wait_rejects_mismatched_repo_context(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo-a"
+    other_repo_path = tmp_path / "repo-b"
+    repo_path.mkdir()
+    other_repo_path.mkdir()
+    repo = _make_repo(tmp_path)
+    repo.create_task(task_id="T-WJ-CONTEXT-MISMATCH", repo_path=str(repo_path.resolve()))
+    repo.mark_acked(task_id="T-WJ-CONTEXT-MISMATCH", session_id="session-json-wait-context-mismatch")
+    repo.mark_evidence_ready(task_id="T-WJ-CONTEXT-MISMATCH")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "wait",
+            "T-WJ-CONTEXT-MISMATCH",
+            "--repo-path",
+            str(other_repo_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"] == "task_repo_mismatch"
+
+
 def test_task_wait_json_reports_lease_outcome(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = _make_repo(tmp_path)

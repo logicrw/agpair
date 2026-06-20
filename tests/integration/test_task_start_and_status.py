@@ -650,6 +650,72 @@ def test_task_status_json_returns_structured_payload(tmp_path: Path, monkeypatch
     assert payload["liveness_state"] in {"active_via_heartbeat", "silent", "active_via_workspace"}
 
 
+def test_task_status_accepts_matching_repo_context(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = make_repo_dir(tmp_path)
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-JSON-CONTEXT", repo_path=str(repo_path.resolve()))
+    repo.mark_acked(task_id="TASK-JSON-CONTEXT", session_id="session-json-context")
+
+    result = CliRunner().invoke(
+        app,
+        ["task", "status", "TASK-JSON-CONTEXT", "--repo-path", str(repo_path), "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["task_id"] == "TASK-JSON-CONTEXT"
+
+
+def test_task_status_accepts_matching_target_context(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = make_repo_dir(tmp_path)
+    add_result = CliRunner().invoke(app, ["target", "add", "--name", "ctx", "--repo-path", str(repo_path)])
+    assert add_result.exit_code == 0
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-JSON-TARGET-CONTEXT", repo_path=str(repo_path.resolve()))
+    repo.mark_acked(task_id="TASK-JSON-TARGET-CONTEXT", session_id="session-json-target-context")
+
+    result = CliRunner().invoke(
+        app,
+        ["task", "status", "TASK-JSON-TARGET-CONTEXT", "--target", "ctx", "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["task_id"] == "TASK-JSON-TARGET-CONTEXT"
+
+
+def test_task_status_rejects_mismatched_repo_context(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = make_repo_dir(tmp_path, name="repo-a")
+    other_repo_path = make_repo_dir(tmp_path, name="repo-b")
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-JSON-CONTEXT-MISMATCH", repo_path=str(repo_path.resolve()))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "status",
+            "TASK-JSON-CONTEXT-MISMATCH",
+            "--repo-path",
+            str(other_repo_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"] == "task_repo_mismatch"
+    assert payload["task_id"] == "TASK-JSON-CONTEXT-MISMATCH"
+    assert payload["repo_path"] == str(repo_path.resolve())
+    assert payload["requested_repo_path"] == str(other_repo_path.resolve())
+
+
 def test_task_status_json_includes_effective_no_progress_threshold(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = make_task_repo(tmp_path)
@@ -1085,6 +1151,42 @@ def test_task_logs_json_includes_structured_receipt_payload(tmp_path: Path, monk
     payload = json.loads(result.stdout)
     assert payload["logs"][0]["structured_receipt"]["summary"] == "Need a credential"
     assert payload["logs"][0]["structured_receipt"]["payload"]["blocker_type"] == "auth"
+
+
+def test_task_logs_human_compacts_large_structured_payloads(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-LOGS-COMPACT", repo_path="/tmp/repo")
+    journal = make_journal_repo(tmp_path)
+    journal.append(
+        "TASK-LOGS-COMPACT",
+        "inline_poll",
+        "ready_for_review",
+        json.dumps(
+            {
+                "schema_version": "1",
+                "task_id": "TASK-LOGS-COMPACT",
+                "attempt_no": 1,
+                "review_round": 0,
+                "status": "EVIDENCE_PACK",
+                "summary": "Large scope validation",
+                "payload": {"changed_files": [f"file-{idx}.py" for idx in range(20)]},
+            }
+        ),
+    )
+
+    human = CliRunner().invoke(app, ["task", "logs", "TASK-LOGS-COMPACT", "--limit", "1"])
+    assert human.exit_code == 0
+    assert "file-0.py" in human.stdout
+    assert "file-9.py" in human.stdout
+    assert "file-10.py" not in human.stdout
+    assert "10 more item(s) omitted; use --json for full payload" in human.stdout
+
+    machine = CliRunner().invoke(app, ["task", "logs", "TASK-LOGS-COMPACT", "--limit", "1", "--json"])
+    assert machine.exit_code == 0
+    payload = json.loads(machine.stdout)
+    changed_files = payload["logs"][0]["structured_receipt"]["payload"]["changed_files"]
+    assert changed_files == [f"file-{idx}.py" for idx in range(20)]
 
 
 def test_task_logs_json_returns_not_found_error(tmp_path: Path, monkeypatch) -> None:
@@ -1851,7 +1953,7 @@ def test_task_retry_local_executor_redispatches_locally(tmp_path: Path, monkeypa
     )
 
     assert retry.exit_code == 0
-    assert "Auto-structured retry body" in retry.stderr
+    assert "Auto-structured retry body" not in retry.stderr
     task = make_task_repo(tmp_path).get_task("TASK-LOCAL-RETRY")
     assert task is not None
     assert task.phase == "acked"
@@ -1965,6 +2067,49 @@ def test_task_logs_filters_noise_by_default(tmp_path: Path, monkeypatch) -> None
     assert "created" in events_all
 
 
+def test_task_logs_accepts_matching_repo_context(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = make_repo_dir(tmp_path)
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-LOGS-CONTEXT", repo_path=str(repo_path.resolve()))
+    journal = make_journal_repo(tmp_path)
+    journal.append("TASK-LOGS-CONTEXT", "cli", "created", "Goal: test")
+
+    result = CliRunner().invoke(
+        app,
+        ["task", "logs", "TASK-LOGS-CONTEXT", "--repo-path", str(repo_path), "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["task_id"] == "TASK-LOGS-CONTEXT"
+
+
+def test_task_logs_rejects_mismatched_repo_context(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = make_repo_dir(tmp_path, name="repo-a")
+    other_repo_path = make_repo_dir(tmp_path, name="repo-b")
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-LOGS-CONTEXT-MISMATCH", repo_path=str(repo_path.resolve()))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "logs",
+            "TASK-LOGS-CONTEXT-MISMATCH",
+            "--repo-path",
+            str(other_repo_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["error"] == "task_repo_mismatch"
+
+
 def test_task_accept_marks_terminal_task_approved(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     tasks = make_task_repo(tmp_path)
@@ -2064,7 +2209,7 @@ def test_task_start_auto_structures_missing_sections(tmp_path: Path, monkeypatch
         ],
     )
     assert result.exit_code == 0
-    assert "Auto-structured task body" in result.stderr
+    assert "Auto-structured task body" not in result.stderr
     task_id = result.stdout.strip().splitlines()[-1]
     created = next(row for row in make_journal_repo(tmp_path).tail(task_id, limit=10) if row.event == "created")
     assert "Goal:" in created.body
@@ -2160,6 +2305,107 @@ def test_task_start_accepts_common_aliases_for_first_attempts(tmp_path: Path, mo
     assert task.completion_policy == "report"
     assert task.controller_wait_seconds == 7
     assert task.execution_budget_seconds == 60
+
+
+def test_task_start_json_accepts_common_aliases(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
+    runner = CliRunner()
+
+    body = "\n\n".join(
+        [
+            "Goal:\nReview the repository configuration surface.",
+            "Scope:\nThis temporary test repository only.",
+            "Required changes:\nNone. This is report-only. Do not edit files.",
+            "Exit criteria:\nReturn a concise report with evidence paths.",
+        ]
+    )
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo",
+            str(repo_path),
+            "--authorization-profile",
+            "readonly",
+            "--completion-policy",
+            "report",
+            "--controller-wait-lease",
+            "7",
+            "--execution-budget",
+            "60",
+            "--prompt",
+            body,
+            "--json",
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["start_status"] == "dispatched"
+    assert payload["outcome"] == "not_waited"
+    assert payload["wait_requested"] is False
+    assert payload["auto_structured_sections"] == []
+    assert payload["status_command"] == f"agpair task status {payload['task_id']} --json"
+    task = make_task_repo(tmp_path).get_task(payload["task_id"])
+    assert task is not None
+    assert task.authorization_profile == "local_readonly"
+    assert task.controller_wait_seconds == 7
+    assert task.execution_budget_seconds == 60
+
+
+def test_task_start_json_returns_when_wait_reaches_failure_phase(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
+    task_mod = import_module("agpair.cli.task")
+    captured: dict[str, object] = {}
+
+    def fake_wait_for_terminal_phase(db_path: Path, task_id: str, **kwargs):
+        captured["terminal_phases"] = kwargs["terminal_phases"]
+        TaskRepository(db_path).mark_blocked(task_id=task_id, reason="executor failed")
+        return task_mod.WaitResult(phase="blocked", outcome="terminal_failure")
+
+    monkeypatch.setattr(task_mod, "wait_for_terminal_phase", fake_wait_for_terminal_phase)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo",
+            str(repo_path),
+            "--authorization-profile",
+            "readonly",
+            "--completion-policy",
+            "report",
+            "--task-id",
+            "TASK-JSON-FAILFAST",
+            "--body",
+            "Goal: review\nScope: repo\nRequired changes: None. This is report-only. Do not edit files.\nExit criteria: report",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert captured["terminal_phases"] == task_mod.TERMINAL_PHASES
+    assert payload["ok"] is False
+    assert payload["phase"] == "blocked"
+    assert payload["outcome"] == "terminal_failure"
+    assert payload["failure_context"]["summary"] == "executor failed"
 
 
 def test_task_start_rejects_placeholder(tmp_path: Path, monkeypatch) -> None:

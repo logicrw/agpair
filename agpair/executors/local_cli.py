@@ -17,6 +17,7 @@ from agpair.executor_errors import (
     classify_executor_error as _classify_executor_error,
     looks_waiting_for_input as _looks_waiting_for_input,
     prioritize_error_lines,
+    salient_error_lines,
 )
 from agpair.internal_context import build_internal_executor_env
 from agpair.executors.base import DispatchResult, ExecutorAdapter, TaskState
@@ -1087,7 +1088,9 @@ sys.exit(rc)
             lines = stderr_file.read_text(encoding="utf-8").strip().splitlines()
             clean_lines = [_strip_ansi(l) for l in lines[-20:] if l.strip()]
             if clean_lines:
-                summary_parts.append("stderr: " + "\n".join(prioritize_error_lines(clean_lines, max_lines=5)))
+                selected_lines = prioritize_error_lines(clean_lines, max_lines=5)
+                if selected_lines:
+                    summary_parts.append("stderr: " + "\n".join(selected_lines))
 
         # 3. stdout
         stdout_file = temp_dir / "stdout.log"
@@ -1095,7 +1098,9 @@ sys.exit(rc)
             lines = stdout_file.read_text(encoding="utf-8").strip().splitlines()
             clean_lines = [_strip_ansi(l) for l in lines[-5:] if l.strip()]
             if clean_lines:
-                summary_parts.append("stdout: " + "\n".join(prioritize_error_lines(clean_lines, max_lines=3)))
+                selected_lines = salient_error_lines(clean_lines, max_lines=3)
+                if selected_lines:
+                    summary_parts.append("stdout: " + "\n".join(selected_lines))
 
         return "\n".join(summary_parts)[:max_chars] or "No output captured"
 

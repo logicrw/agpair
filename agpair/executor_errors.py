@@ -27,6 +27,52 @@ _SALIENT_ERROR_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     *_WAITING_FOR_INPUT_PATTERNS,
 )
 
+_BOOTSTRAP_STDERR_NOISE_MARKERS: Final[tuple[str, ...]] = (
+    "config has unrecognized key",
+    "config.toml has unrecognized key",
+    "preferred model",
+    "plugin discovered",
+    "plugin manifest",
+    "manifest path escapes plugin root",
+    "plugin name collision",
+    "plugin name collision resolved by scope precedence",
+    "skill name mismatch",
+    "skill name/path mismatch",
+    "skill name does not match expected name from path",
+    "skill name shadowed by a higher-precedence skill",
+    "agent definition parse failure",
+    "hooks: skipped unrecognized event names",
+    "hook loading from settings file",
+    "hooks discovered but not trusted",
+    "project hooks discovered but not trusted",
+    "skipped unrecognized event names",
+    "failed to parse hook file",
+    "parse errors for invalid matcher groups",
+    "mcp-debugger",
+    "session registry sync",
+    "session registry summary sync failed",
+    "grep timed out",
+    "shell state dump read timed out",
+)
+
+
+def is_bootstrap_noise_line(line: str) -> bool:
+    normalized = line.strip().lower()
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in _BOOTSTRAP_STDERR_NOISE_MARKERS)
+
+
+def is_bootstrap_noise(text: str) -> bool:
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+    return all(is_bootstrap_noise_line(line) for line in lines)
+
+
+def non_bootstrap_noise_lines(lines: Sequence[str]) -> list[str]:
+    return [line.strip() for line in lines if line.strip() and not is_bootstrap_noise_line(line)]
+
 
 def classify_executor_error(summary: str) -> ExecutorErrorClassification:
     normalized = summary.lower()
@@ -58,10 +104,19 @@ def looks_waiting_for_input(text: str) -> bool:
 
 def prioritize_error_lines(lines: Sequence[str], *, max_lines: int) -> list[str]:
     cleaned = [line.strip() for line in lines if line.strip()]
-    salient = [line for line in cleaned if any(pattern.search(line) for pattern in _SALIENT_ERROR_PATTERNS)]
+    useful = non_bootstrap_noise_lines(cleaned)
+    salient = salient_error_lines(useful, max_lines=max_lines)
     if salient:
-        return salient[-max_lines:]
-    return cleaned[-max_lines:]
+        return salient
+    return useful[-max_lines:]
+
+
+def salient_error_lines(lines: Sequence[str], *, max_lines: int) -> list[str]:
+    cleaned = [line.strip() for line in lines if line.strip()]
+    useful = non_bootstrap_noise_lines(cleaned)
+    return [
+        line for line in useful if any(pattern.search(line) for pattern in _SALIENT_ERROR_PATTERNS)
+    ][-max_lines:]
 
 
 def _looks_turn_budget_exhausted(text: str) -> bool:

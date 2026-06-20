@@ -164,12 +164,14 @@ def test_real_executor_startup_warnings_are_not_live_output(tmp_path: Path) -> N
     stderr_path = session_dir / "stderr.log"
     stderr_path.write_text(
         "WARN config.toml has unrecognized key(s): legacyProvider\n"
+        "WARN config has unrecognized key(s): subagents.default_model\n"
         "WARN manifest path escapes plugin root; skipping path=/Users/example/.claude/plugins/foo\n"
         "WARN plugin name collision resolved by scope precedence name=tools scope=user\n"
         "WARN skill name does not match expected name from path: file=skills/foo/SKILL.md\n"
         "WARN skill name shadowed by a higher-precedence skill name=review-work\n"
         "WARN hooks: skipped unrecognized event names: PreToolUse\n"
-        "WARN hook loading from settings file: failed to parse hook file hooks.json\n",
+        "WARN hook loading from settings file: failed to parse hook file hooks.json\n"
+        "WARN shell state dump read timed out after 5s (END marker never arrived)\n",
         encoding="utf-8",
     )
 

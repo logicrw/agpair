@@ -44,7 +44,10 @@ def test_task_start_blocks_nested_delegation_by_default(monkeypatch, tmp_path) -
     )
 
     assert result.exit_code != 0
-    assert "nested_delegation_blocked" in (result.stderr or result.output)
+    output = result.stderr or result.output
+    assert "nested_delegation_blocked" in output
+    assert "finish the current AGPair task directly" in output
+    assert "ask the controller to start a separate lane" in output
 
 
 def test_task_start_rejects_self_authorized_nested_delegation(monkeypatch, tmp_path) -> None:

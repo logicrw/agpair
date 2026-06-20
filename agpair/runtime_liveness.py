@@ -16,6 +16,7 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from agpair.executor_errors import is_bootstrap_noise
 from agpair.models import TaskRecord
 
 # Default freshness window — same spirit as heartbeat silence window.
@@ -73,35 +74,6 @@ def _is_fresh(iso_timestamp: str | None, cutoff: datetime) -> bool:
         return dt > cutoff
     except (ValueError, TypeError):
         return False
-
-
-_BOOTSTRAP_STDERR_NOISE_MARKERS = (
-    "config.toml has unrecognized key",
-    "plugin discovered",
-    "plugin manifest",
-    "manifest path escapes plugin root",
-    "plugin name collision resolved by scope precedence",
-    "skill name mismatch",
-    "skill name does not match expected name from path",
-    "skill name shadowed by a higher-precedence skill",
-    "agent definition parse failure",
-    "hooks: skipped unrecognized event names",
-    "hook loading from settings file",
-    "failed to parse hook file",
-    "mcp-debugger",
-    "broken pipe",
-    "session registry sync",
-    "session registry summary sync failed",
-    "grep timed out",
-)
-
-
-def is_bootstrap_noise(text: str) -> bool:
-    """Return True when text contains only known startup/plugin noise."""
-    lines = [line.strip().lower() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return False
-    return all(any(marker in line for marker in _BOOTSTRAP_STDERR_NOISE_MARKERS) for line in lines)
 
 
 def _stderr_has_useful_signal(path: Path) -> bool:

@@ -168,6 +168,94 @@ def test_error_summary_prioritizes_terminal_error_over_plugin_noise(tmp_path) ->
     assert "plugin discovered" not in summary
 
 
+def test_error_summary_filters_external_cli_startup_noise(tmp_path) -> None:
+    executor = DummyLocalCLIExecutor()
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "stderr.log").write_text(
+        "\n".join(
+            [
+                "config.toml has unrecognized key(s): subagents.default_model",
+                "config has unrecognized key(s): subagents.default_model",
+                "plugin name collision resolved by scope precedence: frontend-design",
+                "skill name/path mismatch: felo-superAgent",
+                "project hooks discovered but not trusted for /tmp/repo",
+                ".claude/settings.json skipped unrecognized event names: TaskCreated",
+                "session registry summary sync failed after title generation error=session update failed",
+                "shell state dump read timed out after 5s (END marker never arrived)",
+                "Error: max turns reached",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = executor._extract_error_summary(session)
+
+    assert "Error: max turns reached" in summary
+    assert "session registry summary sync failed" not in summary
+    assert "config.toml has unrecognized key" not in summary
+    assert "plugin name collision" not in summary
+    assert "skill name/path mismatch" not in summary
+
+
+def test_error_summary_ignores_only_external_cli_startup_noise(tmp_path) -> None:
+    executor = DummyLocalCLIExecutor()
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "stderr.log").write_text(
+        "\n".join(
+            [
+                "config.toml has unrecognized key(s): marketplace.official_marketplace_auto_installed",
+                "config has unrecognized key(s): marketplace.official_marketplace_auto_installed",
+                "plugin name collision resolved by scope precedence: security-guidance",
+                ".cursor/hooks.json parse errors for invalid matcher groups",
+                "shell state dump read timed out after 5s (END marker never arrived)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = executor._extract_error_summary(session)
+
+    assert summary == "No output captured"
+
+
+def test_error_summary_preserves_bare_broken_pipe(tmp_path) -> None:
+    executor = DummyLocalCLIExecutor()
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "stderr.log").write_text("Broken pipe\n", encoding="utf-8")
+
+    summary = executor._extract_error_summary(session)
+
+    assert "Broken pipe" in summary
+
+
+def test_error_summary_omits_non_salient_structured_stdout_when_stderr_has_error(tmp_path) -> None:
+    executor = DummyLocalCLIExecutor()
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "stderr.log").write_text("Error: max turns reached\n", encoding="utf-8")
+    (session / "stdout.log").write_text(
+        "\n".join(
+            [
+                '{"text": "Reviewing diff"}',
+                '"requestId": "request-123"',
+                '"sessionId": "session-123"',
+                '"thought": "internal provider reasoning"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = executor._extract_error_summary(session)
+
+    assert "Error: max turns reached" in summary
+    assert "request-123" not in summary
+    assert "session-123" not in summary
+    assert "internal provider reasoning" not in summary
+
+
 def test_error_summary_prioritizes_stdout_error_over_progress_noise(tmp_path) -> None:
     executor = DummyLocalCLIExecutor()
     session = tmp_path / "session"
