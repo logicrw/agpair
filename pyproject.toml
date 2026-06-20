@@ -15,7 +15,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "basedpyright>=1.39,<2.0",
   "pytest>=8.4,<9.0",
+  "ruff>=0.15,<1.0",
 ]
 
 [project.scripts]
@@ -25,6 +27,23 @@ agent-bus = "agpair.cli.agent_bus:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["E402"]
+"tests/unit/test_auto_advance.py" = ["E402"]
+"tests/unit/test_gemini_executor.py" = ["E402"]
+
+[tool.basedpyright]
+pythonVersion = "3.12"
+include = ["agpair", "scripts", "tests"]
+typeCheckingMode = "basic"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agpair"]

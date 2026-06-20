@@ -16,7 +16,7 @@ def _output_format() -> str:
 
 
 def _max_turn_args() -> list[str]:
-    value = os.environ.get("AGPAIR_GROK_MAX_TURNS", "12").strip()
+    value = os.environ.get("AGPAIR_GROK_MAX_TURNS", "").strip()
     if not value:
         return []
     if not value.isdigit() or int(value) <= 0:

@@ -131,11 +131,6 @@ def build_doctor_report(
     status = daemon_status(paths)
     latest_receipt_id, db_error = _safe_read_latest_receipt_id(paths.db_path) if db_exists else (None, None)
 
-    # Build exclude-PIDs set from the daemon's own PID so that the agpair
-    # daemon holding the shared lock is not reported as an external conflict.
-    daemon_pid = status.get("pid")
-    exclude_pids: set[int] | None = {daemon_pid} if isinstance(daemon_pid, int) and daemon_pid > 0 else None
-
     desktop_reader_conflict = None
 
     executor_cli_health = _build_executor_cli_health(run_launch_probe=fresh)

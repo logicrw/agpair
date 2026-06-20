@@ -12,15 +12,12 @@ Covers:
 from __future__ import annotations
 
 import sqlite3
-import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import click.exceptions
-
 import pytest
+import typer
 
-from agpair.models import WaiterRecord
 from agpair.storage.db import ensure_database
 from agpair.storage.tasks import TaskRepository
 from agpair.storage.waiters import WaiterRepository
@@ -87,8 +84,9 @@ class TestWaiterRepository:
         db = _tmp_db(tmp_path)
         repo = WaiterRepository(db)
         w = repo.start_waiter(task_id="T-1", command="task_wait")
-        original_poll = w.last_poll_at
-        import time; time.sleep(0.05)  # ensure timestamp differs
+        import time
+
+        time.sleep(0.05)  # ensure timestamp differs
         repo.update_poll(w.waiter_id)
         active = repo.get_active_waiter("T-1")
         assert active is not None
@@ -199,7 +197,6 @@ class TestWaitPersistsWaiter:
         tasks.mark_acked(task_id="T-1", session_id="s1")
 
         poll_count = 0
-        original_sleep = None
 
         class PollingClock:
             def __init__(self):
@@ -257,7 +254,7 @@ class TestWaiterGuard:
         paths = MagicMock()
         paths.db_path = db
 
-        with pytest.raises((SystemExit, click.exceptions.Exit)):
+        with pytest.raises((SystemExit, typer.Exit)):
             _guard_active_waiter(paths, "T-1", force=False, command="continue")
 
     def test_guard_allows_with_force(self, tmp_path: Path):

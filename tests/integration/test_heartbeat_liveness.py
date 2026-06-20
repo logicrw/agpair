@@ -15,11 +15,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import sqlite3
 
-import pytest
 
 from agpair.config import AppPaths
-from agpair.models import TaskRecord
-from agpair.storage.db import connect, ensure_database
+from agpair.storage.db import ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
 from agpair.transport import messages

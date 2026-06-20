@@ -30,7 +30,6 @@ from agpair.completion import derive_effective_task_safety, resolve_effective_ta
 from agpair.config import AppPaths
 from agpair.executors.policy import next_eligible_executor, resolve_controller_policy, resolve_environment_metadata
 from agpair.executors.routing import (
-    default_executor_id,
     is_legacy_executor,
     is_supported_executor,
     supported_executor_ids,
@@ -43,7 +42,6 @@ from agpair.models import (
 )
 from agpair.executor_errors import is_bootstrap_noise
 from agpair.runtime_liveness import (
-    LivenessState,
     build_signal_summary,
     classify_liveness,
     effective_no_progress_seconds,

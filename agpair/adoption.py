@@ -158,7 +158,6 @@ def derive_adoption_decision(
     )
     has_report = bool(_string_value(payload.get("report"))) or _path_has_content(report_path)
     has_receipt = isinstance(receipt, Mapping) or _path_has_content(receipt_path)
-    has_stdout = _path_has_content(stdout_path)
     has_validation = bool(payload.get("validation")) or bool(payload.get("validation_not_run"))
     has_commit = bool(_string_value(payload.get("commit_ref")) or _string_value(payload.get("commit")) or _string_value(payload.get("commit_sha")))
     has_diff = bool((git_status_summary or "").strip())

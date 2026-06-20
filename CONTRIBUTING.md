@@ -13,12 +13,16 @@ python3 -m pip install -e '.[dev]'
 ## Running Tests
 
 ```bash
-# Python tests
+# Python checks
+python -m ruff check .
 python -m pytest -q
 
 # Companion extension tests
 cd companion-extension && npm install && npm test
 ```
+
+`python -m basedpyright` is configured for local type-debt tracking, but it is
+not yet a CI gate because the current repository baseline is not clean.
 
 ## Submitting Changes
 

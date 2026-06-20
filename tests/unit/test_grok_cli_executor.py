@@ -31,8 +31,6 @@ def test_grok_cli_command_is_repo_scoped_and_managed_natural_by_default() -> Non
         "--output-format",
         "json",
         "--always-approve",
-        "--max-turns",
-        "12",
         "--single",
         "Goal: edit the repo",
     ]

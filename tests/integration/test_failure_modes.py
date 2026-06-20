@@ -3,11 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import sqlite3
-import os
 
-from typer.testing import CliRunner
 
-from agpair.cli.app import app
 from agpair.config import AppPaths
 from agpair.storage.db import ensure_database
 from agpair.storage.journal import JournalRepository

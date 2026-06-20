@@ -4,12 +4,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import json
 import re
-import sqlite3
 import time
 
 from agpair.config import AppPaths
 from agpair.models import utcnow_iso
-from agpair.terminal_receipts import blocked_reason_from_receipt, parse_structured_terminal_receipt, structured_receipt_to_dict
+from agpair.terminal_receipts import parse_structured_terminal_receipt, structured_receipt_to_dict
 from agpair.storage.db import connect, ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.receipts import ReceiptRepository
@@ -486,7 +485,6 @@ def ingest_new_receipts(paths: AppPaths, client, *, current: datetime) -> tuple[
                 expected_status=status,
                 expected_task_id=task_id,
             )
-        journal_body = structured_receipt.raw_body if structured_receipt is not None else clean_body
 
         is_new = receipts.record(message_id, task_id, status, delivery_id=delivery_id)
         claim_id = message.get("claim_id")

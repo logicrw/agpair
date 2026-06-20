@@ -216,7 +216,7 @@ def inspect(
             if task_payload.get("failure_context"):
                 typer.echo(f"Blocked:     {task_payload['failure_context'].get('summary')}")
             if task_payload.get("committed_result"):
-                typer.echo(f"Committed:   Yes")
+                typer.echo("Committed:   Yes")
 
 
 

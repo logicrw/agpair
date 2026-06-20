@@ -10,7 +10,6 @@ Waiter state is persisted to the ``waiters`` table so that other processes
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import time
 import typing
@@ -19,12 +18,10 @@ from pathlib import Path
 
 import typer
 
-from agpair import terminal_receipts
 from agpair.executors import get_executor, is_local_cli_backend
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
 from agpair.storage.waiters import WaiterRepository
-from agpair.transport import messages
 
 # ---------------------------------------------------------------------------
 # Constants

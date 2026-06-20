@@ -5,7 +5,6 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import click
 import pytest
@@ -28,7 +27,6 @@ from agpair.config import AppPaths
 from agpair.storage.db import ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
-from tests.fixtures.fake_agent_bus import write_fake_agent_bus
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +159,6 @@ def test_wait_polls_until_phase_changes(tmp_path: Path):
 
     paths = _make_paths(tmp_path)
     poll_count = 0
-    original_sleep = FakeClock.sleep
 
     class TrackingClock(FakeClock):
         def sleep(self, seconds: float) -> None:

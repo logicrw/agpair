@@ -1,11 +1,9 @@
 """Tests for inline executor polling in ``agpair task wait``."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 
 from agpair.cli.wait import wait_for_terminal_phase
 from agpair.config import AppPaths
@@ -13,7 +11,6 @@ from agpair.executors.base import TaskState
 from agpair.storage.db import ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.tasks import TaskRepository
-from agpair.transport import messages
 
 
 # ---------------------------------------------------------------------------

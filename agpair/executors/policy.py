@@ -154,7 +154,6 @@ EXECUTOR_SPECS: dict[str, ExecutorSpec] = {
                 "--cwd",
                 "--output-format",
                 "--always-approve",
-                "--max-turns",
             ],
             "isolated_auth_env_vars": [],
             "isolation_disable_env_var": None,

@@ -9,15 +9,13 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
 from agpair.config import AppPaths
 from agpair.executors.base import TaskState
 from agpair.storage.db import connect, ensure_database
-from agpair.storage.journal import JournalRepository
-from agpair.storage.receipts import ReceiptRepository
 from agpair.storage.tasks import TaskRepository
 
 
@@ -85,7 +83,6 @@ def test_retry_terminal_receipt_not_deduped(tmp_path: Path, monkeypatch) -> None
 
     paths = seed_task(tmp_path, "TASK-RETRY")
     tasks = TaskRepository(paths.db_path)
-    receipts = ReceiptRepository(paths.db_path)
 
     # --- Attempt 1: ack + terminal COMMITTED ---
     with connect(paths.db_path) as conn:

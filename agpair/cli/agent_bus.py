@@ -70,7 +70,6 @@ def _db_path() -> str:
 
 def _connect(db: str | None = None, *, timeout: float = 10) -> sqlite3.Connection:
     path = db or _db_path()
-    exists = Path(path).exists()
     conn = sqlite3.connect(path, timeout=timeout)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA busy_timeout=5000;")

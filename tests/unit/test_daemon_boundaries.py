@@ -236,7 +236,7 @@ def _commit_with_message(repo_dir: Path, message: str) -> str:
     dummy = repo_dir / "dummy.txt"
     dummy.write_text(message)
     _subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True, check=True)
-    result = _subprocess.run(
+    _subprocess.run(
         ["git", "commit", "-m", message],
         cwd=repo_dir, capture_output=True, text=True, check=True,
     )

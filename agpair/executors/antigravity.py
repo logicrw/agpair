@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import typing
 
 from agpair.executors.base import DispatchResult, ExecutorAdapter, TaskState
 from agpair.models import ContinuationCapability, ExecutorSafetyMetadata

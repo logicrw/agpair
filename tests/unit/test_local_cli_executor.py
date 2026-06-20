@@ -5,7 +5,6 @@ from unittest import mock
 from agpair.executors.local_cli import (
     LocalCLIExecutor,
     _classify_executor_error,
-    _get_process_start_time,
     _is_process_alive,
     _looks_waiting_for_input,
 )
@@ -307,6 +306,8 @@ def test_dispatch_injects_authorization_and_structured_receipt_contract(tmp_path
     assert "Print the requested report or conclusion directly to stdout" in prompt
     assert "final output line must be one single-line JSON terminal receipt object" in prompt
     assert "payload.report" in prompt
+    assert "Report-only outcome requirements" in prompt
+    assert "Choose the inspection strategy yourself" in prompt
 
 
 def test_structured_receipt_from_logs_parses_pretty_wrapped_text(tmp_path):

@@ -19,12 +19,10 @@ import os
 from pathlib import Path
 import sqlite3
 
-import pytest
 from typer.testing import CliRunner
 
 from agpair.cli.app import app
 from agpair.config import AppPaths
-from agpair.models import TaskRecord
 from agpair.runtime_liveness import (
     LivenessState,
     build_signal_summary,
@@ -32,10 +30,9 @@ from agpair.runtime_liveness import (
     is_task_live,
     recommend_controller_action,
 )
-from agpair.storage.db import connect, ensure_database
-from agpair.storage.journal import JournalRepository
+from agpair.storage.db import ensure_database
 from agpair.storage.tasks import TaskRepository
-from tests.fixtures.fake_agent_bus import read_calls, write_fake_agent_bus
+from tests.fixtures.fake_agent_bus import write_fake_agent_bus
 
 
 # ---------------------------------------------------------------------------
