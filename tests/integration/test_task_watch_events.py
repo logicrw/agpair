@@ -70,6 +70,11 @@ def test_watch_event_emits_agent_result_changed_without_log_body() -> None:
             "state": "usable",
             "controller_action": "review_then_apply",
         },
+        artifact_result={
+            "state": "usable",
+            "primary_artifact": "diff",
+            "global_hard_blockers": [],
+        },
         recovery_decision={
             "action": "review_then_apply",
             "reason": "External executor produced code or diff evidence that must be reviewed before applying.",
@@ -81,5 +86,23 @@ def test_watch_event_emits_agent_result_changed_without_log_body() -> None:
     assert should_emit_watch_event(previous, current)
     assert payload["event"] == "agent_result_changed"
     assert payload["agent_result"]["controller_action"] == "review_then_apply"
+    assert payload["artifact_result"]["primary_artifact"] == "diff"
     assert payload["recovery_decision"]["action"] == "review_then_apply"
     assert "log_body" not in payload
+
+
+def test_watch_event_emits_when_artifact_result_changes() -> None:
+    previous = WatchEvent(
+        task_id="TASK-123",
+        state="ready_for_review",
+        cursor="2",
+        artifact_result={"state": "needs_review", "primary_artifact": "stdout_salvage"},
+    )
+    current = WatchEvent(
+        task_id="TASK-123",
+        state="ready_for_review",
+        cursor="2",
+        artifact_result={"state": "usable", "primary_artifact": "report"},
+    )
+
+    assert should_emit_watch_event(previous, current)

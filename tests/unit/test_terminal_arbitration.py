@@ -48,3 +48,23 @@ def test_cancelled_result_json_is_not_completed_report() -> None:
 
     assert terminal_arbitration.looks_like_completed_report(text) is False
     assert terminal_arbitration.completed_report_text(text) is None
+
+
+def test_json_text_field_with_final_report_is_completed_report() -> None:
+    terminal_arbitration = import_module("agpair.terminal_arbitration")
+    text = json.dumps(
+        {
+            "text": (
+                "I inspected the plan and implementation surface.\n\n"
+                "## Implementation Report\n\n"
+                "- Added the artifact layer.\n"
+                "- Wired adoption and recovery.\n"
+                "- Ran focused tests."
+            )
+        }
+    )
+
+    report = terminal_arbitration.completed_report_text(text)
+
+    assert report is not None
+    assert "Implementation Report" in report

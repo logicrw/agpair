@@ -279,6 +279,7 @@ def _recovery_decision_payload(
     controller: str | None,
     executor_id: str | None,
     agent_result: dict[str, Any] | None,
+    artifact_result: dict[str, Any] | None = None,
     wait_outcome: str | None = None,
     execution_budget_exhausted: bool = False,
     status_payload: dict[str, Any] | None = None,
@@ -299,6 +300,7 @@ def _recovery_decision_payload(
             current_executor=executor_id,
             requested_executor=executor_id,
             agent_result=agent_result,
+            artifact_result=artifact_result,
             liveness_state=None,
             wait_outcome=wait_outcome,
             execution_budget_exhausted=execution_budget_exhausted,
@@ -416,6 +418,9 @@ def _adoption_evidence(
     )
     status_adoption = status_payload.get("adoption_result") if status_payload else None
     status_agent_result = status_payload.get("agent_result") if status_payload else None
+    status_artifact_result = status_payload.get("artifact_result") if status_payload else None
+    if not isinstance(status_artifact_result, dict) and isinstance(status_adoption, dict):
+        status_artifact_result = status_adoption.get("artifact_result")
     raw_status_adoptable_result = (
         status_adoption.get("adoptable_result")
         if isinstance(status_adoption, dict)
@@ -473,6 +478,7 @@ def _adoption_evidence(
         "adoptable_result": adoptable_result,
         "adoptable": is_adoptable,
         "agent_result": agent_result,
+        "artifact_result": status_artifact_result if isinstance(status_artifact_result, dict) else None,
         "controller_action": agent_result.get("controller_action"),
         "adoption_blockers": adoption_blockers,
         "controller_rework": controller_rework,
@@ -973,6 +979,7 @@ def _executor_result(
             controller=policy_controller,
             executor_id=executor_id,
             agent_result=adoption.get("agent_result") if isinstance(adoption.get("agent_result"), dict) else None,
+            artifact_result=adoption.get("artifact_result") if isinstance(adoption.get("artifact_result"), dict) else None,
             wait_outcome=wait_payload.get("outcome") if isinstance(wait_payload, dict) else None,
             execution_budget_exhausted=bool(wait_payload.get("watchdog_triggered") if isinstance(wait_payload, dict) else False),
             status_payload=status_payload,
@@ -1069,6 +1076,7 @@ def _summary_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "completion_rate": _rate(results, _completion),
         "adoptable_result_rate": _rate(results, lambda result: result.get("adoptable") is True),
+        "artifact_result_rate": _rate(results, lambda result: isinstance(result.get("artifact_result"), dict)),
         "time_to_first_useful_signal_seconds": {
             "median": median,
             "max": max_time,

@@ -30,6 +30,7 @@ def build_lane_card(node_payload: dict[str, Any], *, role: str | None = None, ex
     adoption_result = _dict_value(node_payload.get("adoption_result"))
     terminal_receipt = _dict_value(node_payload.get("terminal_receipt"))
     artifact_paths = _artifact_paths(node_payload.get("artifacts"))
+    artifact_result = _dict_value(node_payload.get("artifact_result")) or _dict_value(adoption_result.get("artifact_result"))
     agent_result = _agent_result(adoption_result, artifact_paths=artifact_paths, terminal_receipt=terminal_receipt)
     terminal_payload = _terminal_payload(terminal_receipt)
     summary = _summary_excerpt(adoption_result=adoption_result, terminal_payload=terminal_payload)
@@ -40,10 +41,12 @@ def build_lane_card(node_payload: dict[str, Any], *, role: str | None = None, ex
         "task_id": _optional_str(node_payload.get("task_id")),
         "phase": str(node_payload.get("phase") or "unknown"),
         "agent_result": agent_result,
+        "artifact_result": artifact_result,
         "recovery_decision": _recovery_decision(
             task_id=_optional_str(node_payload.get("task_id")) or str(node_payload.get("node_id") or ""),
             executor=executor or _optional_str(node_payload.get("executor_backend")),
             agent_result=agent_result,
+            artifact_result=artifact_result,
         ),
         "artifacts": artifact_paths,
         "summary_excerpt": summary,
@@ -93,9 +96,16 @@ def derive_panel_result(
     soft_warnings: list[str] = []
     for lane in lane_cards:
         agent_result = _dict_value(lane.get("agent_result"))
+        artifact_result = _dict_value(lane.get("artifact_result"))
         state = str(agent_result.get("state") or "needs_review")
-        lane_blockers = _string_list(agent_result.get("hard_blockers"))
-        lane_warnings = _string_list(agent_result.get("soft_warnings"))
+        lane_blockers = [
+            *_string_list(agent_result.get("hard_blockers")),
+            *_string_list(artifact_result.get("global_hard_blockers")),
+        ]
+        lane_warnings = [
+            *_string_list(agent_result.get("soft_warnings")),
+            *_string_list(artifact_result.get("soft_warnings")),
+        ]
         soft_warnings.extend(lane_warnings)
         if lane_blockers:
             blocked_count += 1
@@ -168,6 +178,27 @@ def _agent_result(
             "soft_warnings": _string_list(existing.get("soft_warnings")),
         }
         return agent_result
+    artifact_result = _dict_value(adoption_result.get("artifact_result"))
+    if artifact_result:
+        state = str(artifact_result.get("state") or "needs_review")
+        primary = str(artifact_result.get("primary_artifact") or "")
+        global_blockers = _string_list(artifact_result.get("global_hard_blockers"))
+        if state == "blocked":
+            fatal_blockers = [item for item in global_blockers if item not in {"no_useful_artifact", "thought_only_output"}]
+            action = "inspect_evidence" if fatal_blockers else "retry_or_switch_executor"
+        elif primary in {"report", "stdout_salvage"}:
+            action = "use_result"
+        elif primary in {"diff", "patch_or_commit"}:
+            action = "review_then_apply"
+        else:
+            action = "inspect_evidence"
+        return {
+            "state": state,
+            "controller_action": action,
+            "summary": None,
+            "hard_blockers": global_blockers,
+            "soft_warnings": _string_list(artifact_result.get("soft_warnings")),
+        }
     warnings: list[str] = []
     if artifact_paths.get("stdout") and not terminal_receipt:
         warnings.extend(["terminal_receipt_missing", "stdout_report_salvaged"])
@@ -264,7 +295,13 @@ def _canonical_controller_action(raw: Any) -> str | None:
     return raw if isinstance(raw, str) else None
 
 
-def _recovery_decision(*, task_id: str, executor: str | None, agent_result: dict[str, Any]) -> dict[str, str | None]:
+def _recovery_decision(
+    *,
+    task_id: str,
+    executor: str | None,
+    agent_result: dict[str, Any],
+    artifact_result: dict[str, Any] | None = None,
+) -> dict[str, str | None]:
     return choose_recovery_decision(
         RecoveryInput(
             task_id=task_id,
@@ -272,6 +309,7 @@ def _recovery_decision(*, task_id: str, executor: str | None, agent_result: dict
             current_executor=executor,
             requested_executor=None,
             agent_result=agent_result,
+            artifact_result=artifact_result,
             liveness_state=None,
             wait_outcome=None,
             execution_budget_exhausted=False,

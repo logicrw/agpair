@@ -87,7 +87,7 @@ def _extract_report_from_json(text: str) -> str | None:
         report = payload.get("report")
         if isinstance(report, str) and report.strip():
             return report.strip()
-    for key in ("report", "final", "answer", "content", "result"):
+    for key in ("report", "final", "answer", "content", "result", "text"):
         value = parsed.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()

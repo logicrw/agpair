@@ -25,6 +25,7 @@ class RecoveryInput:
     liveness_state: str | None
     wait_outcome: str | None
     execution_budget_exhausted: bool
+    artifact_result: Mapping[str, Any] | None = None
     next_eligible_executor: str | None = None
 
 
@@ -64,6 +65,7 @@ def _has_any_blocker(blockers: set[str], names: set[str]) -> bool:
 
 def choose_recovery_decision(data: RecoveryInput) -> RecoveryDecision:
     agent = data.agent_result or {}
+    artifact = data.artifact_result or {}
     state = str(agent.get("state") or "")
     controller_action = str(agent.get("controller_action") or "")
     blockers = set(_strings(agent.get("hard_blockers")))
@@ -86,6 +88,20 @@ def choose_recovery_decision(data: RecoveryInput) -> RecoveryDecision:
             )
         case _:
             pass
+
+    artifact_state = str(artifact.get("state") or "")
+    primary_artifact = str(artifact.get("primary_artifact") or "")
+    if not controller_action and artifact_state in {"usable", "needs_review"}:
+        if primary_artifact in {"report", "stdout_salvage"}:
+            return RecoveryDecision(
+                action="use_result",
+                reason="External executor produced a usable report artifact.",
+            )
+        if primary_artifact in {"diff", "patch_or_commit"}:
+            return RecoveryDecision(
+                action="review_then_apply",
+                reason="External executor produced code or diff evidence that must be reviewed before applying.",
+            )
 
     if data.wait_outcome == "controller_lease_expired" and not data.execution_budget_exhausted:
         return RecoveryDecision(

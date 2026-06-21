@@ -29,6 +29,13 @@ def test_build_lane_card_preserves_agent_result_and_artifacts() -> None:
                 "hard_blockers": [],
                 "soft_warnings": [],
             },
+            "artifact_result": {
+                "state": "usable",
+                "primary_artifact": "report",
+                "artifacts": [{"kind": "report", "state": "usable"}],
+                "global_hard_blockers": [],
+                "soft_warnings": [],
+            },
         },
         "terminal_receipt": {
             "payload": {
@@ -45,6 +52,7 @@ def test_build_lane_card_preserves_agent_result_and_artifacts() -> None:
     assert card["role"] == "primary"
     assert card["executor"] == "grok-cli"
     assert card["agent_result"]["state"] == "usable"
+    assert card["artifact_result"]["primary_artifact"] == "report"
     assert card["artifacts"]["report"] == "/tmp/report.md"
     assert card["artifacts"]["stdout"] == "/tmp/stdout.log"
     assert card["summary_excerpt"] == "Useful report body"
@@ -77,6 +85,46 @@ def test_build_lane_card_marks_stdout_salvage_as_partial_evidence() -> None:
     assert "stdout_report_salvaged" in card["agent_result"]["soft_warnings"]
     assert "terminal_receipt_missing" in card["agent_result"]["soft_warnings"]
     assert card["adoptable_result"] == "partial"
+
+
+def test_build_lane_card_preserves_report_when_diff_artifact_is_blocked() -> None:
+    node_payload = {
+        "node_id": "review-mixed",
+        "kind": "task",
+        "phase": "ready_for_review",
+        "task_id": "TASK-3",
+        "role": "implementation",
+        "executor_backend": "grok-cli",
+        "adoption_result": {
+            "adoptable_result": "partial",
+            "agent_result": {
+                "state": "needs_review",
+                "controller_action": "use_result",
+                "summary": "Report is useful; diff is blocked.",
+                "hard_blockers": ["apply_check_failed"],
+                "soft_warnings": [],
+            },
+            "artifact_result": {
+                "state": "needs_review",
+                "primary_artifact": "report",
+                "artifacts": [
+                    {"kind": "report", "state": "usable", "hard_blockers": [], "soft_warnings": []},
+                    {"kind": "diff", "state": "blocked", "hard_blockers": ["apply_check_failed"], "soft_warnings": []},
+                ],
+                "global_hard_blockers": [],
+                "soft_warnings": [],
+            },
+        },
+        "terminal_receipt": {"payload": {"report": "Useful report body"}},
+    }
+
+    card = build_lane_card(node_payload)
+
+    assert card["agent_result"]["controller_action"] == "use_result"
+    assert card["recovery_decision"]["action"] == "use_result"
+    assert card["artifact_result"]["primary_artifact"] == "report"
+    diff = next(item for item in card["artifact_result"]["artifacts"] if item["kind"] == "diff")
+    assert diff["state"] == "blocked"
 
 
 def test_validate_synthesis_result_requires_comparison_fields() -> None:

@@ -26,6 +26,7 @@ from agpair.cli.wait import (
     wait_for_terminal_phase,
 )
 from agpair.artifacts import copy_artifact, ensure_attempt_dir, live_artifact_metadata, read_excerpt
+from agpair.adoption import derive_adoption_decision
 from agpair.completion import derive_effective_task_safety, resolve_effective_task_policy
 from agpair.config import AppPaths
 from agpair.executors.policy import next_eligible_executor, resolve_controller_policy, resolve_environment_metadata
@@ -378,17 +379,69 @@ def _archive_active_attempt_artifacts(paths: AppPaths, tasks: TaskRepository, ta
     return archived
 
 
-def _no_useful_signal_agent_result(task, signal_summary, artifact_top_level: dict[str, object | None]) -> dict | None:
+def _str_or_none(value: object | None) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _append_unique_strings(existing: object, additions: list[str]) -> list[str]:
+    values = existing if isinstance(existing, list) else []
+    return list(dict.fromkeys([*(str(item) for item in values if item), *additions]))
+
+
+def _merge_adoption_signal_diagnostics(
+    adoption: dict,
+    *,
+    hard_blockers: list[str],
+    soft_warnings: list[str],
+) -> dict:
+    payload = dict(adoption)
+    payload["blockers"] = _append_unique_strings(payload.get("blockers"), hard_blockers)
+    payload["warnings"] = _append_unique_strings(payload.get("warnings"), soft_warnings)
+    agent_result = payload.get("agent_result")
+    if isinstance(agent_result, dict):
+        agent_payload = dict(agent_result)
+        agent_payload["hard_blockers"] = _append_unique_strings(agent_payload.get("hard_blockers"), hard_blockers)
+        agent_payload["soft_warnings"] = _append_unique_strings(agent_payload.get("soft_warnings"), soft_warnings)
+        payload["agent_result"] = agent_payload
+    return payload
+
+
+def _adoption_result_for_signal(
+    *,
+    effective_policy,
+    task,
+    signal_summary,
+    artifact_top_level: dict[str, object | None],
+    protocol_warnings: tuple[str, ...],
+    protocol_errors: tuple[str, ...],
+) -> dict | None:
     if task.phase != "acked":
         return None
-    if artifact_top_level.get("receipt_path") or artifact_top_level.get("report_path"):
-        return None
+    receipt_path = _str_or_none(artifact_top_level.get("receipt_path"))
+    report_path = _str_or_none(artifact_top_level.get("report_path"))
+    stdout_path = _str_or_none(artifact_top_level.get("stdout_path"))
     budget_exhausted = (
         signal_summary.execution_budget_remaining_seconds is not None
         and signal_summary.execution_budget_remaining_seconds <= 0
     )
-    if not budget_exhausted and (not signal_summary.bootstrap_noise_only or signal_summary.stdout_bytes > 0):
+    has_terminal_artifact = bool(receipt_path or report_path)
+    if not has_terminal_artifact and not budget_exhausted and (
+        not signal_summary.bootstrap_noise_only or signal_summary.stdout_bytes > 0
+    ):
         return None
+    decision = derive_adoption_decision(
+        effective_policy=effective_policy,
+        receipt=None,
+        report_path=report_path,
+        stdout_path=stdout_path,
+        receipt_path=receipt_path,
+        protocol_warnings=protocol_warnings,
+        protocol_errors=protocol_errors,
+    )
+    adoption = decision.to_dict()
+    if adoption.get("adoptable_result") != "no":
+        return adoption
+
     hard_blockers = ["terminal_receipt_missing", "report_missing"]
     soft_warnings: list[str] = []
     if signal_summary.bootstrap_noise_only:
@@ -401,13 +454,12 @@ def _no_useful_signal_agent_result(task, signal_summary, artifact_top_level: dic
         hard_blockers.insert(0, "execution_budget_exhausted")
     if signal_summary.process_alive is True:
         soft_warnings.append("process_still_alive")
-    return {
-        "state": "blocked",
-        "controller_action": "retry_or_switch_executor",
-        "summary": "Executor attempt has no terminal report or receipt that the controller can adopt.",
-        "hard_blockers": hard_blockers,
-        "soft_warnings": soft_warnings,
-    }
+    adoption["controller_rework"] = "redone"
+    return _merge_adoption_signal_diagnostics(
+        adoption,
+        hard_blockers=hard_blockers,
+        soft_warnings=soft_warnings,
+    )
 
 
 def _iso_is_newer(candidate: str | None, baseline: str | None) -> bool:
@@ -590,6 +642,7 @@ def _recovery_decision_for_task(
     *,
     agent_result: dict | None,
     signal_summary,
+    artifact_result: dict | None = None,
     wait_outcome: str | None = None,
     requested_executor: str | None = None,
 ) -> dict[str, str | None]:
@@ -607,6 +660,7 @@ def _recovery_decision_for_task(
             current_executor=current_executor,
             requested_executor=requested_executor,
             agent_result=agent_result,
+            artifact_result=artifact_result,
             liveness_state=signal_summary.state,
             wait_outcome=wait_outcome,
             execution_budget_exhausted=_execution_budget_exhausted(signal_summary),
@@ -641,6 +695,7 @@ def _attempt_protocol_adoption_payload(paths: AppPaths, task_id: str) -> dict:
             "protocol_result": None,
             "adoption_result": None,
             "agent_result": None,
+            "artifact_result": None,
         }
     warnings = _json_value(attempt.protocol_warnings_json, [])
     errors = _json_value(attempt.protocol_errors_json, [])
@@ -655,6 +710,9 @@ def _attempt_protocol_adoption_payload(paths: AppPaths, task_id: str) -> dict:
             "evidence": {},
         }
     agent_result = adoption.get("agent_result")
+    artifact_result = adoption.get("artifact_result")
+    if not isinstance(artifact_result, dict):
+        artifact_result = None
     if not isinstance(agent_result, dict):
         task = tasks.get_task(task_id)
         adoptable_result = str(adoption.get("adoptable_result") or attempt.adoptable_result or "unknown")
@@ -682,6 +740,7 @@ def _attempt_protocol_adoption_payload(paths: AppPaths, task_id: str) -> dict:
         },
         "adoption_result": adoption,
         "agent_result": agent_result,
+        "artifact_result": artifact_result,
     }
 
 
@@ -797,11 +856,12 @@ def _update_controller_adoption(
     adoptable_result: str | None,
     controller_rework: str | None,
     note: str | None,
+    adoption_payload: dict | None = None,
 ) -> dict:
     attempt = tasks.current_attempt(task_id)
     if attempt is None:
         return {}
-    adoption = _json_value(attempt.adoption_evidence_json, {})
+    adoption = dict(adoption_payload) if isinstance(adoption_payload, dict) else _json_value(attempt.adoption_evidence_json, {})
     if not isinstance(adoption, dict):
         adoption = {}
     if adoptable_result is not None:
@@ -1006,25 +1066,44 @@ def build_task_payload(paths: AppPaths, task) -> dict:
     current_attempt = TaskRepository(paths.db_path).current_attempt(task.task_id)
     protocol_adoption_payload = _attempt_protocol_adoption_payload(paths, task.task_id)
     executor_state_payload = _executor_state_payload(task, current_attempt)
-    no_useful_signal_result = _no_useful_signal_agent_result(task, signal_summary, artifact_top_level)
-    if no_useful_signal_result is not None:
+    protocol_result = protocol_adoption_payload.get("protocol_result")
+    protocol_warnings = ()
+    protocol_errors = ()
+    if isinstance(protocol_result, dict):
+        warnings = protocol_result.get("warnings")
+        errors = protocol_result.get("errors")
+        if isinstance(warnings, list):
+            protocol_warnings = tuple(str(item) for item in warnings if item)
+        if isinstance(errors, list):
+            protocol_errors = tuple(str(item) for item in errors if item)
+    stored_adoption_result = protocol_adoption_payload.get("adoption_result")
+    has_controller_adoption = (
+        bool(task.is_approved)
+        and isinstance(stored_adoption_result, dict)
+        and isinstance(stored_adoption_result.get("artifact_result"), dict)
+    )
+    signal_adoption_result = None
+    if not has_controller_adoption:
+        signal_adoption_result = _adoption_result_for_signal(
+            effective_policy=effective_policy,
+            task=task,
+            signal_summary=signal_summary,
+            artifact_top_level=artifact_top_level,
+            protocol_warnings=protocol_warnings,
+            protocol_errors=protocol_errors,
+        )
+    if signal_adoption_result is not None:
         protocol_adoption_payload = dict(protocol_adoption_payload)
-        protocol_adoption_payload["agent_result"] = no_useful_signal_result
-        adoption_result = dict(protocol_adoption_payload.get("adoption_result") or {})
-        adoption_result["adoptable_result"] = "no"
-        adoption_result["controller_rework"] = "redone"
-        adoption_result["blockers"] = sorted(
-            set(adoption_result.get("blockers") or []) | set(no_useful_signal_result["hard_blockers"])
-        )
-        adoption_result["warnings"] = sorted(
-            set(adoption_result.get("warnings") or []) | set(no_useful_signal_result["soft_warnings"])
-        )
-        adoption_result["agent_result"] = no_useful_signal_result
-        protocol_adoption_payload["adoption_result"] = adoption_result
-        controller_action = no_useful_signal_result["controller_action"]
+        protocol_adoption_payload["adoption_result"] = signal_adoption_result
+        protocol_adoption_payload["agent_result"] = signal_adoption_result.get("agent_result")
+        protocol_adoption_payload["artifact_result"] = signal_adoption_result.get("artifact_result")
+        agent = signal_adoption_result.get("agent_result")
+        if isinstance(agent, dict) and isinstance(agent.get("controller_action"), str):
+            controller_action = agent["controller_action"]
     agent_result_payload = protocol_adoption_payload.get("agent_result")
+    artifact_result_payload = protocol_adoption_payload.get("artifact_result")
     if (
-        task.phase in TERMINAL_PHASES
+        (task.phase in TERMINAL_PHASES or task.is_approved or signal_adoption_result is not None)
         and isinstance(agent_result_payload, dict)
         and isinstance(agent_result_payload.get("controller_action"), str)
     ):
@@ -1035,6 +1114,7 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         task,
         agent_result=agent_result_payload if isinstance(agent_result_payload, dict) else None,
         signal_summary=signal_summary,
+        artifact_result=artifact_result_payload if isinstance(artifact_result_payload, dict) else None,
         requested_executor=requested_executor,
     )
 
@@ -1387,6 +1467,7 @@ def _task_start_json_payload(
     failure_context = task_payload["failure_context"] if task_payload is not None else None
     blocker_type = failure_context["blocker_type"] if failure_context else None
     agent_result = task_payload.get("agent_result") if task_payload is not None else None
+    artifact_result = task_payload.get("artifact_result") if task_payload is not None else None
     agent_action = (
         agent_result.get("controller_action")
         if result.phase in TERMINAL_PHASES
@@ -1408,6 +1489,7 @@ def _task_start_json_payload(
             current_task,
             agent_result=agent_result if isinstance(agent_result, dict) else None,
             signal_summary=wait_signal_summary,
+            artifact_result=artifact_result if isinstance(artifact_result, dict) else None,
             wait_outcome=result.outcome,
             requested_executor=_requested_executor_from_current_attempt(paths, current_task.task_id),
         )
@@ -1426,6 +1508,7 @@ def _task_start_json_payload(
             "selected_executor": selected_executor or (current_task.executor_backend if current_task is not None else None),
             "auto_structured_sections": auto_structured_sections,
             "agent_result": agent_result,
+            "artifact_result": artifact_result,
             "recommended_action": recommended_action,
             "recovery_decision": recovery_decision,
             "status_command": f"agpair task status {task_id} --json",
@@ -2332,9 +2415,9 @@ def adopt_task(
         raise typer.Exit(code=1)
     if not from_report:
         raise typer.BadParameter("Only --from-report adoption is supported.")
-    artifact_paths, _ = _artifact_payload(paths, task)
-    report_path = artifact_paths.get("report")
-    stdout_path = artifact_paths.get("stdout")
+    artifact_paths, artifact_top_level = _artifact_payload(paths, task)
+    report_path = artifact_paths.get("report") or _str_or_none(artifact_top_level.get("report_path"))
+    stdout_path = artifact_paths.get("stdout") or _str_or_none(artifact_top_level.get("stdout_path"))
     if not report_path and not stdout_path:
         payload = {
             "ok": False,
@@ -2349,6 +2432,37 @@ def adopt_task(
         raise typer.Exit(code=1)
     if not task.is_approved:
         tasks.mark_approved(task_id=task_id)
+    attempt = tasks.current_attempt(task_id)
+    protocol_warnings: tuple[str, ...] = ()
+    protocol_errors: tuple[str, ...] = ()
+    if attempt is not None:
+        warnings = _json_value(attempt.protocol_warnings_json, [])
+        errors = _json_value(attempt.protocol_errors_json, [])
+        if isinstance(warnings, list):
+            protocol_warnings = tuple(str(item) for item in warnings if item)
+        if isinstance(errors, list):
+            protocol_errors = tuple(str(item) for item in errors if item)
+    original_body = _original_body_for_task(paths, task_id)
+    effective_policy = resolve_effective_task_policy(
+        requested_completion_policy=task.completion_policy,
+        authorization_profile=task.authorization_profile,
+        body=original_body,
+        controller=_controller_from_current_attempt(paths, task_id),
+    )
+    receipt = _latest_terminal_receipt(paths, task_id, task.terminal_receipt_json) if task.phase in TERMINAL_PHASES else None
+    decision = derive_adoption_decision(
+        effective_policy=effective_policy,
+        receipt=receipt,
+        report_path=report_path,
+        stdout_path=stdout_path,
+        receipt_path=artifact_paths.get("receipt") or _str_or_none(artifact_top_level.get("receipt_path")),
+        protocol_warnings=protocol_warnings,
+        protocol_errors=protocol_errors,
+        controller_rework=normalized_rework or "minor",
+    )
+    adoption_payload = decision.to_dict()
+    if normalized_adoptable is not None:
+        adoption_payload["adoptable_result"] = normalized_adoptable
     adoption = _update_controller_adoption(
         paths=paths,
         tasks=tasks,
@@ -2356,6 +2470,7 @@ def adopt_task(
         adoptable_result=normalized_adoptable,
         controller_rework=normalized_rework,
         note=note,
+        adoption_payload=adoption_payload,
     )
     journal.append(task_id, "cli", "controller_adopted_report", note or "controller adopted report/stdout evidence")
     updated = tasks.get_task(task_id)
@@ -2596,6 +2711,7 @@ def watch_task(
         progress_payload = _watch_progress_payload(payload)
         signal_payload = payload.get("signal_state") if isinstance(payload.get("signal_state"), dict) else {}
         recovery_payload = payload.get("recovery_decision") if isinstance(payload.get("recovery_decision"), dict) else None
+        artifact_result_payload = payload.get("artifact_result") if isinstance(payload.get("artifact_result"), dict) else None
         soft_no_progress = (
             watchdog
             and bool(task.background_ok)
@@ -2622,6 +2738,7 @@ def watch_task(
             signal_payload.get("stderr_bytes"),
             signal_payload.get("last_signal_at"),
             payload.get("controller_action"),
+            json.dumps(artifact_result_payload, sort_keys=True) if artifact_result_payload else None,
             json.dumps(recovery_payload, sort_keys=True) if recovery_payload else None,
             event_cursor,
         )
@@ -2644,6 +2761,7 @@ def watch_task(
                 or current_state[8] != last_emitted_state[8]
                 or current_state[9] != last_emitted_state[9]
                 or current_state[10] != last_emitted_state[10]
+                or current_state[11] != last_emitted_state[11]
             )
 
         now_mono = time.monotonic()
@@ -2701,6 +2819,7 @@ def watch_task(
                     "signal_state": payload.get("signal_state"),
                     "controller_action": payload.get("controller_action"),
                     "agent_result": agent_result,
+                    "artifact_result": artifact_result_payload,
                     "recovery_decision": recovery_payload,
                     "outcome": "soft_no_progress" if soft_no_progress else None,
                     **progress_payload,

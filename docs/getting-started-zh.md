@@ -119,7 +119,7 @@ git -C /path/to/repo diff
 
 `ready_for_review`、`evidence_ready`、`committed` 都只是验收门。外部 executor 声称完成后，Codex 或 Claude Code 仍要检查 diff、receipt、raw evidence path 和测试证据，再报告成功。
 
-在 `status --json` 和 `wait --json` 里，先看 `agent_result.controller_action`：报告任务通常是 `use_result`，隔离实现 diff 通常是 `review_then_apply`，blocked attempt 会提示主控检查、重试或切换 executor。
+在 `status --json` 和 `wait --json` 里，先看 `agent_result.controller_action`：报告任务通常是 `use_result`，隔离实现 diff 通常是 `review_then_apply`，blocked attempt 会提示主控检查、重试或切换 executor。结果是 partial、格式异常、或看起来奇怪时，再看 `artifact_result`：`report` / `stdout_salvage` 表示吸收报告，`diff` / `patch_or_commit` 表示审查并应用代码证据，`nothing_useful` 表示重试或切换 executor，除非存在需要人工检查的全局硬阻断。
 
 除非 brief 或授权 profile 明确要求提交，`commit_ref` 是可选字段。
 

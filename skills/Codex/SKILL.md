@@ -265,7 +265,7 @@ agpair task status TASK-123 --json
 agpair task logs TASK-123 --include-executor-output
 ```
 
-Use `recovery_decision` as the controller-facing next step and `agent_result` as the evidence quality state. Follow `recovery_decision.action`: `use_result` for reports, `review_then_apply` for isolated implementation diffs, `wait_background` for live background tasks, `switch_executor` for the next external executor, `native_fallback` for native subagents/direct controller work, `repair_executor` for auth/binary health, and `inspect_evidence` when artifacts need manual inspection. `protocol_result` and `adoption_result` remain compatibility/debug surfaces; do not make low-risk protocol warnings override useful evidence.
+Use `recovery_decision` as the controller-facing next step, `agent_result` as the evidence quality state, and `artifact_result` as the evidence map. Follow `recovery_decision.action`: `use_result` for reports, `review_then_apply` for isolated implementation diffs, `wait_background` for live background tasks, `switch_executor` for the next external executor, `native_fallback` for native subagents/direct controller work, `repair_executor` for auth/binary health, and `inspect_evidence` when artifacts need manual inspection. Read `artifact_result` when a result is partial, malformed, or surprising: `report`/`stdout_salvage` can still be incorporated, blocked `diff` must not be applied, and `nothing_useful` means retry/switch unless a global hard blocker requires inspection. `protocol_result` and `adoption_result` remain compatibility/debug surfaces; do not make low-risk protocol warnings override useful evidence.
 
 For isolated implementation or test-fix tasks, review and apply the executor diff explicitly:
 
@@ -283,7 +283,7 @@ After verification, close the loop:
 agpair task accept TASK-123 --adoptable-result yes --controller-rework none
 ```
 
-If the protocol failed but the report/stdout is still useful, record explicit salvage instead of pretending the executor succeeded:
+If the protocol failed but the report/stdout is still useful, record explicit salvage instead of pretending the executor succeeded. This updates `artifact_result` and `agent_result` so the controller can use the report without treating the executor as perfectly protocol-compliant:
 
 ```bash
 agpair task adopt TASK-123 --from-report --adoptable-result partial --controller-rework minor

@@ -229,9 +229,9 @@ AGPair 1.0 does not pause a running executor for live approval. Out-of-scope wor
 
 ## Review Gate
 
-`ready_for_review`, `evidence_ready`, and `committed` are not automatic success. The controller must inspect `recovery_decision`, `agent_result`, git diff/commit evidence, receipts, raw log paths when needed, and run the relevant verification before reporting completion. Real executor smoke also requires `all_success=true`, a usable `agent_result.state`, and `recovery_decision.action` such as `use_result` or `review_then_apply` for each attempted executor; dispatch or phase success alone is not enough.
+`ready_for_review`, `evidence_ready`, and `committed` are not automatic success. The controller must inspect `artifact_result`, `agent_result`, `recovery_decision`, git diff/commit evidence, receipts, raw log paths when needed, and run the relevant verification before reporting completion. `artifact_result` says what was produced, `agent_result` says whether the best safe artifact is usable, and `recovery_decision` is the next controller action. Real executor smoke also requires `all_success=true`, a usable `agent_result.state`, and `recovery_decision.action` such as `use_result` or `review_then_apply` for each attempted executor; dispatch or phase success alone is not enough.
 
-Useful value metrics are completion rate, usable `agent_result` rate, time to first useful signal, fallback recommendation rate, controller rework rate, and abandoned/no-progress rate. Use `task status --json`, `task list --json`, and `scripts/smoke_real_executors.py` to inspect `summary_metrics` and per-executor `recovery_decision`.
+Useful value metrics are completion rate, usable `agent_result` rate, `artifact_result_rate`, time to first useful signal, fallback recommendation rate, controller rework rate, and abandoned/no-progress rate. Use `task status --json`, `task list --json`, and `scripts/smoke_real_executors.py` to inspect `summary_metrics` and per-executor `recovery_decision`.
 
 If the optional Stop hook is enabled, mark accepted evidence so it does not keep blocking on the same receipt:
 
@@ -239,7 +239,7 @@ If the optional Stop hook is enabled, mark accepted evidence so it does not keep
 agpair task accept TASK-123 --adoptable-result yes --controller-rework none
 ```
 
-When AGPair protocol parsing failed but the report/stdout is useful, record explicit salvage instead:
+When AGPair protocol parsing failed but the report/stdout is useful, record explicit salvage instead. This updates `artifact_result` and `agent_result`; it is a controller adoption record, not a claim that the executor followed protocol perfectly.
 
 ```bash
 agpair task adopt TASK-123 --from-report --adoptable-result partial --controller-rework minor

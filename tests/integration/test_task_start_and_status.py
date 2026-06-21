@@ -445,6 +445,9 @@ def test_task_start_salvages_stdout_report_for_evidence_policy_after_nonzero_exi
     assert receipt["payload"]["arbitration"] == "report_salvage_after_nonzero_exit"
     assert "外部实现完成" in receipt["payload"]["report"]
     assert payload["adoption_result"]["adoptable_result"] in {"yes", "partial"}
+    assert payload["adoption_result"]["artifact_result"]["primary_artifact"] == "report"
+    assert payload["artifact_result"]["primary_artifact"] == "report"
+    assert payload["agent_result"]["controller_action"] == "use_result"
 
 
 def test_task_start_rejects_removed_fast_startup_options(tmp_path: Path, monkeypatch) -> None:
@@ -809,6 +812,8 @@ def test_task_status_json_marks_bootstrap_noise_only_as_blocked_signal(tmp_path:
     assert payload["controller_action"] == "retry_or_switch_executor"
     assert payload["agent_result"]["state"] == "blocked"
     assert payload["agent_result"]["controller_action"] == "retry_or_switch_executor"
+    assert payload["artifact_result"]["state"] == "blocked"
+    assert payload["artifact_result"]["primary_artifact"] == "nothing_useful"
     assert "no_useful_executor_signal" in payload["agent_result"]["hard_blockers"]
     assert "terminal_receipt_missing" in payload["agent_result"]["hard_blockers"]
     assert "report_missing" in payload["agent_result"]["hard_blockers"]
@@ -847,6 +852,8 @@ def test_task_status_json_marks_budget_exhausted_without_receipt_as_blocked_sign
     assert payload["controller_action"] == "retry_or_switch_executor"
     assert payload["agent_result"]["state"] == "blocked"
     assert payload["agent_result"]["controller_action"] == "retry_or_switch_executor"
+    assert payload["artifact_result"]["state"] == "blocked"
+    assert payload["artifact_result"]["primary_artifact"] == "nothing_useful"
     assert "execution_budget_exhausted" in payload["agent_result"]["hard_blockers"]
     assert "terminal_receipt_missing" in payload["agent_result"]["hard_blockers"]
     assert "stdout_available_without_receipt" in payload["agent_result"]["soft_warnings"]
@@ -3058,6 +3065,26 @@ def test_task_adopt_from_report_marks_approved_without_changing_blocked_phase(tm
     tasks.mark_acked(task_id="TASK-ADOPT-REPORT", session_id=str(tmp_path / "session"))
     tasks.record_artifact(task_id="TASK-ADOPT-REPORT", attempt_no=1, artifact_type="report", path=str(report_path))
     tasks.mark_blocked(task_id="TASK-ADOPT-REPORT", reason="protocol failed but report exists")
+    tasks.update_attempt_adoption(
+        task_id="TASK-ADOPT-REPORT",
+        attempt_no=1,
+        protocol_warnings_json="[]",
+        protocol_errors_json='["report_output_missing"]',
+        adoptable_result="no",
+        adoption_evidence_json=json.dumps(
+            {
+                "adoptable_result": "no",
+                "agent_result": {
+                    "state": "blocked",
+                    "controller_action": "retry_or_switch_executor",
+                    "summary": "stale blocked result",
+                    "hard_blockers": ["report_output_missing"],
+                    "soft_warnings": [],
+                },
+            },
+            ensure_ascii=False,
+        ),
+    )
 
     result = CliRunner().invoke(
         app,
@@ -3079,10 +3106,57 @@ def test_task_adopt_from_report_marks_approved_without_changing_blocked_phase(tm
     assert payload["phase"] == "blocked"
     assert payload["is_approved"] is True
     assert payload["adoption_result"]["adoptable_result"] == "partial"
+    assert payload["adoption_result"]["agent_result"]["state"] == "needs_review"
+    assert payload["adoption_result"]["agent_result"]["controller_action"] == "use_result"
+    assert payload["adoption_result"]["artifact_result"]["primary_artifact"] == "report"
     updated = tasks.get_task("TASK-ADOPT-REPORT")
     assert updated is not None
     assert updated.phase == "blocked"
     assert updated.is_approved is True
+
+
+def test_task_adopt_from_report_uses_active_stdout_artifact(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    stdout_path = session_dir / "stdout.log"
+    stdout_path.write_text("结论：stdout 报告可采纳。\n\n- 发现 A\n- 证据 B\n", encoding="utf-8")
+    tasks = make_task_repo(tmp_path)
+    tasks.create_task(
+        task_id="TASK-ADOPT-ACTIVE-STDOUT",
+        repo_path=str(repo_path),
+        executor_backend="grok-cli",
+        completion_policy="report",
+    )
+    tasks.mark_acked(task_id="TASK-ADOPT-ACTIVE-STDOUT", session_id=str(session_dir))
+    tasks.mark_blocked(task_id="TASK-ADOPT-ACTIVE-STDOUT", reason="protocol failed but stdout exists")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "adopt",
+            "TASK-ADOPT-ACTIVE-STDOUT",
+            "--from-report",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["stdout_path"] == str(stdout_path)
+    assert payload["adoption_result"]["adoptable_result"] == "partial"
+    assert payload["adoption_result"]["agent_result"]["controller_action"] == "use_result"
+    assert payload["adoption_result"]["artifact_result"]["primary_artifact"] == "stdout_salvage"
+    status = CliRunner().invoke(app, ["task", "status", "TASK-ADOPT-ACTIVE-STDOUT", "--json"])
+    assert status.exit_code == 0, status.output
+    status_payload = json.loads(status.stdout)
+    assert status_payload["adoption_result"]["controller_rework"] == "minor"
+    assert status_payload["adoption_result"]["artifact_result"]["primary_artifact"] == "stdout_salvage"
+    assert status_payload["agent_result"]["controller_action"] == "use_result"
+    assert status_payload["controller_action"] == "use_result"
 
 
 def test_inspect_json_surfaces_derived_antigravity_phase(tmp_path: Path, monkeypatch) -> None:

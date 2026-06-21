@@ -204,6 +204,8 @@ Use `recovery_decision.action` as the controller-facing next step:
 - `repair_executor`: fix auth, binary, hook, or runtime health first;
 - `inspect_evidence`: read artifacts manually.
 
+Use `artifact_result` as the evidence map when a result is partial, malformed, or surprising: `report`/`stdout_salvage` can still be incorporated, blocked `diff` must not be applied, and `nothing_useful` means retry/switch unless a global hard blocker requires inspection.
+
 For isolated implementation or test-fix tasks:
 
 ```bash
@@ -221,7 +223,7 @@ After local verification, close the AGPair loop:
 agpair task accept TASK-123 --adoptable-result yes --controller-rework none
 ```
 
-If the protocol failed but the report or stdout is still useful, record salvage:
+If the protocol failed but the report or stdout is still useful, record salvage. This updates `artifact_result` and `agent_result`; it does not claim the executor followed protocol perfectly:
 
 ```bash
 agpair task adopt TASK-123 --from-report --adoptable-result partial --controller-rework minor

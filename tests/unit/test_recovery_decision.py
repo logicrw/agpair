@@ -199,3 +199,83 @@ def test_controller_lease_expiry_recommends_background_wait() -> None:
 
     assert decision.action == "wait_background"
     assert decision.command == "agpair task wait TASK-7 --json"
+
+
+def test_recovery_uses_result_when_stdout_salvage_is_available() -> None:
+    decision = choose_recovery_decision(
+        RecoveryInput(
+            task_id="TASK-8",
+            controller="codex",
+            current_executor="grok-cli",
+            requested_executor=None,
+            agent_result={
+                "state": "needs_review",
+                "controller_action": "use_result",
+                "hard_blockers": [],
+                "soft_warnings": ["terminal_receipt_missing"],
+            },
+            artifact_result={
+                "state": "needs_review",
+                "primary_artifact": "stdout_salvage",
+                "global_hard_blockers": [],
+            },
+            liveness_state=None,
+            wait_outcome=None,
+            execution_budget_exhausted=False,
+            next_eligible_executor="claude-code",
+        )
+    )
+
+    assert decision.action == "use_result"
+    assert decision.next_executor is None
+
+
+def test_recovery_inspects_evidence_for_global_authorization_blocker() -> None:
+    decision = choose_recovery_decision(
+        RecoveryInput(
+            task_id="TASK-9",
+            controller="codex",
+            current_executor="grok-cli",
+            requested_executor=None,
+            agent_result={
+                "state": "blocked",
+                "controller_action": "inspect_evidence",
+                "hard_blockers": ["authorization_violation"],
+                "soft_warnings": [],
+            },
+            artifact_result={
+                "state": "blocked",
+                "primary_artifact": "report",
+                "global_hard_blockers": ["authorization_violation"],
+            },
+            liveness_state=None,
+            wait_outcome=None,
+            execution_budget_exhausted=False,
+            next_eligible_executor="claude-code",
+        )
+    )
+
+    assert decision.action == "inspect_evidence"
+
+
+def test_recovery_can_route_from_artifact_result_when_agent_action_is_missing() -> None:
+    decision = choose_recovery_decision(
+        RecoveryInput(
+            task_id="TASK-10",
+            controller="codex",
+            current_executor="grok-cli",
+            requested_executor=None,
+            agent_result={"state": "needs_review", "hard_blockers": [], "soft_warnings": []},
+            artifact_result={
+                "state": "needs_review",
+                "primary_artifact": "report",
+                "global_hard_blockers": [],
+            },
+            liveness_state=None,
+            wait_outcome=None,
+            execution_budget_exhausted=False,
+            next_eligible_executor="claude-code",
+        )
+    )
+
+    assert decision.action == "use_result"

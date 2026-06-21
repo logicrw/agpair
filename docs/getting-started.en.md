@@ -121,7 +121,7 @@ git -C /path/to/repo diff
 
 Treat `ready_for_review`, `evidence_ready`, and `committed` as review gates. The external executor has claimed progress; Codex or Claude Code still verifies diff, receipt, raw evidence paths, and tests before reporting success.
 
-In `status --json` and `wait --json`, read `agent_result.controller_action` first: reports usually say `use_result`, isolated implementation diffs usually say `review_then_apply`, and blocked attempts tell the controller to inspect, retry, or switch executor.
+In `status --json` and `wait --json`, read `agent_result.controller_action` first: reports usually say `use_result`, isolated implementation diffs usually say `review_then_apply`, and blocked attempts tell the controller to inspect, retry, or switch executor. Read `artifact_result` when the result is partial, malformed, or surprising: `report`/`stdout_salvage` means incorporate the report, `diff`/`patch_or_commit` means review/apply code evidence, and `nothing_useful` means retry or switch unless a global hard blocker requires inspection.
 
 `commit_ref` is optional unless the brief or authorization profile required a commit.
 

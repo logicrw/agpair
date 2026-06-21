@@ -205,6 +205,7 @@ def test_smoke_harness_runs_codex_controller_fake_executor_matrix(tmp_path: Path
     assert payload["scenario"] == "implementation_smoke"
     assert payload["summary_metrics"]["completion_rate"] == 1.0
     assert payload["summary_metrics"]["adoptable_result_rate"] == 1.0
+    assert payload["summary_metrics"]["artifact_result_rate"] == 1.0
     assert payload["summary_metrics"]["fallback_recommended_rate"] == 0.0
     assert payload["summary_metrics"]["no_progress_rate"] == 0.0
     assert [result["executor_id"] for result in payload["results"]] == [
@@ -222,6 +223,8 @@ def test_smoke_harness_runs_codex_controller_fake_executor_matrix(tmp_path: Path
         assert result["adoptable"] is True
         assert result["agent_result"]["state"] in {"usable", "needs_review"}
         assert result["agent_result"]["controller_action"] == "review_then_apply"
+        assert result["artifact_result"]["state"] in {"usable", "needs_review"}
+        assert result["artifact_result"]["primary_artifact"] in {"diff", "patch_or_commit", "report"}
         assert result["controller_action"] == "review_then_apply"
         assert result["recovery_decision"]["action"] == "review_then_apply"
         assert result["controller_rework"] in {"none", "minor"}
@@ -286,6 +289,8 @@ def test_smoke_harness_runs_report_smoke_without_diff_requirement(tmp_path: Path
     assert result["adoptable_result"] in {"yes", "partial"}
     assert result["agent_result"]["state"] in {"usable", "needs_review"}
     assert result["agent_result"]["controller_action"] == "use_result"
+    assert result["artifact_result"]["state"] in {"usable", "needs_review"}
+    assert result["artifact_result"]["primary_artifact"] in {"report", "stdout_salvage"}
     assert result["recovery_decision"]["action"] == "use_result"
     assert result["adoption_blockers"] == []
     assert result["adoption_evidence"]["terminal_receipt"] is True

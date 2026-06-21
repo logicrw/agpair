@@ -4,7 +4,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
-from agpair.agent_result import AgentResult, blocking_protocol_warnings, unique
+from agpair.agent_result import AgentResult, ControllerAction, blocking_protocol_warnings, unique
+from agpair.artifact_classification import ArtifactResult, classify_artifacts
 from agpair.completion import EffectiveTaskPolicy
 
 AdoptableResult = Literal["yes", "partial", "no", "unknown"]
@@ -41,6 +42,7 @@ class AdoptionDecision:
     evidence: AdoptionEvidence = AdoptionEvidence()
     controller_rework: ControllerRework = "unknown"
     agent_result: AgentResult | None = None
+    artifact_result: ArtifactResult | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -52,7 +54,66 @@ class AdoptionDecision:
         }
         if self.agent_result is not None:
             payload["agent_result"] = self.agent_result.to_dict()
+        if self.artifact_result is not None:
+            payload["artifact_result"] = self.artifact_result.to_dict()
         return payload
+
+
+def _agent_result_from_artifacts(
+    *,
+    adoptable_result: AdoptableResult,
+    artifact_result: ArtifactResult,
+    blockers: tuple[str, ...],
+    warnings: tuple[str, ...],
+    controller_rework: ControllerRework,
+    policy: str,
+) -> AgentResult:
+    action = _controller_action_from_artifacts(artifact_result, policy=policy)
+    hard_blockers = unique((*artifact_result.global_hard_blockers, *blockers))
+    soft_warnings = unique((*artifact_result.soft_warnings, *warnings))
+    if artifact_result.state == "blocked" or adoptable_result == "no":
+        return AgentResult(
+            state="blocked",
+            controller_action=action,
+            summary="Executor result has no safe useful artifact or hit a global hard blocker.",
+            hard_blockers=hard_blockers,
+            soft_warnings=soft_warnings,
+        )
+    if artifact_result.state == "needs_review" or adoptable_result == "partial" or controller_rework in {"major", "redone"}:
+        return AgentResult(
+            state="needs_review",
+            controller_action=action,
+            summary="Executor result contains useful artifacts but needs controller review before adoption.",
+            hard_blockers=hard_blockers,
+            soft_warnings=soft_warnings,
+        )
+    return AgentResult(
+        state="usable",
+        controller_action=action,
+        summary="Executor result is usable with normal controller verification.",
+        hard_blockers=(),
+        soft_warnings=soft_warnings,
+    )
+
+
+def _controller_action_from_artifacts(artifact_result: ArtifactResult, *, policy: str) -> ControllerAction:
+    if artifact_result.state == "blocked":
+        has_fatal_global = any(
+            blocker not in {"no_useful_artifact", "thought_only_output"}
+            for blocker in artifact_result.global_hard_blockers
+        )
+        return "inspect_evidence" if has_fatal_global else "retry_or_switch_executor"
+    has_reviewable_code = any(
+        item.kind in {"diff", "patch_or_commit"} and item.state in {"usable", "needs_review"}
+        for item in artifact_result.artifacts
+    )
+    if policy in {"commit", "evidence"} and has_reviewable_code:
+        return "review_then_apply"
+    if artifact_result.primary_artifact in {"report", "stdout_salvage"}:
+        return "use_result"
+    if artifact_result.primary_artifact in {"diff", "patch_or_commit"}:
+        return "review_then_apply" if policy in {"commit", "evidence"} else "inspect_evidence"
+    return "inspect_evidence"
 
 
 def _agent_result_for_decision(
@@ -101,23 +162,37 @@ def _make_decision(
     evidence: AdoptionEvidence,
     controller_rework: ControllerRework,
     policy: str,
+    artifact_result: ArtifactResult | None = None,
 ) -> AdoptionDecision:
     normalized_blockers = unique(blockers)
     normalized_warnings = unique(warnings)
-    return AdoptionDecision(
-        adoptable_result,
-        normalized_blockers,
-        normalized_warnings,
-        evidence,
-        controller_rework,
-        _agent_result_for_decision(
+    agent_result = (
+        _agent_result_from_artifacts(
+            adoptable_result=adoptable_result,
+            artifact_result=artifact_result,
+            blockers=normalized_blockers,
+            warnings=normalized_warnings,
+            controller_rework=controller_rework,
+            policy=policy,
+        )
+        if artifact_result is not None
+        else _agent_result_for_decision(
             adoptable_result=adoptable_result,
             blockers=normalized_blockers,
             warnings=normalized_warnings,
             evidence=evidence,
             controller_rework=controller_rework,
             policy=policy,
-        ),
+        )
+    )
+    return AdoptionDecision(
+        adoptable_result,
+        normalized_blockers,
+        normalized_warnings,
+        evidence,
+        controller_rework,
+        agent_result,
+        artifact_result,
     )
 
 
@@ -139,6 +214,16 @@ def derive_adoption_decision(
     if not isinstance(payload, Mapping):
         payload = {}
 
+    artifact_result = classify_artifacts(
+        receipt=receipt,
+        report_path=report_path,
+        stdout_path=stdout_path,
+        receipt_path=receipt_path,
+        git_status_summary=git_status_summary,
+        scope_validation=scope_validation,
+        protocol_warnings=protocol_warnings,
+        protocol_errors=protocol_errors,
+    )
     worktree_diff = payload.get("worktree_diff")
     changed_files = _changed_files(payload.get("changed_files"))
     if not changed_files and isinstance(worktree_diff, Mapping):
@@ -156,11 +241,21 @@ def derive_adoption_decision(
         or has_missing_declared_changes
         or has_forbidden_changes
     )
-    has_report = bool(_string_value(payload.get("report"))) or _path_has_content(report_path)
+    has_report = any(
+        item.kind in {"report", "stdout_salvage"} and item.state in {"usable", "needs_review"}
+        for item in artifact_result.artifacts
+    )
     has_receipt = isinstance(receipt, Mapping) or _path_has_content(receipt_path)
     has_validation = bool(payload.get("validation")) or bool(payload.get("validation_not_run"))
-    has_commit = bool(_string_value(payload.get("commit_ref")) or _string_value(payload.get("commit")) or _string_value(payload.get("commit_sha")))
-    has_diff = bool((git_status_summary or "").strip())
+    has_commit = any(
+        item.kind == "patch_or_commit" and item.state in {"usable", "needs_review"}
+        for item in artifact_result.artifacts
+    )
+    has_safe_code_artifact = any(
+        item.kind in {"diff", "patch_or_commit"} and item.state in {"usable", "needs_review"}
+        for item in artifact_result.artifacts
+    )
+    has_diff = any(item.kind == "diff" for item in artifact_result.artifacts) or bool((git_status_summary or "").strip())
     has_apply_check = isinstance(worktree_diff, Mapping) and "apply_check_ok" in worktree_diff
     apply_check_passed = bool(worktree_diff.get("apply_check_ok")) if isinstance(worktree_diff, Mapping) else False
     apply_check_reason = _string_value(worktree_diff.get("apply_check_reason")) if isinstance(worktree_diff, Mapping) else None
@@ -191,41 +286,68 @@ def derive_adoption_decision(
         apply_check_passed=apply_check_passed,
         controller_rework_required=controller_rework in {"minor", "major", "redone"},
     )
-    warnings = unique(tuple(protocol_warnings))
+    warnings = unique((*tuple(protocol_warnings), *tuple(protocol_errors)))
     blocking_warnings = blocking_protocol_warnings(warnings)
     blockers: list[str] = []
-    if protocol_errors:
-        blockers.append("protocol_errors")
+    for artifact in artifact_result.artifacts:
+        blockers.extend(artifact.hard_blockers)
     policy = effective_policy.effective_completion_policy
-    receipt_status = _string_value(receipt.get("status") if isinstance(receipt, Mapping) else None).upper()
+    receipt_status = (_string_value(receipt.get("status") if isinstance(receipt, Mapping) else None) or "").upper()
     blocker_type = _string_value(payload.get("blocker_type"))
-    if receipt_status == "BLOCKED" or blocker_type:
-        blockers.append(blocker_type or "blocked_terminal_result")
-        return _make_decision("no", tuple(blockers), warnings, evidence, controller_rework, policy)
+    fatal_global_blockers = tuple(
+        blocker
+        for blocker in artifact_result.global_hard_blockers
+        if blocker not in {"no_useful_artifact", "thought_only_output"}
+    )
+    if fatal_global_blockers:
+        return _make_decision(
+            "no",
+            fatal_global_blockers,
+            warnings,
+            evidence,
+            controller_rework,
+            policy,
+            artifact_result,
+        )
+    if blocker_type:
+        blockers.append(blocker_type)
+    elif receipt_status == "BLOCKED":
+        blockers.append("blocked_terminal_result")
 
     if policy == "report":
         if not has_report:
             blockers.append("report_missing")
-            return _make_decision("no", tuple(blockers), warnings, evidence, controller_rework, policy)
+            if artifact_result.state in {"usable", "needs_review"}:
+                return _make_decision(
+                    "partial",
+                    tuple(blockers),
+                    warnings,
+                    evidence,
+                    controller_rework,
+                    policy,
+                    artifact_result,
+                )
+            return _make_decision("no", tuple(blockers), warnings, evidence, controller_rework, policy, artifact_result)
         if blockers:
-            return _make_decision("partial", tuple(blockers), warnings, evidence, controller_rework, policy)
-        result: AdoptableResult = "yes" if has_receipt else "partial"
-        return _make_decision(result, (), warnings, evidence, controller_rework, policy)
+            return _make_decision("partial", tuple(blockers), warnings, evidence, controller_rework, policy, artifact_result)
+        result: AdoptableResult = "yes" if has_receipt and artifact_result.state == "usable" else "partial"
+        return _make_decision(result, (), warnings, evidence, controller_rework, policy, artifact_result)
 
     if policy == "commit":
         _append_scope_blockers(blockers, evidence)
-        if has_commit:
+        if has_commit and artifact_result.state == "usable":
             result = "partial" if blockers or blocking_warnings else "yes"
-            return _make_decision(result, tuple(blockers), warnings, evidence, controller_rework, policy)
-        if has_diff or changed_files:
+            return _make_decision(result, tuple(blockers), warnings, evidence, controller_rework, policy, artifact_result)
+        if artifact_result.state in {"usable", "needs_review"}:
             blockers.append("commit_missing")
-            return _make_decision("partial", tuple(blockers), warnings, evidence, controller_rework, policy)
+            return _make_decision("partial", tuple(blockers), warnings, evidence, controller_rework, policy, artifact_result)
         blockers.append("commit_and_diff_missing")
-        return _make_decision("no", tuple(blockers), warnings, evidence, controller_rework, policy)
+        return _make_decision("no", tuple(blockers), warnings, evidence, controller_rework, policy, artifact_result)
 
-    if not changed_files and not has_report and not has_diff:
+    if artifact_result.state == "blocked" or (not has_report and not has_safe_code_artifact):
+        blockers.extend(artifact_result.global_hard_blockers)
         blockers.append("evidence_missing")
-        return _make_decision("no", tuple(blockers), warnings, evidence, controller_rework, policy)
+        return _make_decision("no", tuple(blockers), warnings, evidence, controller_rework, policy, artifact_result)
     if changed_files and not present_changed_files:
         blockers.append("changed_files_not_present")
     _append_scope_blockers(blockers, evidence)
@@ -234,10 +356,9 @@ def derive_adoption_decision(
     if not has_validation:
         blockers.append("validation_missing")
     if blockers:
-        if has_apply_check and not apply_check_passed:
-            return _make_decision("no", tuple(blockers), warnings, evidence, controller_rework, policy)
-        return _make_decision("partial", tuple(blockers), warnings, evidence, controller_rework, policy)
-    return _make_decision("partial" if blocking_warnings else "yes", (), warnings, evidence, controller_rework, policy)
+        return _make_decision("partial", tuple(blockers), warnings, evidence, controller_rework, policy, artifact_result)
+    result = "partial" if artifact_result.state == "needs_review" or blocking_warnings else "yes"
+    return _make_decision(result, (), warnings, evidence, controller_rework, policy, artifact_result)
 
 
 def _changed_files(value: Any) -> tuple[str, ...]:
