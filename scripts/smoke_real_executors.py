@@ -308,6 +308,16 @@ def _recovery_decision_payload(
     ).to_dict()
 
 
+def _controller_wait_outcome(wait_payload: dict[str, Any], phase: str | None) -> str | None:
+    if phase in TERMINAL_OK_PHASES:
+        return "terminal_success"
+    nested_wait = wait_payload.get("last_wait_payload")
+    if isinstance(nested_wait, dict) and isinstance(nested_wait.get("outcome"), str):
+        return nested_wait["outcome"]
+    outcome = wait_payload.get("outcome")
+    return outcome if isinstance(outcome, str) else None
+
+
 def _value_metric_defaults(
     adoptable_result: str,
     failure_class: str | None,
@@ -427,11 +437,8 @@ def _adoption_evidence(
         else None
     )
     status_adoptable_result = raw_status_adoptable_result if raw_status_adoptable_result != "unknown" else None
-    status_blockers = (
-        status_adoption.get("blockers")
-        if isinstance(status_adoption, dict) and isinstance(status_adoption.get("blockers"), list)
-        else []
-    )
+    raw_status_blockers = status_adoption.get("blockers") if isinstance(status_adoption, dict) else None
+    status_blockers = [str(item) for item in raw_status_blockers] if isinstance(raw_status_blockers, list) else []
     adoption_blockers = list(status_blockers if status_adoptable_result else blockers)
     if extra_blockers:
         for blocker in extra_blockers:
@@ -1009,13 +1016,7 @@ def _executor_result(
             "status_returncode": status.returncode,
             **_executor_runtime_metadata(executor_id, health),
             "wait_payload": wait_payload,
-            "controller_wait_outcome": (
-                (wait_payload.get("last_wait_payload") or {}).get("outcome")
-                if isinstance(wait_payload.get("last_wait_payload"), dict)
-                else None
-            )
-            or wait_payload.get("outcome")
-            or ("terminal_success" if phase in TERMINAL_OK_PHASES else None),
+            "controller_wait_outcome": _controller_wait_outcome(wait_payload, phase),
             "time_to_first_useful_signal_seconds": wait_payload.get("time_to_first_useful_signal_seconds"),
             "time_to_first_signal_seconds": wait_payload.get("time_to_first_useful_signal_seconds"),
             "no_progress": bool(wait_payload.get("watchdog_triggered")) or blocker_type == "no_progress_budget_exceeded",

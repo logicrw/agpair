@@ -29,7 +29,7 @@ from agpair.storage.waiters import WaiterRepository
 
 #: Phases treated as terminal by the wait logic (default set).
 #: Single source of truth in models.py.
-from agpair.models import TERMINAL_PHASES  # noqa: E402
+from agpair.models import TERMINAL_PHASES, TaskRecord  # noqa: E402
 
 #: Terminal phases for the approve command — evidence_ready is NOT terminal
 #: because approve starts from evidence_ready and waits for committed.
@@ -212,6 +212,26 @@ def _try_inline_poll(
             f"Transient inline poll failure: {exc}",
             "warning",
         )
+
+
+def refresh_terminal_local_cli_task(
+    tasks: TaskRepository,
+    task: TaskRecord,
+    journal: JournalRepository,
+) -> TaskRecord:
+    if task.phase != "acked":
+        return task
+    session_id = task.executor_session_id or task.antigravity_session_id
+    if not session_id or not is_local_cli_backend(task.executor_backend):
+        return task
+    try:
+        has_terminal_signal = (Path(session_id) / "rc.txt").is_file()
+    except OSError:
+        return task
+    if not has_terminal_signal:
+        return task
+    _try_inline_poll(tasks, task, journal)
+    return tasks.get_task(task.task_id) or task
 
 
 def wait_for_terminal_phase(

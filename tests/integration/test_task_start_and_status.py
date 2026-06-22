@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 from agpair.cli.app import app
 from agpair.config import AppPaths
-from agpair.executors.base import DispatchResult
+from agpair.executors.base import DispatchResult, TaskState
 from agpair.storage.db import connect, ensure_database
 from agpair.storage.journal import JournalRepository
 from agpair.storage.receipts import ReceiptRepository
@@ -773,6 +773,124 @@ def test_task_status_json_and_human_include_live_attempt_artifact_metadata(tmp_p
     assert "last_executor_output_at:" in human.stdout
     assert "active_attempt_artifacts:" in human.stdout
     assert "live output line" not in human.stdout
+
+
+def test_task_status_json_refreshes_local_cli_terminal_signal(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(
+        task_id="TASK-STATUS-REFRESH",
+        repo_path="/tmp/repo",
+        executor_backend="grok-cli",
+        authorization_profile="local_readonly",
+        completion_policy="report",
+        wait_policy="lease",
+        controller_wait_seconds=30,
+        background_ok=True,
+    )
+    session_dir = tmp_path / "status-refresh-session"
+    session_dir.mkdir()
+    (session_dir / "rc.txt").write_text("0\n", encoding="utf-8")
+    (session_dir / "stdout.log").write_text("completed report\n", encoding="utf-8")
+    repo.mark_acked(task_id="TASK-STATUS-REFRESH", session_id=str(session_dir))
+
+    from unittest.mock import MagicMock
+
+    mock_executor = MagicMock()
+    mock_executor.poll.return_value = TaskState(
+        is_done=True,
+        receipt={
+            "schema_version": "1",
+            "task_id": "TASK-STATUS-REFRESH",
+            "attempt_no": 1,
+            "review_round": 0,
+            "status": "EVIDENCE_PACK",
+            "summary": "Status refresh completed",
+            "payload": {
+                "changed_files": [],
+                "scope_violations": [],
+                "validation": "status refresh fixture",
+                "report": "Status refresh completed",
+            },
+        },
+    )
+    monkeypatch.setattr("agpair.cli.wait.get_executor", lambda backend: mock_executor)
+    monkeypatch.setattr("agpair.cli.wait.is_local_cli_backend", lambda backend_id: True)
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-STATUS-REFRESH", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["phase"] == "ready_for_review"
+    assert payload["terminal_source"] == "inline_poll"
+    assert payload["signal_state"]["process_alive"] is None
+    assert payload["artifact_result"]["primary_artifact"] == "report"
+    assert payload["report_path"] is not None
+    mock_executor.poll.assert_called_once_with("TASK-STATUS-REFRESH", str(session_dir), attempt_no=1)
+    mock_executor.cleanup.assert_called_once_with(str(session_dir))
+
+
+def test_task_list_json_refreshes_local_cli_terminal_signal(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    repo.create_task(
+        task_id="TASK-LIST-REFRESH",
+        repo_path="/tmp/repo",
+        executor_backend="grok-cli",
+        authorization_profile="local_readonly",
+        completion_policy="report",
+    )
+    session_dir = tmp_path / "list-refresh-session"
+    session_dir.mkdir()
+    (session_dir / "rc.txt").write_text("0\n", encoding="utf-8")
+    repo.mark_acked(task_id="TASK-LIST-REFRESH", session_id=str(session_dir))
+    repo.create_task(
+        task_id="TASK-ZZZ-LIST-NEWER-ACKED",
+        repo_path="/tmp/repo",
+        executor_backend="grok-cli",
+        authorization_profile="local_readonly",
+        completion_policy="report",
+    )
+    newer_session_dir = tmp_path / "list-newer-session"
+    newer_session_dir.mkdir()
+    repo.mark_acked(task_id="TASK-ZZZ-LIST-NEWER-ACKED", session_id=str(newer_session_dir))
+
+    from unittest.mock import MagicMock
+
+    mock_executor = MagicMock()
+    mock_executor.poll.return_value = TaskState(
+        is_done=True,
+        receipt={
+            "schema_version": "1",
+            "task_id": "TASK-LIST-REFRESH",
+            "attempt_no": 1,
+            "review_round": 0,
+            "status": "EVIDENCE_PACK",
+            "summary": "List refresh completed",
+            "payload": {
+                "changed_files": [],
+                "scope_violations": [],
+                "validation": "list refresh fixture",
+                "report": "List refresh completed",
+            },
+        },
+    )
+    monkeypatch.setattr("agpair.cli.wait.get_executor", lambda backend: mock_executor)
+    monkeypatch.setattr("agpair.cli.wait.is_local_cli_backend", lambda backend_id: True)
+
+    result = CliRunner().invoke(
+        app,
+        ["task", "list", "--repo-path", "/tmp/repo", "--phase", "ready_for_review", "--limit", "1", "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    listed_task = payload["tasks"][0]
+    assert listed_task["task_id"] == "TASK-LIST-REFRESH"
+    assert listed_task["phase"] == "ready_for_review"
+    assert listed_task["signal_state"]["process_alive"] is None
+    assert listed_task["recovery_decision"]["action"] == "use_result"
+    mock_executor.poll.assert_called_once_with("TASK-LIST-REFRESH", str(session_dir), attempt_no=1)
 
 
 def test_task_status_json_marks_bootstrap_noise_only_as_blocked_signal(tmp_path: Path, monkeypatch) -> None:
@@ -2152,7 +2270,9 @@ def test_task_accept_marks_terminal_task_approved(tmp_path: Path, monkeypatch) -
     assert payload["ok"] is True
     assert payload["phase"] == "ready_for_review"
     assert payload["is_approved"] is True
-    assert tasks.get_task("TASK-ACCEPT").is_approved is True
+    accepted_task = tasks.get_task("TASK-ACCEPT")
+    assert accepted_task is not None
+    assert accepted_task.is_approved is True
     assert journal.tail("TASK-ACCEPT", limit=1)[0].event == "accepted"
 
     second = CliRunner().invoke(app, ["task", "accept", "TASK-ACCEPT", "--json"])
@@ -2175,7 +2295,9 @@ def test_task_accept_rejects_non_terminal_task(tmp_path: Path, monkeypatch) -> N
     payload = json.loads(result.stdout)
     assert payload["ok"] is False
     assert payload["error"] == "task_not_ready_for_acceptance"
-    assert tasks.get_task("TASK-ACKED").is_approved is False
+    acked_task = tasks.get_task("TASK-ACKED")
+    assert acked_task is not None
+    assert acked_task.is_approved is False
 
 
 def test_task_abandon_new_local_cli_task_without_session(tmp_path: Path, monkeypatch) -> None:
@@ -2189,7 +2311,9 @@ def test_task_abandon_new_local_cli_task_without_session(tmp_path: Path, monkeyp
     )
 
     assert result.exit_code == 0
-    assert tasks.get_task("TASK-ABANDON-NEW").phase == "abandoned"
+    abandoned_task = tasks.get_task("TASK-ABANDON-NEW")
+    assert abandoned_task is not None
+    assert abandoned_task.phase == "abandoned"
 
 
 def test_task_start_auto_structures_missing_sections(tmp_path: Path, monkeypatch) -> None:

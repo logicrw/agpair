@@ -23,10 +23,11 @@ from agpair.cli.wait import (
     exit_code_for_dispatch,
     is_watchdog_triggered,
     maybe_auto_wait,
+    refresh_terminal_local_cli_task,
     wait_for_terminal_phase,
 )
 from agpair.artifacts import copy_artifact, ensure_attempt_dir, live_artifact_metadata, read_excerpt
-from agpair.adoption import derive_adoption_decision
+from agpair.adoption import ControllerRework, derive_adoption_decision
 from agpair.completion import derive_effective_task_safety, resolve_effective_task_policy
 from agpair.config import AppPaths
 from agpair.executors.policy import next_eligible_executor, resolve_controller_policy, resolve_environment_metadata
@@ -75,6 +76,7 @@ app = typer.Typer(no_args_is_help=True)
 
 _BRIDGE_PORT_MARKER = "bridge_port"
 _BRIDGE_AUTH_TOKEN_MARKER = "bridge_auth_token"
+_TASK_LIST_REFRESH_CANDIDATE_FLOOR = 100
 _ADOPTABLE_RESULTS = {"yes", "partial", "no", "unknown"}
 _CONTROLLER_REWORK = {"none", "minor", "major", "redone", "unknown"}
 
@@ -716,8 +718,10 @@ def _attempt_protocol_adoption_payload(paths: AppPaths, task_id: str) -> dict:
     if not isinstance(agent_result, dict):
         task = tasks.get_task(task_id)
         adoptable_result = str(adoption.get("adoptable_result") or attempt.adoptable_result or "unknown")
-        blockers = adoption.get("blockers") if isinstance(adoption.get("blockers"), list) else []
-        soft_warnings = adoption.get("warnings") if isinstance(adoption.get("warnings"), list) else []
+        raw_blockers = adoption.get("blockers")
+        blockers = [str(item) for item in raw_blockers] if isinstance(raw_blockers, list) else []
+        raw_warnings = adoption.get("warnings")
+        soft_warnings = [str(item) for item in raw_warnings] if isinstance(raw_warnings, list) else []
         if task is not None and task.phase in {"blocked", "stuck", "abandoned"} and adoptable_result == "unknown":
             adoptable_result = "no"
             blockers = [*blockers, f"task_phase_{task.phase}"]
@@ -1062,6 +1066,8 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         }
     if active_exec is None:
         active_exec = get_executor("antigravity", agent_bus_bin="")
+    if active_exec is None:
+        raise RuntimeError("executor registry did not provide a fallback adapter")
     environment_payload = _environment_payload_from_current_attempt(paths, task.task_id, active_backend_id)
     current_attempt = TaskRepository(paths.db_path).current_attempt(task.task_id)
     protocol_adoption_payload = _attempt_protocol_adoption_payload(paths, task.task_id)
@@ -1969,6 +1975,8 @@ def task_status(
         target=target,
         json_output=json_output,
     )
+    journal = JournalRepository(paths.db_path)
+    task = refresh_terminal_local_cli_task(tasks, task, journal)
     payload = build_task_payload(paths, task)
     if json_output:
         _emit_json({"ok": True, **payload})
@@ -2122,6 +2130,10 @@ def task_list(
     paths = _paths()
     tasks = TaskRepository(paths.db_path)
     resolved_repo_path = resolve_repo_path(repo_path, target, paths) if (repo_path or target) else None
+    journal = JournalRepository(paths.db_path)
+    refresh_limit = max(limit, _TASK_LIST_REFRESH_CANDIDATE_FLOOR)
+    for task in tasks.list_tasks(phase="acked", repo_path=resolved_repo_path, limit=refresh_limit):
+        refresh_terminal_local_cli_task(tasks, task, journal)
     rows = tasks.list_tasks(phase=phase, repo_path=resolved_repo_path, limit=limit)
     if json_output:
         _emit_json(
@@ -2450,6 +2462,11 @@ def adopt_task(
         controller=_controller_from_current_attempt(paths, task_id),
     )
     receipt = _latest_terminal_receipt(paths, task_id, task.terminal_receipt_json) if task.phase in TERMINAL_PHASES else None
+    match normalized_rework:
+        case "none" | "minor" | "major" | "redone" | "unknown":
+            controller_rework_value: ControllerRework = normalized_rework
+        case _:
+            controller_rework_value = "minor"
     decision = derive_adoption_decision(
         effective_policy=effective_policy,
         receipt=receipt,
@@ -2458,7 +2475,7 @@ def adopt_task(
         receipt_path=artifact_paths.get("receipt") or _str_or_none(artifact_top_level.get("receipt_path")),
         protocol_warnings=protocol_warnings,
         protocol_errors=protocol_errors,
-        controller_rework=normalized_rework or "minor",
+        controller_rework=controller_rework_value,
     )
     adoption_payload = decision.to_dict()
     if normalized_adoptable is not None:
@@ -2709,7 +2726,8 @@ def watch_task(
 
         payload = build_task_payload(paths, task)
         progress_payload = _watch_progress_payload(payload)
-        signal_payload = payload.get("signal_state") if isinstance(payload.get("signal_state"), dict) else {}
+        raw_signal_payload = payload.get("signal_state")
+        signal_payload = raw_signal_payload if isinstance(raw_signal_payload, dict) else {}
         recovery_payload = payload.get("recovery_decision") if isinstance(payload.get("recovery_decision"), dict) else None
         artifact_result_payload = payload.get("artifact_result") if isinstance(payload.get("artifact_result"), dict) else None
         soft_no_progress = (
