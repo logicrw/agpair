@@ -34,6 +34,8 @@ def test_valid_minimal_manifest_passes() -> None:
     assert manifest.version == 1
     assert manifest.controller == "codex"
     assert manifest.limits["max_parallel_tasks"] == 4
+    assert manifest.nodes[0]["coordination_role"] == "general"
+    assert manifest.nodes[1]["coordination_role"] == "synthesizer"
     assert manifest.nodes[1]["completion_policy"] == "report"
 
 
@@ -93,3 +95,31 @@ def test_rejects_large_workflow_without_flag() -> None:
 def test_report_nodes_keep_report_completion_policy() -> None:
     manifest = validate_manifest(base_manifest())
     assert manifest.nodes[0]["completion_policy"] == "report"
+
+
+def test_manifest_normalizes_coordination_policy_and_node_roles() -> None:
+    raw = base_manifest()
+    raw["coordination_policy"] = {
+        "style": "fanout",
+        "expected_roles": ["Thinker", "verifier"],
+        "optional_roles": ["worker"],
+        "stop_rule": "controller_verifies",
+        "max_coordination_turns": 3,
+        "routing_basis": ["lane role", ""],
+    }
+    raw["nodes"][0]["coordination_role"] = "Thinker"
+
+    manifest = validate_manifest(raw)
+
+    assert manifest.manifest["coordination_policy"]["expected_roles"] == ["thinker", "verifier"]
+    assert manifest.manifest["coordination_policy"]["optional_roles"] == ["worker"]
+    assert manifest.manifest["coordination_policy"]["routing_basis"] == ["lane role"]
+    assert manifest.nodes[0]["coordination_role"] == "thinker"
+
+
+def test_manifest_rejects_unknown_coordination_role() -> None:
+    raw = base_manifest()
+    raw["nodes"][0]["coordination_role"] = "judge"
+
+    with pytest.raises(ValueError, match="coordination role"):
+        validate_manifest(raw)

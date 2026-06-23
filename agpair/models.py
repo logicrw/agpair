@@ -116,6 +116,7 @@ class TaskRecord:
     workflow_node_id: str | None = None
     parent_task_id: str | None = None
     child_role: str | None = None
+    coordination_role: str | None = None
 
 
 @dataclass(frozen=True)

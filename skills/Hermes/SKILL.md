@@ -182,6 +182,11 @@ agpair workflow fanout \
 Read `panel_result`, `lane_cards`, `synthesis_result`, and `evidence_path`.
 The synthesis is evidence, not final truth.
 
+Fanout presets populate `coordination_role` and `role_coverage` so Hermes can
+see whether lanes covered thinker/worker/verifier roles. Treat those fields as
+prompt/status metadata only; they do not make a result adoptable and missing
+expected roles are advisory, not a hard failure.
+
 ## Review Gate
 
 Treat `ready_for_review`, `evidence_ready`, and `committed` as review gates, not

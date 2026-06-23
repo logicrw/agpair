@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   workflow_id TEXT,
   workflow_node_id TEXT,
   parent_task_id TEXT,
-  child_role TEXT
+  child_role TEXT,
+  coordination_role TEXT
 );
 -- NOTE: uq_tasks_repo_idempotency index on (repo_path, client_idempotency_key)
 -- is created by _migrate_schema() in db.py to support both fresh and migrated databases.

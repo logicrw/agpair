@@ -34,6 +34,11 @@ def _write_project_config(
     )
 
 
+def _write_projects_cache(cache_path: pathlib.Path, entries: dict[str, str]) -> None:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(entries), encoding="utf-8")
+
+
 def test_antigravity_cli_executor_uses_env_binary(monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_ANTIGRAVITY_CLI_BIN", "/tmp/fake-agy")
 
@@ -202,10 +207,19 @@ def test_antigravity_cleanup_removes_project_config_for_isolated_worktree(
 ) -> None:
     projects_dir = tmp_path / "projects"
     projects_dir.mkdir()
+    cache_file = tmp_path / "cache" / "projects.json"
     monkeypatch.setenv("AGPAIR_ANTIGRAVITY_PROJECTS_DIR", str(projects_dir))
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_PROJECTS_CACHE", str(cache_file))
     target_path = (tmp_path / "repo" / ".agpair" / "worktrees" / "TASK-AGY").resolve()
     session_dir = tmp_path / "agpair_antigravity-cli_TASK-AGY_cleanup"
     _write_session_state(session_dir, target_path)
+    _write_projects_cache(
+        cache_file,
+        {
+            str(target_path): "transient",
+            "/Users/example/real-project": "real",
+        },
+    )
     matching_config = projects_dir / "transient.json"
     _write_project_config(
         matching_config,
@@ -228,15 +242,21 @@ def test_antigravity_cleanup_removes_project_config_for_isolated_worktree(
     assert not session_dir.exists()
     assert not matching_config.exists()
     assert unrelated_config.exists()
+    cache_data = json.loads(cache_file.read_text(encoding="utf-8"))
+    assert str(target_path) not in cache_data
+    assert cache_data["/Users/example/real-project"] == "real"
 
 
 def test_antigravity_cleanup_keeps_project_config_while_process_alive(monkeypatch, tmp_path) -> None:
     projects_dir = tmp_path / "projects"
     projects_dir.mkdir()
+    cache_file = tmp_path / "cache" / "projects.json"
     monkeypatch.setenv("AGPAIR_ANTIGRAVITY_PROJECTS_DIR", str(projects_dir))
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_PROJECTS_CACHE", str(cache_file))
     target_path = (tmp_path / "repo" / ".agpair" / "worktrees" / "TASK-AGY").resolve()
     session_dir = tmp_path / "agpair_antigravity-cli_TASK-AGY_cleanup"
     _write_session_state(session_dir, target_path)
+    _write_projects_cache(cache_file, {str(target_path): "transient"})
     matching_config = projects_dir / "transient.json"
     _write_project_config(
         matching_config,
@@ -254,15 +274,19 @@ def test_antigravity_cleanup_keeps_project_config_while_process_alive(monkeypatc
 
     assert session_dir.exists()
     assert matching_config.exists()
+    assert str(target_path) in json.loads(cache_file.read_text(encoding="utf-8"))
 
 
 def test_antigravity_cleanup_ignores_non_transient_project_path(monkeypatch, tmp_path) -> None:
     projects_dir = tmp_path / "projects"
     projects_dir.mkdir()
+    cache_file = tmp_path / "cache" / "projects.json"
     monkeypatch.setenv("AGPAIR_ANTIGRAVITY_PROJECTS_DIR", str(projects_dir))
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_PROJECTS_CACHE", str(cache_file))
     target_path = pathlib.Path("/Users/example/real-project").resolve(strict=False)
     session_dir = tmp_path / "agpair_antigravity-cli_TASK-AGY_cleanup"
     _write_session_state(session_dir, target_path)
+    _write_projects_cache(cache_file, {str(target_path): "real"})
     matching_config = projects_dir / "real-project.json"
     _write_project_config(
         matching_config,
@@ -277,15 +301,19 @@ def test_antigravity_cleanup_ignores_non_transient_project_path(monkeypatch, tmp
 
     assert not session_dir.exists()
     assert matching_config.exists()
+    assert str(target_path) in json.loads(cache_file.read_text(encoding="utf-8"))
 
 
 def test_antigravity_cleanup_ignores_unprefixed_temp_project_path(monkeypatch, tmp_path) -> None:
     projects_dir = tmp_path / "projects"
     projects_dir.mkdir()
+    cache_file = tmp_path / "cache" / "projects.json"
     monkeypatch.setenv("AGPAIR_ANTIGRAVITY_PROJECTS_DIR", str(projects_dir))
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_PROJECTS_CACHE", str(cache_file))
     target_path = (tmp_path / "real-project").resolve()
     session_dir = tmp_path / "agpair_antigravity-cli_TASK-AGY_cleanup"
     _write_session_state(session_dir, target_path)
+    _write_projects_cache(cache_file, {str(target_path): "real-temp"})
     matching_config = projects_dir / "real-temp-project.json"
     _write_project_config(
         matching_config,
@@ -300,12 +328,15 @@ def test_antigravity_cleanup_ignores_unprefixed_temp_project_path(monkeypatch, t
 
     assert not session_dir.exists()
     assert matching_config.exists()
+    assert str(target_path) in json.loads(cache_file.read_text(encoding="utf-8"))
 
 
 def test_antigravity_cleanup_ignores_malformed_project_configs(monkeypatch, tmp_path) -> None:
     projects_dir = tmp_path / "projects"
     projects_dir.mkdir()
+    cache_file = tmp_path / "cache" / "projects.json"
     monkeypatch.setenv("AGPAIR_ANTIGRAVITY_PROJECTS_DIR", str(projects_dir))
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_PROJECTS_CACHE", str(cache_file))
     target_path = (tmp_path / "repo" / ".agpair" / "worktrees" / "TASK-AGY").resolve()
     session_dir = tmp_path / "agpair_antigravity-cli_TASK-AGY_cleanup"
     _write_session_state(session_dir, target_path)

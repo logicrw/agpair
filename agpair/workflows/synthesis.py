@@ -37,6 +37,7 @@ def build_lane_card(node_payload: dict[str, Any], *, role: str | None = None, ex
     return {
         "node_id": str(node_payload.get("node_id") or ""),
         "role": role or _optional_str(node_payload.get("role")) or str(node_payload.get("kind") or "task"),
+        "coordination_role": _optional_str(node_payload.get("coordination_role")) or "general",
         "executor": executor or _optional_str(node_payload.get("executor_backend")) or "",
         "task_id": _optional_str(node_payload.get("task_id")),
         "phase": str(node_payload.get("phase") or "unknown"),
@@ -156,6 +157,10 @@ def derive_panel_result(
         "contradiction_count": len(_list_value(normalized_synthesis.get("contradictions"))),
         "unique_insight_count": len(_list_value(normalized_synthesis.get("unique_insights"))),
         "blind_spot_count": len(_list_value(normalized_synthesis.get("blind_spots"))),
+        "coordination_metrics": {
+            "role_counts": _role_counts(lane_cards),
+            "advisory_only": True,
+        },
         "hard_blockers": agent_result["hard_blockers"],
         "soft_warnings": agent_result["soft_warnings"],
         "recovery_decision": recovery_decision,
@@ -277,6 +282,14 @@ def _list_value(raw: Any) -> list[Any]:
 
 def _string_list(raw: Any) -> list[str]:
     return [item for item in _list_value(raw) if isinstance(item, str)]
+
+
+def _role_counts(lane_cards: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for lane in lane_cards:
+        role = _optional_str(lane.get("coordination_role")) or "general"
+        counts[role] = counts.get(role, 0) + 1
+    return counts
 
 
 def _all_strings(raw: Any) -> bool:

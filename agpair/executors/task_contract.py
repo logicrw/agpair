@@ -3,6 +3,7 @@ from __future__ import annotations
 import pathlib
 
 from agpair.models import authorization_profile_summary, validate_authorization_profile
+from agpair.roles import role_prompt_hint
 from agpair.task_brief import is_report_only_brief
 
 
@@ -14,6 +15,7 @@ def body_with_task_contract(
     authorization_profile: str = "local_mutating",
     authorization_summary: str | None = None,
     completion_policy: str = "auto",
+    coordination_role: str | None = None,
 ) -> str:
     normalized_profile = validate_authorization_profile(authorization_profile)
     summary = authorization_summary or authorization_profile_summary(normalized_profile)
@@ -26,12 +28,16 @@ def body_with_task_contract(
             "If your CLI opens in a scratch directory, cd to this path or use absolute paths under it. "
             "Do not search or modify files outside this repository unless the task explicitly says so.\n\n"
         )
+    role_addendum = ""
+    if coordination_role:
+        role_addendum = f"Coordination role requirements:\n- {role_prompt_hint(coordination_role)}\n\n"
     contract = (
         f"Task ID: {task_id}\n"
         f"If you create a git commit for this task, the commit message must include `{task_id}` verbatim.\n\n"
         f"{execution_context}"
         f"Authorization profile: {normalized_profile}\n"
         f"{summary}\n\n"
+        f"{role_addendum}"
         "Noninteractive execution requirements:\n"
         "- This is a background AGPair task; do not wait for human confirmation, editor interaction, or approval prompts.\n"
         "- Do not start another AGPair task from inside this executor unless the controller explicitly authorized nested delegation.\n"

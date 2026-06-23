@@ -61,11 +61,20 @@ def doctor(
 def cleanup(
     older_than_days: int = typer.Option(30, "--older-than", help="Delete data older than this many days"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be deleted without deleting"),
+    executor_state_only: bool = typer.Option(
+        False,
+        "--executor-state-only",
+        help="Clean only external executor local state such as orphaned Antigravity project entries.",
+    ),
 ) -> None:
     """Remove old journals, receipts, and terminal tasks to reclaim space."""
     from datetime import UTC, datetime, timedelta
 
     from agpair.storage.db import ensure_database
+    from agpair.executors.antigravity_project_state import (
+        active_antigravity_execution_paths,
+        sweep_antigravity_transient_projects,
+    )
     from agpair.storage.journal import JournalRepository
     from agpair.storage.receipts import ReceiptRepository
     from agpair.storage.tasks import TaskRepository
@@ -77,6 +86,19 @@ def cleanup(
     journals = JournalRepository(paths.db_path)
     receipts = ReceiptRepository(paths.db_path)
     tasks = TaskRepository(paths.db_path)
+    active_paths = active_antigravity_execution_paths(tasks.list_tasks(phase="acked", limit=10000))
+    antigravity_cleanup = sweep_antigravity_transient_projects(active_paths=active_paths, dry_run=dry_run)
+
+    if executor_state_only:
+        if dry_run:
+            typer.echo("Dry run — executor state:")
+            typer.echo(f"  antigravity project configs: {antigravity_cleanup.config_files} would be deleted")
+            typer.echo(f"  antigravity cache entries: {antigravity_cleanup.cache_entries} would be deleted")
+            return
+        typer.echo("Cleaned up executor state:")
+        typer.echo(f"  antigravity project configs: {antigravity_cleanup.config_files} deleted")
+        typer.echo(f"  antigravity cache entries: {antigravity_cleanup.cache_entries} deleted")
+        return
 
     if dry_run:
         j = journals.count_older_than(cutoff)
@@ -86,6 +108,8 @@ def cleanup(
         typer.echo(f"  journals: {j} would be deleted")
         typer.echo(f"  receipts: {r} would be deleted")
         typer.echo(f"  terminal tasks: {t} would be deleted")
+        typer.echo(f"  antigravity project configs: {antigravity_cleanup.config_files} would be deleted")
+        typer.echo(f"  antigravity cache entries: {antigravity_cleanup.cache_entries} would be deleted")
         return
 
     j = journals.delete_older_than(cutoff)
@@ -96,6 +120,8 @@ def cleanup(
     typer.echo(f"  journals: {j} deleted")
     typer.echo(f"  receipts: {r} deleted")
     typer.echo(f"  terminal tasks: {t} deleted")
+    typer.echo(f"  antigravity project configs: {antigravity_cleanup.config_files} deleted")
+    typer.echo(f"  antigravity cache entries: {antigravity_cleanup.cache_entries} deleted")
 
 
 @app.command("inspect")

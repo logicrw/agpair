@@ -10,6 +10,7 @@ from typing import Any, Mapping
 from agpair.completion import normalize_completion_policy
 from agpair.executors.routing import validate_supported_executor
 from agpair.models import validate_authorization_profile
+from agpair.roles import normalize_coordination_role
 from agpair.workflows.models import NODE_KINDS
 
 FORBIDDEN_FIELDS = frozenset({
@@ -143,6 +144,9 @@ def validate_manifest(
         raise WorkflowManifestError("workflow requires repo_path or CLI --repo-path/--target")
     limits = _normalize_limits(manifest.get("limits"), allow_large_workflow=allow_large_workflow)
     manifest["limits"] = limits
+    coordination_policy = _normalize_coordination_policy(manifest.get("coordination_policy"))
+    if coordination_policy is not None:
+        manifest["coordination_policy"] = coordination_policy
     nodes = manifest.get("nodes")
     if not isinstance(nodes, list) or not nodes:
         raise WorkflowManifestError("workflow manifest requires a non-empty nodes array")
@@ -175,6 +179,9 @@ def validate_manifest(
         if kind not in NODE_KINDS:
             raise WorkflowManifestError(f"node {node_id} kind must be one of: {', '.join(sorted(NODE_KINDS))}")
         node["kind"] = kind
+        node["coordination_role"] = normalize_coordination_role(
+            node.get("coordination_role")
+        ) or _default_coordination_role_for_kind(kind)
         deps = node.get("depends_on", [])
         if deps is None:
             deps = []
@@ -237,6 +244,56 @@ def _normalize_limits(raw: Any, *, allow_large_workflow: bool) -> dict[str, int]
     limits["max_runtime_seconds"] = _normalize_int(limits["max_runtime_seconds"], field="limits.max_runtime_seconds", min_value=60, max_value=604800)
     limits["max_watch_events"] = _normalize_int(limits["max_watch_events"], field="limits.max_watch_events", min_value=1, max_value=100000)
     return limits
+
+
+def _normalize_coordination_policy(raw: Any) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise WorkflowManifestError("coordination_policy must be an object")
+    policy = deepcopy(raw)
+    style = str(policy.get("style") or "role_orchestrated").strip().lower()
+    if style not in {"role_orchestrated", "fanout", "single_role"}:
+        raise WorkflowManifestError("coordination_policy.style must be role_orchestrated, fanout, or single_role")
+    policy["style"] = style
+    policy["expected_roles"] = _normalize_role_list(
+        policy.get("expected_roles", []),
+        field="coordination_policy.expected_roles",
+    )
+    policy["optional_roles"] = _normalize_role_list(
+        policy.get("optional_roles", []),
+        field="coordination_policy.optional_roles",
+    )
+    stop_rule = str(policy.get("stop_rule") or "controller_verifies").strip().lower()
+    if stop_rule not in {"controller_verifies", "budget_exhausted", "manual"}:
+        raise WorkflowManifestError("coordination_policy.stop_rule must be controller_verifies, budget_exhausted, or manual")
+    policy["stop_rule"] = stop_rule
+    policy["max_coordination_turns"] = _normalize_int(
+        policy.get("max_coordination_turns", 5),
+        field="coordination_policy.max_coordination_turns",
+        min_value=1,
+        max_value=20,
+    )
+    routing_basis = policy.get("routing_basis", [])
+    if not isinstance(routing_basis, list) or not all(isinstance(item, str) for item in routing_basis):
+        raise WorkflowManifestError("coordination_policy.routing_basis must be a string array")
+    policy["routing_basis"] = [item.strip() for item in routing_basis if item.strip()]
+    return policy
+
+
+def _normalize_role_list(raw: Any, *, field: str) -> list[str]:
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise WorkflowManifestError(f"{field} must be a string array")
+    return [normalize_coordination_role(item) or "general" for item in raw]
+
+
+def _default_coordination_role_for_kind(kind: str) -> str:
+    mapping = {
+        "synthesis": "synthesizer",
+        "gate": "gate",
+        "verification": "verifier",
+    }
+    return mapping.get(kind, "general")
 
 
 def _normalize_int(value: Any, *, field: str, min_value: int, max_value: int) -> int:

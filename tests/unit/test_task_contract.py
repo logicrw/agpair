@@ -33,3 +33,17 @@ def test_body_readonly_hint_injects_report_only_contract() -> None:
     )
 
     assert "Report-only outcome requirements" in prompt
+
+
+def test_body_with_coordination_role_injects_advisory_role_hint() -> None:
+    prompt = body_with_task_contract(
+        "TASK-THINK",
+        "Goal: inspect\nScope: repo\nRequired changes: none\nExit criteria: report",
+        authorization_profile="local_readonly",
+        completion_policy="report",
+        coordination_role="thinker",
+    )
+
+    assert "Coordination role requirements" in prompt
+    assert "Act as a thinker" in prompt
+    assert "Structured terminal receipt JSON requirements" in prompt

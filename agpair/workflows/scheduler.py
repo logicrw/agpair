@@ -164,6 +164,7 @@ class WorkflowScheduler:
         effective_policy_json = json.dumps(effective_policy.to_dict(), ensure_ascii=False, sort_keys=True)
         task_id = _child_task_id(workflow.workflow_id, node.node_id, node.attempt_no)
         idempotency_key = f"workflow:{workflow.workflow_id}:node:{node.node_id}:attempt:{node.attempt_no}"
+        coordination_role = _coordination_role_for_node(workflow, node.node_id)
         self.workflows.mark_node_phase(
             workflow.workflow_id,
             node.node_id,
@@ -190,6 +191,7 @@ class WorkflowScheduler:
                 workflow_node_id=node.node_id,
                 parent_task_id=workflow.workflow_id,
                 child_role=node.role or node.kind,
+                coordination_role=coordination_role,
                 isolated_worktree=node.isolated_worktree,
                 dirty_snapshot_mode=dirty_snapshot_mode,
             )
@@ -211,14 +213,18 @@ class WorkflowScheduler:
             return
         try:
             if is_local_cli_backend(executor_id):
-                dispatch_result = exec_instance.dispatch(
-                    task_id=task_id,
-                    body=body,
-                    repo_path=repo_path,
-                    authorization_profile=node.authorization_profile,
-                    isolated_worktree=node.isolated_worktree,
-                    dirty_snapshot_mode=dirty_snapshot_mode,
-                )
+                dispatch_kwargs = {
+                    "task_id": task_id,
+                    "body": body,
+                    "repo_path": repo_path,
+                    "authorization_profile": node.authorization_profile,
+                    "isolated_worktree": node.isolated_worktree,
+                    "dirty_snapshot_mode": dirty_snapshot_mode,
+                    "completion_policy": node.requested_completion_policy,
+                }
+                if coordination_role is not None:
+                    dispatch_kwargs["coordination_role"] = coordination_role
+                dispatch_result = exec_instance.dispatch(**dispatch_kwargs)
                 if dispatch_result.execution_repo_path:
                     self.tasks.set_execution_repo_path(task_id=task_id, execution_repo_path=dispatch_result.execution_repo_path)
                 if dispatch_result.session_id:
@@ -450,3 +456,18 @@ def _safe_json(text: str | None) -> dict | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
+
+
+def _coordination_role_for_node(workflow: WorkflowRecord, node_id: str) -> str | None:
+    manifest = _safe_json(workflow.manifest_json) or {}
+    nodes = manifest.get("nodes")
+    if not isinstance(nodes, list):
+        return None
+    for node in nodes:
+        if not isinstance(node, dict) or node.get("id") != node_id:
+            continue
+        role = node.get("coordination_role")
+        if not isinstance(role, str) or role == "general":
+            return None
+        return role
+    return None

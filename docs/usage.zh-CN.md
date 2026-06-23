@@ -148,8 +148,11 @@ agpair task start \
   --wait-policy lease \
   --authorization-profile local_readonly \
   --completion-policy report \
+  --coordination-role verifier \
   --body "Goal: 审查指定区域。Scope: 仅限已点名文件。Required changes: None. This is report-only. Do not edit files. Exit criteria: 返回带证据的结论。"
 ```
+
+当主控想明确任务角色时，可以传 `--coordination-role thinker|worker|verifier|synthesizer|gate|general`。它只是 prompt 和 status 元数据。AGPair 仍然根据 receipt、artifact、diff、report、validation 和主控复核来判断结果。
 
 推荐写法仍然是 `--repo-path`、`--body` 和 `local_readonly` 这类完整 profile。
 `task start` 兼容 `--repo`、`--prompt`、`readonly` 等常见别名，也会把过短 body

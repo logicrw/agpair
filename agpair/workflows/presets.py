@@ -11,6 +11,7 @@ from agpair.workflows.source_policy import build_source_policy
 
 SUPPORTED_FANOUT_MODES: Final = frozenset({"review", "research", "implementation", "test-fix"})
 ROLE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+ROLE_TOKEN_RE = re.compile(r"[^a-z0-9]+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,7 @@ def build_fanout_manifest(
         "controller": controller,
         "mode": normalized_mode,
         "source_policy": build_source_policy(mode=normalized_mode),
+        "coordination_policy": _coordination_policy(normalized_mode),
         "authorization_profile": auth_profile,
         "completion_policy": completion_policy,
         "limits": {"max_parallel_tasks": min(max(len(lane_ids), 1), 8), "max_child_tasks": len(lane_ids) + 2},
@@ -104,6 +106,54 @@ def _safe_role(role: str) -> str:
     return normalized[:60]
 
 
+def _coordination_policy(mode: str) -> dict:
+    expected_roles = ["worker", "verifier"] if mode in {"implementation", "test-fix"} else ["thinker", "verifier"]
+    return {
+        "style": "fanout",
+        "expected_roles": expected_roles,
+        "optional_roles": ["worker"] if mode in {"review", "research"} else ["thinker"],
+        "stop_rule": "controller_verifies",
+        "max_coordination_turns": 5,
+        "routing_basis": ["mode", "lane role", "executor availability"],
+    }
+
+
+def _role_for_lane(*, mode: str, role: str) -> str:
+    tokens = {item for item in ROLE_TOKEN_RE.split(role.lower()) if item}
+    verifier_tokens = {
+        "adversarial",
+        "audit",
+        "critic",
+        "qa",
+        "review",
+        "reviewer",
+        "second",
+        "test",
+        "tester",
+        "verification",
+        "verifier",
+        "verify",
+    }
+    thinker_tokens = {
+        "analysis",
+        "architect",
+        "explore",
+        "planner",
+        "primary",
+        "research",
+        "researcher",
+        "thinker",
+    }
+    worker_tokens = {"builder", "candidate", "fix", "implementer", "patch", "worker"}
+    if tokens & verifier_tokens:
+        return "verifier"
+    if tokens & worker_tokens:
+        return "worker"
+    if tokens & thinker_tokens:
+        return "thinker"
+    return "worker" if mode in {"implementation", "test-fix"} else "thinker"
+
+
 def _task_node(
     *,
     executor: str,
@@ -115,6 +165,7 @@ def _task_node(
     completion_policy: str,
     isolated_worktree: bool,
 ) -> dict:
+    coordination_role = _role_for_lane(mode=mode, role=role)
     required_changes = "none; return a report only" if completion_policy == "report" else "produce the smallest safe candidate diff"
     exit_criteria = (
         "Return a concise report with findings, evidence paths, uncertainties, and recommended controller action."
@@ -125,6 +176,7 @@ def _task_node(
         "id": role,
         "kind": "task",
         "role": role,
+        "coordination_role": coordination_role,
         "executor": executor,
         "authorization_profile": authorization_profile,
         "completion_policy": completion_policy,
@@ -133,6 +185,7 @@ def _task_node(
             f"Goal: {topic}",
             f"Mode: {mode}",
             f"Lane role: {role}",
+            f"Coordination role: {coordination_role}",
             f"Scope: {scope or 'Use the repository context relevant to the goal.'}",
             f"Required changes: {required_changes}.",
             f"Exit criteria: {exit_criteria}",
@@ -145,6 +198,7 @@ def _synthesis_node(*, depends_on: list[str], mode: str, topic: str) -> dict:
         "id": "synthesis",
         "kind": "synthesis",
         "role": "synthesis",
+        "coordination_role": "synthesizer",
         "depends_on": depends_on,
         "authorization_profile": "local_readonly",
         "completion_policy": "report",
@@ -162,6 +216,7 @@ def _gate_node() -> dict:
         "id": "gate",
         "kind": "gate",
         "role": "gate",
+        "coordination_role": "gate",
         "depends_on": ["synthesis"],
         "authorization_profile": "local_readonly",
         "completion_policy": "report",

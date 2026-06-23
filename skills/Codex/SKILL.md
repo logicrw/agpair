@@ -186,6 +186,11 @@ before answering. The synthesis result is evidence, not final truth. Controller
 verification still decides whether to use, apply, retry, switch executor, or
 fall back to a native helper.
 
+Fanout presets populate `coordination_role` and `role_coverage` so Codex can see
+whether lanes covered thinker/worker/verifier roles. Treat those fields as
+prompt/status metadata only; they do not make a result adoptable and missing
+expected roles are advisory, not a hard failure.
+
 ## Bounded Implementation
 
 For non-trivial implementation, refactor, or test-fix work, dispatch one bounded

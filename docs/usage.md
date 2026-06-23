@@ -130,8 +130,11 @@ agpair task start \
   --wait-policy lease \
   --authorization-profile local_readonly \
   --completion-policy report \
+  --coordination-role verifier \
   --body "Goal: inspect the target area. Scope: named files only. Required changes: None. This is report-only. Do not edit files. Exit criteria: return findings with evidence."
 ```
+
+Use `--coordination-role thinker|worker|verifier|synthesizer|gate|general` when the controller wants to make a task's intended role explicit. It is a prompt and status hint only. AGPair still judges completion from receipts, artifacts, diffs, reports, validation, and controller review.
 
 Canonical examples use `--repo-path`, `--body`, and full profile names such as
 `local_readonly`. `task start` accepts compatibility aliases like `--repo`,

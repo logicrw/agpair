@@ -15,6 +15,7 @@ def test_build_lane_card_preserves_agent_result_and_artifacts() -> None:
         "phase": "ready_for_review",
         "task_id": "TASK-1",
         "role": "primary",
+        "coordination_role": "thinker",
         "executor_backend": "grok-cli",
         "artifacts": [
             {"type": "report", "path": "/tmp/report.md", "size_bytes": 100, "sha256": "abc"},
@@ -50,6 +51,7 @@ def test_build_lane_card_preserves_agent_result_and_artifacts() -> None:
 
     assert card["node_id"] == "review-primary"
     assert card["role"] == "primary"
+    assert card["coordination_role"] == "thinker"
     assert card["executor"] == "grok-cli"
     assert card["agent_result"]["state"] == "usable"
     assert card["artifact_result"]["primary_artifact"] == "report"
@@ -196,3 +198,17 @@ def test_derive_panel_result_degrades_for_partial_lane_and_scope_violation() -> 
     assert panel["partial_lane_count"] == 1
     assert panel["blocked_lane_count"] == 0
     assert "scope_violation" in panel["hard_blockers"]
+
+
+def test_derive_panel_result_exposes_advisory_role_counts() -> None:
+    panel = derive_panel_result(
+        workflow_id="WF-ROLES",
+        lane_cards=[
+            {"node_id": "a", "coordination_role": "thinker", "agent_result": {"state": "usable"}},
+            {"node_id": "b", "coordination_role": "verifier", "agent_result": {"state": "usable"}},
+        ],
+        synthesis_result=None,
+    )
+
+    assert panel["coordination_metrics"]["role_counts"] == {"thinker": 1, "verifier": 1}
+    assert panel["coordination_metrics"]["advisory_only"] is True

@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import import_module
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import threading
@@ -260,6 +261,19 @@ def test_task_repository_persists_wait_budget_contract(tmp_path: Path) -> None:
     assert attempt.background_ok is True
 
 
+def test_task_repository_persists_coordination_role(tmp_path: Path) -> None:
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-ROLE-1", repo_path="/tmp/repo", coordination_role="Verifier")
+
+    task = repo.get_task("TASK-ROLE-1")
+    attempt = repo.current_attempt("TASK-ROLE-1")
+
+    assert task is not None
+    assert task.coordination_role == "verifier"
+    assert attempt is not None
+    assert not hasattr(attempt, "coordination_role")
+
+
 def test_task_repository_retry_preserves_wait_budget_contract(tmp_path: Path) -> None:
     repo = make_task_repo(tmp_path)
     repo.create_task(
@@ -329,7 +343,19 @@ def test_task_start_creates_local_record_and_starts_default_external_cli(tmp_pat
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["task", "start", "--repo-path", str(repo_path), "--body", "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test", "--task-id", "TASK-CLI-1", "--no-wait"],
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--body",
+            "Goal: test\nScope: test\nRequired changes: test\nExit criteria: test",
+            "--task-id",
+            "TASK-CLI-1",
+            "--coordination-role",
+            "thinker",
+            "--no-wait",
+        ],
     )
 
     assert result.exit_code == 0
@@ -339,8 +365,47 @@ def test_task_start_creates_local_record_and_starts_default_external_cli(tmp_pat
     assert task is not None
     assert task.phase == "acked"
     assert task.executor_backend == "grok-cli"
+    assert task.coordination_role == "thinker"
     assert task.antigravity_session_id is not None
     assert "agpair_grok-cli_TASK-CLI-1_" in task.antigravity_session_id
+    assert read_calls(calls_path) == []
+
+
+def test_task_start_json_includes_coordination_role(tmp_path: Path, monkeypatch) -> None:
+    binary, calls_path, pull_path = write_fake_agent_bus(tmp_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    monkeypatch.setenv("AGPAIR_AGENT_BUS_BIN", binary)
+    monkeypatch.setenv("FAKE_AGENT_BUS_CALLS", str(calls_path))
+    monkeypatch.setenv("FAKE_AGENT_BUS_PULL", str(pull_path))
+    configure_fake_antigravity_cli(tmp_path, monkeypatch)
+    repo_path = make_repo_dir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "task",
+            "start",
+            "--repo-path",
+            str(repo_path),
+            "--body",
+            "Goal: test\nScope: test\nRequired changes: none\nExit criteria: report",
+            "--task-id",
+            "TASK-CLI-ROLE",
+            "--completion-policy",
+            "report",
+            "--coordination-role",
+            "verifier",
+            "--no-wait",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    task = make_task_repo(tmp_path).get_task("TASK-CLI-ROLE")
+    assert payload["task"]["coordination_role"] == "verifier"
+    assert task is not None
+    assert task.coordination_role == "verifier"
     assert read_calls(calls_path) == []
 
 
@@ -626,7 +691,7 @@ def test_task_status_shows_phase_and_session(tmp_path: Path, monkeypatch) -> Non
 def test_task_status_json_returns_structured_payload(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
     repo = make_task_repo(tmp_path)
-    repo.create_task(task_id="TASK-JSON-1", repo_path="/tmp/repo")
+    repo.create_task(task_id="TASK-JSON-1", repo_path="/tmp/repo", coordination_role="thinker")
     repo.mark_acked(task_id="TASK-JSON-1", session_id="session-json-1")
 
     result = CliRunner().invoke(app, ["task", "status", "TASK-JSON-1", "--json"])
@@ -645,6 +710,7 @@ def test_task_status_json_returns_structured_payload(tmp_path: Path, monkeypatch
     assert payload["a2a_state_hint"] == "working"
     assert payload["session_id"] == "session-json-1"
     assert payload["task_kind"] == "generic"
+    assert payload["coordination_role"] == "thinker"
     assert payload["wait_policy"] == "terminal"
     assert payload["controller_wait_seconds"] is None
     assert payload["execution_budget_seconds"] is None
@@ -1519,6 +1585,58 @@ def test_task_abandon_json_archives_live_attempt_artifacts(tmp_path: Path, monke
     assert task is not None
     assert task.phase == "abandoned"
     assert task.stuck_reason == "no useful signal"
+
+
+def test_task_abandon_cleans_local_cli_session_after_archiving(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo = make_task_repo(tmp_path)
+    journal = make_journal_repo(tmp_path)
+    session_dir = tmp_path / "agpair_antigravity-cli_TASK-ABANDON-CLEANUP"
+    session_dir.mkdir()
+    (session_dir / "stdout.log").write_text("external report\n", encoding="utf-8")
+    (session_dir / "stderr.log").write_text("", encoding="utf-8")
+    archived_stdout = tmp_path / ".agpair" / "tasks" / "TASK-ABANDON-CLEANUP" / "attempt-1" / "stdout.log"
+
+    repo.create_task(
+        task_id="TASK-ABANDON-CLEANUP",
+        repo_path="/tmp/repo",
+        executor_backend="antigravity-cli",
+    )
+    repo.mark_acked(task_id="TASK-ABANDON-CLEANUP", session_id=str(session_dir))
+    journal.append("TASK-ABANDON-CLEANUP", "daemon", "acked", f"session_id={session_dir}")
+
+    class FakeLocalExecutor:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def cancel(self, *, task_id: str, session_id: str) -> None:
+            self.calls.append(("cancel", session_id))
+
+        def cleanup(self, session_id: str) -> None:
+            self.calls.append(("cleanup", session_id))
+            assert archived_stdout.read_text(encoding="utf-8") == "external report\n"
+            shutil.rmtree(session_id)
+
+    fake_executor = FakeLocalExecutor()
+    monkeypatch.setattr("agpair.executors.get_executor", lambda backend: fake_executor)
+    monkeypatch.setattr("agpair.executors.is_local_cli_backend", lambda backend: True)
+
+    result = CliRunner().invoke(
+        app,
+        ["task", "abandon", "TASK-ABANDON-CLEANUP", "--reason", "manual cleanup", "--force"],
+    )
+
+    assert result.exit_code == 0
+    assert fake_executor.calls == [
+        ("cancel", str(session_dir)),
+        ("cleanup", str(session_dir)),
+    ]
+    assert not session_dir.exists()
+    assert archived_stdout.read_text(encoding="utf-8") == "external report\n"
+    task = repo.get_task("TASK-ABANDON-CLEANUP")
+    assert task is not None
+    assert task.phase == "abandoned"
+    assert task.antigravity_session_id is None
 
 
 def test_task_abandon_notifies_bridge_cancel_when_auth_marker_present(tmp_path: Path, monkeypatch) -> None:

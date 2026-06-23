@@ -272,3 +272,45 @@ def test_daemon_sweep_cleans_terminal_workflow_child_session_without_phase_scan(
     assert task.antigravity_session_id is None
     assert fake.cleanup_calls == [str(session_dir)]
     assert workflows.require_node("WF-SWEEP", "scan").phase == "running"
+
+
+def test_daemon_sweep_removes_orphaned_antigravity_projects_but_keeps_active(tmp_path: Path, monkeypatch) -> None:
+    from agpair.daemon.loop import sweep_antigravity_project_state
+
+    paths = make_paths(tmp_path)
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    cache_file = tmp_path / "cache" / "projects.json"
+    cache_file.parent.mkdir()
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_PROJECTS_DIR", str(projects_dir))
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_PROJECTS_CACHE", str(cache_file))
+    orphan_path = (tmp_path / "repo" / ".agpair" / "worktrees" / "TASK-ORPHAN").resolve()
+    active_path = (tmp_path / "repo" / ".agpair" / "worktrees" / "TASK-ACTIVE").resolve()
+    orphan_config = projects_dir / "orphan.json"
+    active_config = projects_dir / "active.json"
+    orphan_config.write_text(
+        f'{{"projectResources": {{"resources": [{{"folderUri": "{orphan_path.as_uri()}"}}]}}}}',
+        encoding="utf-8",
+    )
+    active_config.write_text(
+        f'{{"projectResources": {{"resources": [{{"folderUri": "{active_path.as_uri()}"}}]}}}}',
+        encoding="utf-8",
+    )
+    cache_file.write_text(
+        f'{{"{orphan_path}": "orphan", "{active_path}": "active"}}',
+        encoding="utf-8",
+    )
+    tasks = TaskRepository(paths.db_path)
+    tasks.create_task(task_id="TASK-ACTIVE", repo_path=str(tmp_path / "repo"), executor_backend="antigravity-cli")
+    tasks.set_execution_repo_path(task_id="TASK-ACTIVE", execution_repo_path=str(active_path))
+    tasks.mark_acked(task_id="TASK-ACTIVE", session_id=str(tmp_path / "agpair_antigravity-cli_TASK-ACTIVE"))
+
+    result = sweep_antigravity_project_state(paths)
+
+    assert result.config_files == 1
+    assert result.cache_entries == 1
+    assert not orphan_config.exists()
+    assert active_config.exists()
+    cache_text = cache_file.read_text(encoding="utf-8")
+    assert str(orphan_path) not in cache_text
+    assert str(active_path) in cache_text

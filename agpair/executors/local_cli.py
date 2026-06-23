@@ -606,6 +606,7 @@ class LocalCLIExecutor(ExecutorAdapter):
         mcp_policy: str | None = None,
         dirty_snapshot_mode: str = "off",
         completion_policy: str = "auto",
+        coordination_role: str | None = None,
     ) -> DispatchResult:
         temp_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"agpair_{self._backend_id}_{task_id}_"))
         normalized_dirty_snapshot_mode = (dirty_snapshot_mode or "off").strip().lower()
@@ -648,6 +649,7 @@ class LocalCLIExecutor(ExecutorAdapter):
             authorization_profile=authorization_profile,
             authorization_summary=authorization_summary,
             completion_policy=completion_policy,
+            coordination_role=coordination_role,
         )
         cli_cmd = self._build_cmd(contracted_body, execution_repo_path, temp_dir)
         env_overrides = {}
@@ -725,6 +727,7 @@ sys.exit(rc)
             "termination_signal": None,
             "authorization_profile": authorization_profile,
             "completion_policy": completion_policy,
+            "coordination_role": coordination_role,
             "environment_mode": environment_mode,
             "skill_policy": skill_policy,
             "mcp_policy": mcp_policy,
@@ -807,26 +810,28 @@ sys.exit(rc)
 
         # ========= 第三层：Git 语义仲裁 =========
         repo_path = state.get("repo_path")
-        start_head = state.get("start_head")
+        start_head_value = state.get("start_head")
+        start_head = start_head_value if isinstance(start_head_value, str) else None
 
         if repo_path:
             current_head = _git_head(repo_path)
             state["current_head"] = current_head
-            head_changed = bool(current_head) if start_head is None else bool(current_head and current_head != start_head)
+            if current_head is not None:
+                head_changed = start_head is None or current_head != start_head
 
-            if head_changed and not state.get("has_committed"):
-                # 检查是否有实质性提交
-                has_real_commit = True if start_head is None else bool(_git_diff_stat(repo_path, start_head, current_head))
-                # 多任务同 repo 保护：验证 commit 归属
-                if has_real_commit and task_id:
-                    owns_commit = _git_log_grep_task_id(repo_path, start_head, current_head, task_id)
-                    if not owns_commit:
-                        logger.info("Commit detected for %s but no matching task_id in commit messages; ignoring.", task_id)
-                        has_real_commit = False
-                state["has_committed"] = has_real_commit
+                if head_changed and not state.get("has_committed"):
+                    # 检查是否有实质性提交
+                    has_real_commit = start_head is None or bool(_git_diff_stat(repo_path, start_head, current_head))
+                    # 多任务同 repo 保护：验证 commit 归属
+                    if has_real_commit and task_id:
+                        owns_commit = _git_log_grep_task_id(repo_path, start_head, current_head, task_id)
+                        if not owns_commit:
+                            logger.info("Commit detected for %s but no matching task_id in commit messages; ignoring.", task_id)
+                            has_real_commit = False
+                    state["has_committed"] = has_real_commit
 
-                if has_real_commit and not state.get("commit_detected_at"):
-                    state["commit_detected_at"] = _now_iso()
+                    if has_real_commit and not state.get("commit_detected_at"):
+                        state["commit_detected_at"] = _now_iso()
 
             if not state.get("has_committed") and (exit_code is not None or not process_alive):
                 # 检查工作区是否有未提交修改

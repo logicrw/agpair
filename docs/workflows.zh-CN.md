@@ -38,6 +38,8 @@ agpair workflow cancel WF-ABC123DEF456 --reason 'operator requested'
 
 支持的 fanout mode 是 `review`、`research`、`implementation`、`test-fix`。Review/research 是 report-only；implementation/test-fix 会写代码，preset 会默认隔离这些 mutating lane。
 
+Fanout 还会生成协调元数据。`role` 仍是人类可读的 lane label，比如 `primary`、`adversarial`、`candidate-a`；语义提示写在 `coordination_role`，取值为 `thinker`、`worker`、`verifier`、`synthesizer`、`gate` 或 `general`。`coordination_policy.expected_roles` 和 evidence 里的 `role_coverage` 只给主控看拓扑覆盖情况，不是采纳证据，也不是硬成功门槛。
+
 Fanout evidence 会暴露 `lane_cards`、`synthesis_result`、`panel_result`。Lane card 会保留有用的部分证据，包括 stdout-only salvage，但这种证据会标成 `needs_review`，不会伪装成成功。Synthesis 是证据，不是最终裁判；主控仍负责决定 use、apply、retry、switch executor 或 fallback 到原生 helper。
 
 Workflow `ready_for_review` 表示 AGPair 已生成 evidence pack 等待主控验收，不是最终用户侧完成。

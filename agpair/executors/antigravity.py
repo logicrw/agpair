@@ -43,10 +43,12 @@ class AntigravityExecutor(ExecutorAdapter):
         mcp_policy: str | None = None,
         dirty_snapshot_mode: str = "off",
         completion_policy: str = "auto",
+        coordination_role: str | None = None,
     ) -> DispatchResult:
         """Dispatch via the existing AgentBusClient semantics."""
         del isolated_worktree, worktree_boundary, authorization_profile, authorization_summary
         del environment_mode, skill_policy, mcp_policy, dirty_snapshot_mode, completion_policy
+        del coordination_role
         msg_id = self.bus.send_task(task_id=task_id, body=body, repo_path=repo_path)
         return DispatchResult(message_id=str(msg_id))
 

@@ -20,6 +20,8 @@ def test_build_review_panel_manifest_is_valid_workflow() -> None:
     assert validated.controller == "codex"
     assert validated.repo_path == "/tmp/repo"
     assert validated.manifest["source_policy"]["enforcement"] == "instruction"
+    assert validated.manifest["coordination_policy"]["style"] == "fanout"
+    assert validated.manifest["coordination_policy"]["expected_roles"] == ["thinker", "verifier"]
     assert [node["id"] for node in validated.nodes] == [
         "primary",
         "second-opinion",
@@ -27,10 +29,14 @@ def test_build_review_panel_manifest_is_valid_workflow() -> None:
         "gate",
     ]
     assert validated.nodes[0]["executor"] == "grok-cli"
+    assert validated.nodes[0]["coordination_role"] == "thinker"
     assert validated.nodes[1]["role"] == "second-opinion"
+    assert validated.nodes[1]["coordination_role"] == "verifier"
     assert validated.nodes[2]["kind"] == "synthesis"
+    assert validated.nodes[2]["coordination_role"] == "synthesizer"
     assert validated.nodes[2]["depends_on"] == ["primary", "second-opinion"]
     assert validated.nodes[3]["kind"] == "gate"
+    assert validated.nodes[3]["coordination_role"] == "gate"
     assert validated.nodes[3]["depends_on"] == ["synthesis"]
 
 
@@ -39,7 +45,7 @@ def test_build_implementation_panel_uses_mutating_policy_and_isolated_worktree()
         controller="claude-code",
         mode="implementation",
         topic="Implement terminal receipt salvage",
-        lanes=["grok-cli:candidate-a", "grok-cli:candidate-b"],
+        lanes=["grok-cli:candidate-a", "grok-cli:verifier-review"],
         scope="agpair/terminal_receipts.py",
     )
 
@@ -49,7 +55,9 @@ def test_build_implementation_panel_uses_mutating_policy_and_isolated_worktree()
     assert manifest["completion_policy"] == "direct_commit"
     assert [node["isolated_worktree"] for node in task_nodes] == [True, True]
     assert task_nodes[0]["role"] == "candidate-a"
-    assert task_nodes[1]["role"] == "candidate-b"
+    assert task_nodes[0]["coordination_role"] == "worker"
+    assert task_nodes[1]["role"] == "verifier-review"
+    assert task_nodes[1]["coordination_role"] == "verifier"
 
 
 def test_build_fanout_manifest_rejects_missing_lanes() -> None:

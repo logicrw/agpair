@@ -52,6 +52,7 @@ class ExecutorAdapter(typing.Protocol):
         mcp_policy: str | None = None,
         dirty_snapshot_mode: str = "off",
         completion_policy: str = "auto",
+        coordination_role: str | None = None,
     ) -> DispatchResult:
         """
         Dispatch a task payload to the underlying executor.

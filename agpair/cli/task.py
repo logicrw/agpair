@@ -51,6 +51,7 @@ from agpair.runtime_liveness import (
     recommend_controller_action,
 )
 from agpair.recovery import RecoveryInput, choose_recovery_decision
+from agpair.roles import normalize_coordination_role
 from agpair.task_brief import TaskBriefError, normalize_task_brief
 from agpair.terminal_receipts import (
     blocked_failure_context_from_receipt,
@@ -1180,6 +1181,7 @@ def build_task_payload(paths: AppPaths, task) -> dict:
         "broad_repo_path_override": task.broad_repo_path_override,
         "repo_path_guardrail_reason": _broad_repo_path_reason(task.repo_path),
         "completion_policy": task.completion_policy,
+        "coordination_role": task.coordination_role,
         "effective_completion_policy": effective_policy.effective_completion_policy,
         "terminal_source": task.terminal_source,
         "is_approved": task.is_approved,
@@ -1576,6 +1578,7 @@ def start_task(
     controller: str = typer.Option("generic", "--controller", help="Controller id for executor-suppression policy."),
     completion_policy: str = typer.Option("auto", "--completion-policy", help="Completion policy: auto, evidence, report, or commit."),
     task_kind: str | None = typer.Option(None, "--task-kind", help="Task kind: quick_review, deep_review, implementation, test_fix, research, smoke, or generic."),
+    coordination_role: str | None = typer.Option(None, "--coordination-role", help="Coordination role hint: thinker, worker, verifier, synthesizer, gate, or general."),
     wait_policy: str | None = typer.Option(None, "--wait-policy", help="Wait policy: terminal, lease, background, or strict."),
     controller_wait_seconds: float | None = typer.Option(
         None,
@@ -1637,6 +1640,10 @@ def start_task(
             )
     try:
         normalized_authorization_profile = validate_authorization_profile(authorization_profile)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    try:
+        normalized_coordination_role = normalize_coordination_role(coordination_role)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     wait_budget, resolved_completion_policy_request = _resolve_cli_wait_budget(
@@ -1796,6 +1803,7 @@ def start_task(
             skill_policy=environment.skill_policy,
             mcp_policy=environment.mcp_policy,
             dirty_snapshot_mode=resolved_dirty_snapshot_mode,
+            coordination_role=normalized_coordination_role,
         )
     except sqlite3.IntegrityError:
         if not idempotency_key:
@@ -1882,6 +1890,8 @@ def start_task(
         "mcp_policy": environment.mcp_policy,
         "dirty_snapshot_mode": resolved_dirty_snapshot_mode,
     }
+    if normalized_coordination_role is not None:
+        dispatch_kwargs["coordination_role"] = normalized_coordination_role
     if is_local_cli_backend(selected_executor):
         dispatch_kwargs["completion_policy"] = resolved_completion_policy_request
     try:
@@ -2280,10 +2290,12 @@ def abandon_task(
     _guard_live_task(task, force=force, command="abandon")
     bridge_cancel_attempted = False
     session_id = task.executor_session_id or task.antigravity_session_id
+    local_cli_cleanup = None
     if task.phase == "acked" and session_id:
         exec_instance = get_executor(task.executor_backend)
         if exec_instance and is_local_cli_backend(task.executor_backend):
             exec_instance.cancel(task_id=task.task_id, session_id=session_id)
+            local_cli_cleanup = (exec_instance, session_id)
             journal.append(task_id, "cli", "executor_cancelled", f"{task.executor_backend} cancelled locally")
         else:
             bridge_cancel_attempted = True
@@ -2309,6 +2321,16 @@ def abandon_task(
                 )
     _archive_active_attempt_artifacts(paths, tasks, task)
     tasks.mark_abandoned(task_id=task_id, reason=reason)
+    if local_cli_cleanup is not None:
+        exec_instance, cleanup_session_id = local_cli_cleanup
+        try:
+            exec_instance.cleanup(cleanup_session_id)
+        except (OSError, RuntimeError, ValueError) as exc:
+            journal.append(task_id, "cli", "executor_cleanup_failed", str(exc), "warning")
+        else:
+            session_path = Path(cleanup_session_id)
+            if session_path.name.startswith("agpair_") and not session_path.exists():
+                tasks.clear_session_id(task_id=task_id)
     journal.append(task_id, "cli", "abandoned", reason)
     if not bridge_cancel_attempted and not is_local_cli_backend(task.executor_backend):
         journal.append(task_id, "cli", "bridge_cancel_skipped", "task had no live bridge session to release")
@@ -3380,6 +3402,7 @@ def retry_task(
                 mcp_policy=next_environment.mcp_policy,
                 dirty_snapshot_mode=resolved_dirty_snapshot_mode,
                 completion_policy=next_completion_policy,
+                **({"coordination_role": task.coordination_role} if task.coordination_role else {}),
             )
         except (subprocess.SubprocessError, FileNotFoundError, BusSendError, WorktreeProvisionError, ValueError) as exc:
             reason = f"dispatch failed: {exc}"

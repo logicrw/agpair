@@ -13,6 +13,7 @@ from agpair.models import (
     utcnow_iso,
     validate_authorization_profile,
 )
+from agpair.roles import normalize_coordination_role
 from agpair.storage.db import connect
 from agpair.wait_policy import WaitBudget, normalize_task_kind, normalize_wait_policy, resolve_wait_budget
 
@@ -112,10 +113,12 @@ class TaskRepository:
         workflow_node_id: str | None = None,
         parent_task_id: str | None = None,
         child_role: str | None = None,
+        coordination_role: str | None = None,
     ) -> None:
         now = utcnow_iso()
         normalized_authorization_profile = validate_authorization_profile(authorization_profile)
         normalized_completion_policy = normalize_completion_policy(completion_policy)
+        normalized_coordination_role = normalize_coordination_role(coordination_role)
         normalized_authorization_summary = authorization_summary or default_authorization_summary(
             normalized_authorization_profile
         )
@@ -144,8 +147,8 @@ class TaskRepository:
                   spotlight_testing, broad_repo_path_override, completion_policy, terminal_source, terminal_receipt_json, is_approved,
                   authorization_profile, authorization_summary,
                   task_kind, wait_policy, controller_wait_seconds, execution_budget_seconds, background_ok,
-                  workflow_id, workflow_node_id, parent_task_id, child_role
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  workflow_id, workflow_node_id, parent_task_id, child_role, coordination_role
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task_id,
@@ -188,6 +191,7 @@ class TaskRepository:
                     workflow_node_id,
                     parent_task_id,
                     child_role,
+                    normalized_coordination_role,
                 ),
             )
             conn.execute(
@@ -1004,8 +1008,8 @@ class TaskRepository:
             is_approved=bool(get("is_approved", 0)),
             authorization_profile=authorization_profile,
             authorization_summary=get("authorization_summary"),
-            task_kind=get("task_kind", "generic"),
-            wait_policy=get("wait_policy", "terminal"),
+            task_kind=str(get("task_kind") or "generic"),
+            wait_policy=str(get("wait_policy") or "terminal"),
             controller_wait_seconds=get("controller_wait_seconds"),
             execution_budget_seconds=get("execution_budget_seconds"),
             background_ok=bool(get("background_ok", 0)),
@@ -1014,6 +1018,7 @@ class TaskRepository:
             workflow_node_id=get("workflow_node_id"),
             parent_task_id=get("parent_task_id"),
             child_role=get("child_role"),
+            coordination_role=get("coordination_role"),
         )
 
     @staticmethod
@@ -1031,22 +1036,22 @@ class TaskRepository:
             authorization_profile=row["authorization_profile"],
             requested_completion_policy=row["requested_completion_policy"],
             effective_policy_json=get("effective_policy_json"),
-            task_kind=get("task_kind", "generic"),
-            wait_policy=get("wait_policy", "terminal"),
+            task_kind=str(get("task_kind") or "generic"),
+            wait_policy=str(get("wait_policy") or "terminal"),
             controller_wait_seconds=get("controller_wait_seconds"),
             execution_budget_seconds=get("execution_budget_seconds"),
             background_ok=bool(get("background_ok", 0)),
-            environment_mode=get("environment_mode", "managed-natural"),
-            environment_mode_source=get("environment_mode_source", "executor_default"),
-            skill_policy=get("skill_policy", "inherit"),
-            mcp_policy=get("mcp_policy", "inherit"),
-            protocol_warnings_json=get("protocol_warnings_json", "[]"),
-            protocol_errors_json=get("protocol_errors_json", "[]"),
-            adoptable_result=get("adoptable_result", "unknown"),
-            adoption_evidence_json=get("adoption_evidence_json", "{}"),
-            controller_rework_json=get("controller_rework_json", "{}"),
-            dirty_snapshot_mode=get("dirty_snapshot_mode", "off"),
-            dirty_snapshot_json=get("dirty_snapshot_json", "{}"),
+            environment_mode=str(get("environment_mode") or "managed-natural"),
+            environment_mode_source=str(get("environment_mode_source") or "executor_default"),
+            skill_policy=str(get("skill_policy") or "inherit"),
+            mcp_policy=str(get("mcp_policy") or "inherit"),
+            protocol_warnings_json=str(get("protocol_warnings_json") or "[]"),
+            protocol_errors_json=str(get("protocol_errors_json") or "[]"),
+            adoptable_result=str(get("adoptable_result") or "unknown"),
+            adoption_evidence_json=str(get("adoption_evidence_json") or "{}"),
+            controller_rework_json=str(get("controller_rework_json") or "{}"),
+            dirty_snapshot_mode=str(get("dirty_snapshot_mode") or "off"),
+            dirty_snapshot_json=str(get("dirty_snapshot_json") or "{}"),
             dirty_snapshot_applied=bool(get("dirty_snapshot_applied", 0)),
             executor_session_id=row["executor_session_id"],
             phase=row["phase"],

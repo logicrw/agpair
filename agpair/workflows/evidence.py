@@ -21,6 +21,10 @@ def build_workflow_evidence_pack(paths: AppPaths, workflow_id: str, *, phase: st
     tasks = TaskRepository(paths.db_path)
     workflow = workflows.require_workflow(workflow_id)
     nodes = workflows.list_nodes(workflow_id)
+    manifest = _parse_json_object(workflow.manifest_json) or {}
+    raw_coordination_policy = manifest.get("coordination_policy")
+    coordination_policy = raw_coordination_policy if isinstance(raw_coordination_policy, dict) else None
+    coordination_roles = _coordination_roles_by_node(manifest)
     required_nodes = [node.node_id for node in nodes if not node.allow_partial]
     completed_nodes: list[str] = []
     blocked_nodes: list[str] = []
@@ -102,6 +106,7 @@ def build_workflow_evidence_pack(paths: AppPaths, workflow_id: str, *, phase: st
             "node_id": node.node_id,
             "kind": node.kind,
             "role": node.role,
+            "coordination_role": coordination_roles.get(node.node_id, "general"),
             "phase": node.phase,
             "task_id": node.task_id,
             "task_phase": task_phase,
@@ -131,6 +136,8 @@ def build_workflow_evidence_pack(paths: AppPaths, workflow_id: str, *, phase: st
         lane_cards=lane_cards,
         synthesis_result=synthesis_result,
     )
+    role_coverage = _role_coverage(coordination_policy, lane_cards)
+    panel_result["role_coverage"] = role_coverage
 
     return {
         "schema_version": "1",
@@ -138,6 +145,8 @@ def build_workflow_evidence_pack(paths: AppPaths, workflow_id: str, *, phase: st
         "phase": phase or workflow.phase,
         "controller": workflow.controller,
         "repo_path": workflow.repo_path,
+        "coordination_policy": coordination_policy,
+        "role_coverage": role_coverage,
         "required_nodes": required_nodes,
         "completed_nodes": completed_nodes,
         "blocked_nodes": blocked_nodes,
@@ -208,6 +217,45 @@ def _parse_json_object(text: str | None) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
+
+
+def _coordination_roles_by_node(manifest: dict[str, Any]) -> dict[str, str]:
+    nodes = manifest.get("nodes")
+    if not isinstance(nodes, list):
+        return {}
+    roles: dict[str, str] = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = node.get("id")
+        role = node.get("coordination_role")
+        if isinstance(node_id, str) and isinstance(role, str):
+            roles[node_id] = role
+    return roles
+
+
+def _role_coverage(coordination_policy: dict[str, Any] | None, lane_cards: list[dict[str, Any]]) -> dict[str, Any]:
+    expected_roles = _string_list(coordination_policy.get("expected_roles")) if coordination_policy else []
+    role_counts: dict[str, int] = {}
+    for card in lane_cards:
+        role = card.get("coordination_role")
+        normalized_role = role if isinstance(role, str) and role else "general"
+        role_counts[normalized_role] = role_counts.get(normalized_role, 0) + 1
+    observed_roles = sorted(role_counts)
+    missing_expected_roles = [role for role in expected_roles if role not in role_counts]
+    soft_warnings = [f"expected_role_missing:{role}" for role in missing_expected_roles]
+    return {
+        "expected_roles": expected_roles,
+        "observed_roles": observed_roles,
+        "missing_expected_roles": missing_expected_roles,
+        "role_counts": role_counts,
+        "soft_warnings": soft_warnings,
+        "advisory_only": True,
+    }
+
+
+def _string_list(raw: Any) -> list[str]:
+    return [item for item in raw if isinstance(item, str)] if isinstance(raw, list) else []
 
 
 def _attempt_protocol_adoption(tasks: TaskRepository, task_id: str) -> tuple[dict[str, Any], dict[str, Any]]:

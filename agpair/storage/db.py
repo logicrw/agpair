@@ -153,6 +153,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         if column not in task_cols:
             conn.execute(f"ALTER TABLE tasks ADD COLUMN {column} TEXT")
             conn.commit()
+    task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "coordination_role" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN coordination_role TEXT")
+        conn.commit()
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS task_attempts (
           task_id TEXT NOT NULL,

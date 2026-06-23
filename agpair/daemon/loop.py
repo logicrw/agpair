@@ -7,6 +7,11 @@ import re
 import time
 
 from agpair.config import AppPaths
+from agpair.executors.antigravity_project_state import (
+    AntigravityProjectStateCleanup,
+    active_antigravity_execution_paths,
+    sweep_antigravity_transient_projects,
+)
 from agpair.models import utcnow_iso
 from agpair.terminal_receipts import parse_structured_terminal_receipt, structured_receipt_to_dict
 from agpair.storage.db import connect, ensure_database
@@ -98,6 +103,7 @@ def run_once(
         skip_task_ids=touched_task_ids | watchdog_task_ids | budget_task_ids,
     )
     cleaned_sessions = sweep_local_cli_sessions(paths, skip_task_ids=touched_task_ids)
+    antigravity_cleanup = sweep_antigravity_project_state(paths)
     health: dict = {
         "running": True,
         "last_tick_at": to_iso(current),
@@ -109,6 +115,8 @@ def run_once(
         "execution_budget_stuck": budget_stuck,
         "stuck_marked": stuck,
         "local_sessions_cleaned": cleaned_sessions,
+        "antigravity_project_configs_cleaned": antigravity_cleanup.config_files,
+        "antigravity_cache_entries_cleaned": antigravity_cleanup.cache_entries,
     }
     if bus_errors:
         health["bus_errors"] = bus_errors
@@ -674,6 +682,12 @@ def sweep_local_cli_sessions(
         if _cleanup_local_cli_session(tasks, task):
             cleaned += 1
     return cleaned
+
+
+def sweep_antigravity_project_state(paths: AppPaths) -> AntigravityProjectStateCleanup:
+    tasks = TaskRepository(paths.db_path)
+    active_paths = active_antigravity_execution_paths(tasks.list_tasks(phase="acked", limit=10000))
+    return sweep_antigravity_transient_projects(active_paths=active_paths)
 
 
 def mark_watchdog_tasks(

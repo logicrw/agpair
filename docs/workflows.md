@@ -38,6 +38,8 @@ Use `workflow fanout` as the default controller-friendly entrypoint for Fusion-s
 
 Supported fanout modes are `review`, `research`, `implementation`, and `test-fix`. Review and research lanes are report-only. Implementation and test-fix lanes are mutating and the preset isolates those lanes by default.
 
+Fanout also emits coordination metadata. Lane labels stay in `role` for human naming such as `primary`, `adversarial`, or `candidate-a`; semantic hints live in `coordination_role` as `thinker`, `worker`, `verifier`, `synthesizer`, `gate`, or `general`. `coordination_policy.expected_roles` and evidence `role_coverage` are advisory visibility for the controller, not adoption proof and not a hard success gate.
+
 Fanout evidence exposes `lane_cards`, `synthesis_result`, and `panel_result`. Lane cards preserve useful partial evidence, including stdout-only salvage, but mark it as `needs_review` instead of success. Synthesis is evidence, not authority: the controller still decides whether to use, apply, retry, switch executor, or fall back to native helpers.
 
 Workflow `ready_for_review` means AGPair has an evidence pack for controller verification, not final user-facing success. `workflow watch --json` emits state changes and durable artifact paths, not full raw logs. AGPair does not auto-merge, auto-push, or modify OMX source.

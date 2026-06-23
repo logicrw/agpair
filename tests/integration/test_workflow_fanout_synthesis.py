@@ -98,9 +98,13 @@ def test_evidence_pack_includes_lane_cards_synthesis_and_panel_result(tmp_path: 
     evidence = build_workflow_evidence_pack(paths, workflow_id, phase="ready_for_review")
 
     lanes = {card["node_id"]: card for card in evidence["lane_cards"]}
+    assert lanes["primary"]["coordination_role"] == "thinker"
+    assert lanes["adversarial"]["coordination_role"] == "verifier"
     assert lanes["primary"]["summary_excerpt"] == "Useful report body"
     assert lanes["adversarial"]["adoptable_result"] == "partial"
     assert "stdout_report_salvaged" in lanes["adversarial"]["agent_result"]["soft_warnings"]
+    assert evidence["role_coverage"]["missing_expected_roles"] == []
+    assert evidence["panel_result"]["role_coverage"]["advisory_only"] is True
     assert evidence["synthesis_result"]["consensus"] == ["Both lanes found useful evidence."]
     assert evidence["panel_result"]["state"] == "needs_review"
     assert evidence["panel_result"]["controller_action"] == "inspect_evidence"

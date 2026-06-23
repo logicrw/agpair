@@ -33,10 +33,15 @@ def make_manifest(repo_path: str):
             "controller": "generic",
             "authorization_profile": "local_readonly",
             "completion_policy": "report",
+            "coordination_policy": {
+                "style": "single_role",
+                "expected_roles": ["verifier"],
+            },
             "nodes": [
                 {
                     "id": "scan",
                     "kind": "task",
+                    "coordination_role": "verifier",
                     "body": "Goal: scan. Required changes: none.",
                     "authorization_profile": "local_readonly",
                     "completion_policy": "report",
@@ -74,7 +79,9 @@ def test_scheduler_dispatches_dependency_free_nodes(tmp_path: Path, monkeypatch)
     task = TaskRepository(paths.db_path).get_task("WF-SCHED-scan")
     assert task is not None
     assert task.workflow_id == workflow_id
+    assert task.coordination_role == "verifier"
     assert fake.calls[0]["authorization_profile"] == "local_readonly"
+    assert fake.calls[0]["coordination_role"] == "verifier"
 
 
 def test_scheduler_does_not_dispatch_duplicate_child_after_restart(tmp_path: Path, monkeypatch) -> None:
