@@ -1,5 +1,6 @@
 """Test the cleanup command and auto-cleanup."""
 from datetime import UTC, datetime, timedelta
+import subprocess
 
 from typer.testing import CliRunner
 
@@ -27,6 +28,23 @@ def _make_old(conn, table, old_time):
 
 def _old_cutoff(days=30):
     return (datetime.now(UTC) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+
+
+def _make_git_repo(path):
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.email", "tests@example.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "AGPair Tests"], cwd=path, check=True)
+    (path / "README.md").write_text("baseline\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", "baseline"], cwd=path, check=True, capture_output=True)
+
+
+def _add_git_worktree(repo_path, task_id):
+    worktree_path = repo_path / ".agpair" / "worktrees" / task_id
+    worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "worktree", "add", "--detach", str(worktree_path)], cwd=repo_path, check=True, capture_output=True)
+    return worktree_path
 
 
 def test_cleanup_removes_old_journals(tmp_path):
@@ -223,6 +241,136 @@ def test_cleanup_cli_executor_state_only_does_not_delete_old_task_data(tmp_path,
     assert tasks.get_task("old-task") is not None
     assert not orphan_config.exists()
     assert str(orphan_path) not in cache_file.read_text(encoding="utf-8")
+
+
+def test_cleanup_cli_dry_run_reports_agpair_orphan_worktrees_when_requested(tmp_path, monkeypatch):
+    paths = AppPaths.from_root(tmp_path / ".agpair")
+    ensure_database(paths.db_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(paths.root))
+    repo_path = tmp_path / "repo"
+    _make_git_repo(repo_path)
+    orphan_worktree = _add_git_worktree(repo_path, "TASK-ORPHAN")
+    active_worktree = _add_git_worktree(repo_path, "TASK-ACTIVE")
+    tasks = TaskRepository(paths.db_path)
+    tasks.create_task(task_id="TASK-ACTIVE", repo_path=str(repo_path), isolated_worktree=True)
+    tasks.mark_acked(task_id="TASK-ACTIVE", session_id="session-active")
+    tasks.set_execution_repo_path(task_id="TASK-ACTIVE", execution_repo_path=str(active_worktree))
+
+    result = CliRunner().invoke(app, ["cleanup", "--dry-run", "--worktrees"])
+
+    assert result.exit_code == 0
+    assert "agpair worktrees: 1 would be removed" in result.stdout
+    assert orphan_worktree.exists()
+    assert active_worktree.exists()
+
+
+def test_cleanup_cli_removes_agpair_orphan_worktrees_when_requested(tmp_path, monkeypatch):
+    paths = AppPaths.from_root(tmp_path / ".agpair")
+    ensure_database(paths.db_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(paths.root))
+    repo_path = tmp_path / "repo"
+    _make_git_repo(repo_path)
+    orphan_worktree = _add_git_worktree(repo_path, "TASK-ORPHAN")
+    active_worktree = _add_git_worktree(repo_path, "TASK-ACTIVE")
+    tasks = TaskRepository(paths.db_path)
+    tasks.create_task(task_id="TASK-ACTIVE", repo_path=str(repo_path), isolated_worktree=True)
+    tasks.mark_acked(task_id="TASK-ACTIVE", session_id="session-active")
+    tasks.set_execution_repo_path(task_id="TASK-ACTIVE", execution_repo_path=str(active_worktree))
+
+    result = CliRunner().invoke(app, ["cleanup", "--executor-state-only", "--worktrees"])
+
+    assert result.exit_code == 0
+    assert "agpair worktrees: 1 removed" in result.stdout
+    assert not orphan_worktree.exists()
+    assert active_worktree.exists()
+
+
+def test_cleanup_cli_preserves_review_ready_agpair_worktrees(tmp_path, monkeypatch):
+    paths = AppPaths.from_root(tmp_path / ".agpair")
+    ensure_database(paths.db_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(paths.root))
+    repo_path = tmp_path / "repo"
+    _make_git_repo(repo_path)
+    orphan_worktree = _add_git_worktree(repo_path, "TASK-ORPHAN")
+    review_worktree = _add_git_worktree(repo_path, "TASK-REVIEW")
+    tasks = TaskRepository(paths.db_path)
+    tasks.create_task(task_id="TASK-REVIEW", repo_path=str(repo_path), isolated_worktree=True)
+    tasks.mark_acked(task_id="TASK-REVIEW", session_id="session-review")
+    tasks.set_execution_repo_path(task_id="TASK-REVIEW", execution_repo_path=str(review_worktree))
+    tasks.mark_ready_for_review(task_id="TASK-REVIEW", terminal_source="test")
+
+    result = CliRunner().invoke(app, ["cleanup", "--executor-state-only", "--worktrees"])
+
+    assert result.exit_code == 0
+    assert "agpair worktrees: 1 removed" in result.stdout
+    assert not orphan_worktree.exists()
+    assert review_worktree.exists()
+
+
+def test_cleanup_cli_preserves_retry_pending_isolated_worktrees(tmp_path, monkeypatch):
+    paths = AppPaths.from_root(tmp_path / ".agpair")
+    ensure_database(paths.db_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(paths.root))
+    repo_path = tmp_path / "repo"
+    _make_git_repo(repo_path)
+    orphan_worktree = _add_git_worktree(repo_path, "TASK-ORPHAN")
+    retry_worktree = _add_git_worktree(repo_path, "TASK-RETRY")
+    tasks = TaskRepository(paths.db_path)
+    tasks.create_task(task_id="TASK-RETRY", repo_path=str(repo_path), isolated_worktree=True)
+    tasks.mark_acked(task_id="TASK-RETRY", session_id="session-retry")
+    tasks.set_execution_repo_path(task_id="TASK-RETRY", execution_repo_path=str(retry_worktree))
+    tasks.apply_retry_dispatch(task_id="TASK-RETRY")
+
+    result = CliRunner().invoke(app, ["cleanup", "--executor-state-only", "--worktrees"])
+
+    assert result.exit_code == 0
+    assert "agpair worktrees: 1 removed" in result.stdout
+    assert not orphan_worktree.exists()
+    assert retry_worktree.exists()
+    assert tasks.get_task("TASK-RETRY").execution_repo_path is None
+
+
+def test_cleanup_cli_preserves_agpair_worktrees_without_explicit_flag(tmp_path, monkeypatch):
+    paths = AppPaths.from_root(tmp_path / ".agpair")
+    ensure_database(paths.db_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(paths.root))
+    repo_path = tmp_path / "repo"
+    _make_git_repo(repo_path)
+    orphan_worktree = _add_git_worktree(repo_path, "TASK-ORPHAN")
+    tasks = TaskRepository(paths.db_path)
+    tasks.create_task(task_id="TASK-DONE", repo_path=str(repo_path))
+    tasks.mark_acked(task_id="TASK-DONE", session_id="session-done")
+    tasks.mark_stuck(task_id="TASK-DONE", reason="done")
+
+    result = CliRunner().invoke(app, ["cleanup", "--executor-state-only"])
+
+    assert result.exit_code == 0
+    assert "agpair worktrees:" not in result.stdout
+    assert orphan_worktree.exists()
+
+
+def test_cleanup_cli_ignores_symlinked_agpair_worktree_candidates(tmp_path, monkeypatch):
+    paths = AppPaths.from_root(tmp_path / ".agpair")
+    ensure_database(paths.db_path)
+    monkeypatch.setenv("AGPAIR_HOME", str(paths.root))
+    repo_path = tmp_path / "repo"
+    _make_git_repo(repo_path)
+    tasks = TaskRepository(paths.db_path)
+    tasks.create_task(task_id="TASK-DONE", repo_path=str(repo_path))
+    tasks.mark_acked(task_id="TASK-DONE", session_id="session-done")
+    tasks.mark_stuck(task_id="TASK-DONE", reason="done")
+    target_path = tmp_path / "external-target"
+    target_path.mkdir()
+    (target_path / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+    symlink_path = repo_path / ".agpair" / "worktrees" / "TASK-SYMLINK"
+    symlink_path.parent.mkdir(parents=True, exist_ok=True)
+    symlink_path.symlink_to(target_path, target_is_directory=True)
+
+    result = CliRunner().invoke(app, ["cleanup", "--dry-run", "--worktrees"])
+
+    assert result.exit_code == 0
+    assert "agpair worktrees: 0 would be removed" in result.stdout
+    assert symlink_path.exists()
 
 
 def test_cleanup_cli_help():

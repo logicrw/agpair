@@ -696,7 +696,22 @@ contract，而不是在任务状态机里散落 provider 特判。详见
 subagent；`claude-code` 指 AGPair 管理的外部 Claude Code worker，不是 Claude
 Code 原生 subagent。
 
-## 15. 发布与隐私检查
+## 15. 维护清理
+
+删除本地状态前先跑 `agpair cleanup --dry-run`。AGPair-owned isolated worktree
+只有显式传 `--worktrees` 时才会纳入清理：
+
+```bash
+agpair cleanup --dry-run --worktrees
+agpair cleanup --executor-state-only --worktrees
+```
+
+worktree sweep 只处理 AGPair task state roots 下 orphaned
+`.agpair/worktrees/TASK-*` git worktree；只要 task record 还能通过
+`execution_repo_path`、`worktree_boundary`，或 isolated task id 兜底认领它，
+就会保留。
+
+## 16. 发布与隐私检查
 
 发布、提交 PR 或 push 前：
 
@@ -711,7 +726,7 @@ Code 原生 subagent。
 
 ---
 
-## 16. 最推荐的命令顺序
+## 17. 最推荐的命令顺序
 
 对真实任务，建议顺序是：
 

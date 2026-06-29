@@ -681,6 +681,21 @@ and `codex`. `codex` means an AGPair-managed external Codex CLI worker, not
 Codex native subagents. `claude-code` means an AGPair-managed external Claude
 Code worker, not Claude Code native subagents.
 
+## Maintenance cleanup
+
+Use `agpair cleanup --dry-run` before deleting local state. AGPair-owned
+isolated worktrees are only included when `--worktrees` is explicit:
+
+```bash
+agpair cleanup --dry-run --worktrees
+agpair cleanup --executor-state-only --worktrees
+```
+
+The worktree sweep is limited to orphaned `.agpair/worktrees/TASK-*` git
+worktrees under AGPair task state roots. A worktree is preserved when a task
+record still claims it through `execution_repo_path`, `worktree_boundary`, or an
+isolated task id fallback.
+
 ## Release and privacy checklist
 
 Before publishing or opening a PR:

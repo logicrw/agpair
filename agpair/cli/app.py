@@ -66,6 +66,11 @@ def cleanup(
         "--executor-state-only",
         help="Clean only external executor local state such as orphaned Antigravity project entries.",
     ),
+    worktrees: bool = typer.Option(
+        False,
+        "--worktrees",
+        help="Also remove orphaned AGPair-owned isolated worktrees.",
+    ),
 ) -> None:
     """Remove old journals, receipts, and terminal tasks to reclaim space."""
     from datetime import UTC, datetime, timedelta
@@ -78,6 +83,7 @@ def cleanup(
     from agpair.storage.journal import JournalRepository
     from agpair.storage.receipts import ReceiptRepository
     from agpair.storage.tasks import TaskRepository
+    from agpair.worktree_cleanup import sweep_agpair_orphan_worktrees
 
     paths = AppPaths.default()
     ensure_database(paths.db_path)
@@ -88,16 +94,24 @@ def cleanup(
     tasks = TaskRepository(paths.db_path)
     active_paths = active_antigravity_execution_paths(tasks.list_tasks(phase="acked", limit=10000))
     antigravity_cleanup = sweep_antigravity_transient_projects(active_paths=active_paths, dry_run=dry_run)
+    task_rows = tasks.list_tasks(limit=10000)
+    worktree_cleanup = sweep_agpair_orphan_worktrees(task_rows, dry_run=dry_run) if worktrees else None
 
     if executor_state_only:
         if dry_run:
             typer.echo("Dry run — executor state:")
             typer.echo(f"  antigravity project configs: {antigravity_cleanup.config_files} would be deleted")
             typer.echo(f"  antigravity cache entries: {antigravity_cleanup.cache_entries} would be deleted")
+            if worktree_cleanup is not None:
+                typer.echo(f"  agpair worktrees: {worktree_cleanup.worktrees} would be removed")
             return
         typer.echo("Cleaned up executor state:")
         typer.echo(f"  antigravity project configs: {antigravity_cleanup.config_files} deleted")
         typer.echo(f"  antigravity cache entries: {antigravity_cleanup.cache_entries} deleted")
+        if worktree_cleanup is not None:
+            typer.echo(f"  agpair worktrees: {worktree_cleanup.worktrees} removed")
+            if worktree_cleanup.failures:
+                typer.echo(f"  agpair worktree failures: {worktree_cleanup.failures}")
         return
 
     if dry_run:
@@ -110,6 +124,8 @@ def cleanup(
         typer.echo(f"  terminal tasks: {t} would be deleted")
         typer.echo(f"  antigravity project configs: {antigravity_cleanup.config_files} would be deleted")
         typer.echo(f"  antigravity cache entries: {antigravity_cleanup.cache_entries} would be deleted")
+        if worktree_cleanup is not None:
+            typer.echo(f"  agpair worktrees: {worktree_cleanup.worktrees} would be removed")
         return
 
     j = journals.delete_older_than(cutoff)
@@ -122,6 +138,10 @@ def cleanup(
     typer.echo(f"  terminal tasks: {t} deleted")
     typer.echo(f"  antigravity project configs: {antigravity_cleanup.config_files} deleted")
     typer.echo(f"  antigravity cache entries: {antigravity_cleanup.cache_entries} deleted")
+    if worktree_cleanup is not None:
+        typer.echo(f"  agpair worktrees: {worktree_cleanup.worktrees} removed")
+        if worktree_cleanup.failures:
+            typer.echo(f"  agpair worktree failures: {worktree_cleanup.failures}")
 
 
 @app.command("inspect")
