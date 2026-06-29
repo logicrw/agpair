@@ -395,6 +395,29 @@ def test_poll_persists_final_summary_to_state_json(tmp_path):
     assert state.receipt["payload"]["returncode"] == 0
 
 
+def test_poll_accepts_structured_report_only_receipt_without_implementation_fields(tmp_path):
+    executor = DummyLocalCLIExecutor()
+    receipt = {
+        "schema_version": "1",
+        "task_id": "TASK-LOCAL-REPORT-RECEIPT",
+        "attempt_no": 1,
+        "review_round": 0,
+        "status": "EVIDENCE_PACK",
+        "summary": "Report complete",
+        "payload": {"report": "Useful report, no changes claimed."},
+    }
+    (tmp_path / "rc.txt").write_text("0", encoding="utf-8")
+    (tmp_path / "stdout.log").write_text(json.dumps(receipt), encoding="utf-8")
+
+    state = executor.poll("TASK-LOCAL-REPORT-RECEIPT", str(tmp_path))
+
+    assert state is not None
+    assert state.is_done is True
+    assert state.receipt["status"] == "EVIDENCE_PACK"
+    assert state.receipt["payload"]["report"] == "Useful report, no changes claimed."
+    assert "required_missing" not in state.receipt["payload"]
+
+
 def test_poll_persists_error_summary_to_state_json(tmp_path):
     executor = DummyLocalCLIExecutor()
     (tmp_path / "rc.txt").write_text("7", encoding="utf-8")

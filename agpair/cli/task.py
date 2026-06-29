@@ -1200,6 +1200,105 @@ def build_task_payload(paths: AppPaths, task) -> dict:
     }
 
 
+_FALLBACK_RECOVERY_ACTIONS = frozenset({"retry_same_executor", "switch_executor", "native_fallback", "repair_executor"})
+
+
+def _dict_payload(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _rate_payloads(payloads: list[dict], predicate) -> float:
+    if not payloads:
+        return 0.0
+    return round(sum(1 for payload in payloads if predicate(payload)) / len(payloads), 4)
+
+
+def _counts(values) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for value in values:
+        if not isinstance(value, str) or not value:
+            continue
+        result[value] = result.get(value, 0) + 1
+    return result
+
+
+def _task_list_summary_metrics(task_payloads: list[dict]) -> dict:
+    def adoption_result(payload: dict) -> str | None:
+        adoption = _dict_payload(payload.get("adoption_result"))
+        value = adoption.get("adoptable_result")
+        return value if isinstance(value, str) else None
+
+    def agent_state(payload: dict) -> str | None:
+        agent = _dict_payload(payload.get("agent_result"))
+        value = agent.get("state")
+        return value if isinstance(value, str) else None
+
+    def artifact_state(payload: dict) -> str | None:
+        artifact = _dict_payload(payload.get("artifact_result"))
+        value = artifact.get("state")
+        return value if isinstance(value, str) else None
+
+    def recovery_action(payload: dict) -> str | None:
+        recovery = _dict_payload(payload.get("recovery_decision"))
+        value = recovery.get("action")
+        return value if isinstance(value, str) else None
+
+    return {
+        "task_count": len(task_payloads),
+        "completion_rate": _rate_payloads(
+            task_payloads,
+            lambda payload: payload.get("phase") in DISPATCH_SUCCESS_PHASES,
+        ),
+        "adoptable_result_rate": _rate_payloads(
+            task_payloads,
+            lambda payload: adoption_result(payload) in {"yes", "partial"},
+        ),
+        "artifact_result_rate": _rate_payloads(
+            task_payloads,
+            lambda payload: bool(_dict_payload(payload.get("artifact_result"))),
+        ),
+        "fallback_recommended_rate": _rate_payloads(
+            task_payloads,
+            lambda payload: recovery_action(payload) in _FALLBACK_RECOVERY_ACTIONS,
+        ),
+        "no_progress_rate": _rate_payloads(
+            task_payloads,
+            lambda payload: _dict_payload(payload.get("signal_state")).get("state") == "silent",
+        ),
+        "phase_counts": _counts(payload.get("phase") for payload in task_payloads),
+        "adoptable_result_counts": _counts(adoption_result(payload) for payload in task_payloads),
+        "agent_state_counts": _counts(agent_state(payload) for payload in task_payloads),
+        "artifact_state_counts": _counts(artifact_state(payload) for payload in task_payloads),
+        "recovery_action_counts": _counts(recovery_action(payload) for payload in task_payloads),
+    }
+
+
+def _task_status_summary_lines(payload: dict) -> list[str]:
+    adoption = _dict_payload(payload.get("adoption_result"))
+    agent = _dict_payload(payload.get("agent_result"))
+    artifact = _dict_payload(payload.get("artifact_result"))
+    recovery = _dict_payload(payload.get("recovery_decision"))
+    blockers = adoption.get("blockers")
+    warnings = adoption.get("warnings")
+    artifact_kind = artifact.get("primary_artifact") or "none"
+    artifact_state = artifact.get("state") or "unknown"
+    lines = [
+        f"task_id: {payload.get('task_id')}",
+        f"phase: {payload.get('phase')}",
+        f"executor: {payload.get('active_executor_backend')}",
+        f"adoptable_result: {adoption.get('adoptable_result', 'unknown')}",
+        f"agent_action: {agent.get('controller_action', payload.get('controller_action'))}",
+        f"artifact: {artifact_kind} {artifact_state}",
+        f"recovery_action: {recovery.get('action', 'none')}",
+        "blockers: " + (",".join(str(item) for item in blockers) if isinstance(blockers, list) and blockers else "none"),
+        "warnings: " + (",".join(str(item) for item in warnings) if isinstance(warnings, list) and warnings else "none"),
+    ]
+    report_path = payload.get("report_path")
+    if report_path:
+        lines.append(f"report_path: {report_path}")
+    return lines
+
+
 def _journal_row_payload(row) -> dict:
     return {
         "created_at": row.created_at,
@@ -1969,6 +2068,7 @@ def task_status(
     task_id: str,
     repo_path: str | None = typer.Option(None, "--repo-path", "--repo", help="Optional repo context; must match the task's stored repo."),
     target: str | None = typer.Option(None, "--target", help="Optional target context; must match the task's stored repo."),
+    summary: bool = typer.Option(False, "--summary", help="Print a compact decision summary."),
     json_output: bool = _JSON_OPTION,
 ) -> None:
     paths = _paths()
@@ -1990,6 +2090,10 @@ def task_status(
     payload = build_task_payload(paths, task)
     if json_output:
         _emit_json({"ok": True, **payload})
+        return
+    if summary:
+        for line in _task_status_summary_lines(payload):
+            typer.echo(line)
         return
     typer.echo(f"task_id: {payload['task_id']}")
     typer.echo(f"active_executor_backend: {payload['active_executor_backend']}")
@@ -2146,13 +2250,15 @@ def task_list(
         refresh_terminal_local_cli_task(tasks, task, journal)
     rows = tasks.list_tasks(phase=phase, repo_path=resolved_repo_path, limit=limit)
     if json_output:
+        task_payloads = [build_task_payload(paths, task) for task in rows]
         _emit_json(
             {
                 "ok": True,
                 "phase": phase,
                 "repo_path": resolved_repo_path,
                 "limit": limit,
-                "tasks": [build_task_payload(paths, task) for task in rows],
+                "tasks": task_payloads,
+                "summary_metrics": _task_list_summary_metrics(task_payloads),
             }
         )
         return

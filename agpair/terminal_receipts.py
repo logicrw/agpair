@@ -103,6 +103,26 @@ def _receipt_payload_has_missing_artifact_path(payload: Mapping[str, Any]) -> bo
     return False
 
 
+def _payload_has_report(payload: Mapping[str, Any]) -> bool:
+    value = payload.get("report")
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _payload_declares_changed_files(payload: Mapping[str, Any]) -> bool:
+    if "changed_files" not in payload:
+        return False
+    value = payload.get("changed_files")
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return any(isinstance(item, str) and bool(item.strip()) for item in value)
+    return value is not None
+
+
+def _payload_is_report_only(payload: Mapping[str, Any]) -> bool:
+    return _payload_has_report(payload) and not _payload_declares_changed_files(payload)
+
+
 def validate_terminal_receipt_payload(
     kind: str,
     payload: Mapping[str, Any],
@@ -120,7 +140,7 @@ def validate_terminal_receipt_payload(
             "raw_log_path",
         )
     elif kind in {"COMMITTED", "EVIDENCE_PACK"} or payload.get("claimed_state") == "ready_for_review":
-        if report_only:
+        if report_only or _payload_is_report_only(payload):
             required = (
                 "raw_log_path",
                 "receipt_path",

@@ -380,6 +380,7 @@ scope 并发，不能在同一个主控 worktree 内互相踩文件。
 
 ```bash
 agpair task status TASK-001
+agpair task status TASK-001 --summary
 agpair task status TASK-001 --json
 ```
 
@@ -393,6 +394,9 @@ agpair task status TASK-001 --json
 - `retry_count`
 - `retry_recommended`
 - `stuck_reason`
+
+只需要判断 phase、executor、adoptability、artifact、recovery action 和 blocker
+时，用 `status --summary`。
 
 `status --json` 还会暴露当前 attempt、executor id、实际 binary 名称、pid
 （如果可用）、stdout/stderr 路径、日志大小、最后输出时间、小段 tail
@@ -441,7 +445,7 @@ agpair task list --repo-path /绝对/仓库路径 --json
 现在也支持：
 
 - `--repo-path` / `--target`：只看某一个 repo 的任务
-- `--json`：输出机器可读 JSON，适合给 status line、hooks 或 controller 端筛选逻辑直接消费
+- `--json`：输出机器可读任务 payload 和 `summary_metrics`，适合给 status line、hooks 或 controller 端筛选逻辑直接消费
 
 ## 6.1 Claude Code 辅助命令
 

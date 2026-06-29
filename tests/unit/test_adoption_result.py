@@ -247,7 +247,7 @@ def test_evidence_scope_validation_tuple_missing_declared_file_blocks_adoption()
     assert decision.evidence.has_missing_declared_changes is True
 
 
-def test_evidence_policy_report_without_diff_is_partial_use_result(tmp_path: Path) -> None:
+def test_evidence_policy_report_without_diff_is_usable_result(tmp_path: Path) -> None:
     report = tmp_path / "report.md"
     report.write_text("Recommendation: use these findings before editing.", encoding="utf-8")
     policy = resolve_effective_task_policy(
@@ -263,10 +263,11 @@ def test_evidence_policy_report_without_diff_is_partial_use_result(tmp_path: Pat
         controller_rework="minor",
     )
 
-    assert decision.adoptable_result == "partial"
+    assert decision.adoptable_result == "yes"
     assert decision.agent_result is not None
-    assert decision.agent_result.state == "needs_review"
+    assert decision.agent_result.state == "usable"
     assert decision.agent_result.controller_action == "use_result"
+    assert "validation_missing" not in decision.blockers
     assert decision.to_dict()["artifact_result"]["primary_artifact"] == "report"
 
 

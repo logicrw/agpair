@@ -262,6 +262,7 @@ def derive_adoption_decision(
     has_worktree_patch = bool(worktree_diff.get("has_patch")) if isinstance(worktree_diff, Mapping) else False
     if has_worktree_patch:
         has_diff = True
+    report_only_evidence = has_report and not changed_files and not has_safe_code_artifact and not has_commit and not has_diff
     if changed_files_present is not None:
         present_changed_files = bool(changed_files_present)
     elif scope_payload is not None:
@@ -353,7 +354,7 @@ def derive_adoption_decision(
     _append_scope_blockers(blockers, evidence)
     if has_apply_check and not apply_check_passed:
         blockers.append(apply_check_reason or "apply_check_failed")
-    if not has_validation:
+    if not has_validation and not report_only_evidence:
         blockers.append("validation_missing")
     if blockers:
         return _make_decision("partial", tuple(blockers), warnings, evidence, controller_rework, policy, artifact_result)

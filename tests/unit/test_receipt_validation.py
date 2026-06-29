@@ -64,6 +64,34 @@ def test_report_only_evidence_pack_accepts_artifacts_without_implementation_fiel
     assert result.required_missing == ()
 
 
+def test_report_payload_without_declared_changes_is_report_only_evidence() -> None:
+    payload = {
+        "report": "Useful review notes, no implementation changes claimed.",
+        "raw_log_path": "/tmp/stdout.log",
+        "receipt_path": ".agpair/tasks/TASK-REPORT/attempt-1/receipt.json",
+    }
+
+    result = validate_terminal_receipt_payload("EVIDENCE_PACK", payload)
+
+    assert result.ok
+    assert result.required_missing == ()
+
+
+def test_report_payload_with_declared_changes_still_requires_validation() -> None:
+    payload = {
+        "report": "Implemented the requested edit.",
+        "changed_files": ["agpair/example.py"],
+        "scope_violations": [],
+        "raw_log_path": "/tmp/stdout.log",
+        "receipt_path": ".agpair/tasks/TASK-REPORT/attempt-1/receipt.json",
+    }
+
+    result = validate_terminal_receipt_payload("EVIDENCE_PACK", payload)
+
+    assert not result.ok
+    assert result.required_missing == ("validation",)
+
+
 def test_approval_required_requires_authorization_delta() -> None:
     payload = {
         "blocker_type": "approval_required",

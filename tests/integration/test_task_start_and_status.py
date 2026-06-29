@@ -1526,6 +1526,48 @@ def test_task_list_can_emit_json_and_repo_filter(tmp_path: Path, monkeypatch) ->
     assert len(payload["tasks"]) == 1
     assert payload["tasks"][0]["task_id"] == "TASK-JSON-LIST-2"
     assert payload["tasks"][0]["phase"] == "acked"
+    assert payload["summary_metrics"]["task_count"] == 1
+    assert payload["summary_metrics"]["completion_rate"] == 0.0
+
+
+def test_task_status_summary_prints_compact_decision_surface(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGPAIR_HOME", str(tmp_path / ".agpair"))
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    report_path = tmp_path / "report.md"
+    report_path.write_text("usable report", encoding="utf-8")
+    repo = make_task_repo(tmp_path)
+    repo.create_task(task_id="TASK-SUMMARY", repo_path=str(repo_path), executor_backend="grok-cli")
+    repo.mark_acked(task_id="TASK-SUMMARY", session_id=str(tmp_path / "session"))
+    repo.record_artifact(task_id="TASK-SUMMARY", attempt_no=1, artifact_type="report", path=str(report_path))
+    repo.mark_blocked(task_id="TASK-SUMMARY", reason="protocol failed but report exists")
+    repo.update_attempt_adoption(
+        task_id="TASK-SUMMARY",
+        attempt_no=1,
+        protocol_warnings_json="[]",
+        protocol_errors_json="[]",
+        adoptable_result="partial",
+        adoption_evidence_json=json.dumps(
+            {
+                "adoptable_result": "partial",
+                "blockers": ["validation_failure"],
+                "agent_result": {"state": "needs_review", "controller_action": "use_result"},
+                "artifact_result": {"state": "usable", "primary_artifact": "report"},
+            },
+            ensure_ascii=False,
+        ),
+        controller_rework_json=json.dumps({"controller_rework": "minor"}, ensure_ascii=False),
+    )
+
+    result = CliRunner().invoke(app, ["task", "status", "TASK-SUMMARY", "--summary"])
+
+    assert result.exit_code == 0
+    assert "task_id: TASK-SUMMARY" in result.stdout
+    assert "phase: blocked" in result.stdout
+    assert "adoptable_result: partial" in result.stdout
+    assert "agent_action: use_result" in result.stdout
+    assert "artifact: report usable" in result.stdout
+    assert "backend_safety_metadata" not in result.stdout
 
 
 def test_task_abandon_marks_task_terminal_locally(tmp_path: Path, monkeypatch) -> None:

@@ -390,11 +390,15 @@ low-friction handoff signal.
 
 ```bash
 agpair task status TASK-SMOKE-001
+agpair task status TASK-SMOKE-001 --summary
 agpair task status TASK-SMOKE-001 --json
 agpair task logs TASK-SMOKE-001
 agpair task logs TASK-SMOKE-001 --raw stdout
 agpair task logs TASK-SMOKE-001 --raw stderr
 ```
+
+Use `status --summary` when you only need the phase, executor, adoptability,
+artifact, recovery action, and blocker surface.
 
 `status --json` exposes the active attempt, executor id, actual binary name,
 pid when available, stdout/stderr paths, log sizes, last output time, small tail
@@ -466,7 +470,7 @@ This is the fastest way to see what the local SQLite state still tracks. Output 
 `task list` now also supports:
 
 - `--repo-path` / `--target` to scope the listing to one repository
-- `--json` to emit machine-readable task payloads, suitable for status lines, hooks, or controller-side filtering
+- `--json` to emit machine-readable task payloads plus `summary_metrics`, suitable for status lines, hooks, or controller-side filtering
 
 ### Claude Code helpers
 
