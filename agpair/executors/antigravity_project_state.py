@@ -4,7 +4,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 import json
 import logging
+import os
 import pathlib
+import re
 import tempfile
 from typing import Callable, Protocol
 from urllib.parse import unquote, urlparse
@@ -13,6 +15,13 @@ logger = logging.getLogger(__name__)
 
 _PROJECTS_DIR_ENV = "AGPAIR_ANTIGRAVITY_PROJECTS_DIR"
 _PROJECTS_CACHE_ENV = "AGPAIR_ANTIGRAVITY_PROJECTS_CACHE"
+_CONVERSATIONS_DIR_ENV = "AGPAIR_ANTIGRAVITY_CLI_CONVERSATIONS_DIR"
+_CONVERSATIONS_ARCHIVE_DIR_ENV = "AGPAIR_ANTIGRAVITY_CLI_CONVERSATIONS_ARCHIVE_DIR"
+_CONVERSATIONS_ARCHIVE_ENABLED_ENV = "AGPAIR_ANTIGRAVITY_ARCHIVE_CONVERSATIONS"
+_CONVERSATIONS_BASELINE_NAME = "antigravity-cli-conversations-baseline.json"
+_VENDOR_LOG_NAME = "antigravity-cli.log"
+_CONVERSATION_DB_SUFFIXES = (".db", ".db-shm", ".db-wal")
+_CREATED_CONVERSATION_RE = re.compile(r"Created conversation (?P<conversation_id>[A-Za-z0-9_-]+)")
 
 type JsonValue = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 
@@ -26,6 +35,21 @@ class AntigravityProjectStateCleanup:
     @property
     def total(self) -> int:
         return self.config_files + self.cache_entries
+
+
+@dataclass(frozen=True, slots=True)
+class AntigravityConversationDbArchivePlan:
+    session_name: str
+    conversations_dir: pathlib.Path
+    archive_dir: pathlib.Path
+    db_basenames_before: frozenset[str]
+    conversation_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AntigravityConversationDbArchive:
+    conversation_ids: int = 0
+    files: int = 0
 
 
 class AntigravityTaskPath(Protocol):
@@ -115,18 +139,110 @@ def active_antigravity_execution_paths(tasks: Iterable[AntigravityTaskPath]) -> 
     return frozenset(paths)
 
 
-def _antigravity_projects_dir() -> pathlib.Path:
-    import os
+def write_antigravity_conversation_baseline(temp_dir: pathlib.Path) -> None:
+    if not _conversation_archiving_enabled() or not temp_dir.exists():
+        return
+    baseline = {"db_basenames": sorted(_conversation_db_basenames(_antigravity_conversations_dir()))}
+    (temp_dir / _CONVERSATIONS_BASELINE_NAME).write_text(
+        json.dumps(baseline, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
+
+def prepare_antigravity_conversation_db_archive(
+    temp_dir: pathlib.Path | None,
+) -> AntigravityConversationDbArchivePlan | None:
+    if temp_dir is None or not _conversation_archiving_enabled():
+        return None
+    db_basenames_before = _read_conversation_baseline(temp_dir / _CONVERSATIONS_BASELINE_NAME)
+    if db_basenames_before is None:
+        return None
+    conversation_ids = _created_conversation_ids(temp_dir / _VENDOR_LOG_NAME)
+    if not conversation_ids:
+        return None
+    return AntigravityConversationDbArchivePlan(
+        session_name=temp_dir.name,
+        conversations_dir=_antigravity_conversations_dir(),
+        archive_dir=_antigravity_conversations_archive_dir() / temp_dir.name,
+        db_basenames_before=db_basenames_before,
+        conversation_ids=conversation_ids,
+    )
+
+
+def archive_antigravity_conversation_dbs(
+    plan: AntigravityConversationDbArchivePlan | None,
+) -> AntigravityConversationDbArchive:
+    if plan is None:
+        return AntigravityConversationDbArchive()
+    candidate_ids = [
+        conversation_id
+        for conversation_id in plan.conversation_ids
+        if conversation_id not in plan.db_basenames_before
+        and (plan.conversations_dir / f"{conversation_id}.db").exists()
+    ]
+    if not candidate_ids:
+        return AntigravityConversationDbArchive()
+    try:
+        plan.archive_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logger.debug("Failed to create AntiGravity CLI conversation archive directory: %s", plan.archive_dir, exc_info=True)
+        return AntigravityConversationDbArchive()
+    archived_files: list[str] = []
+    archived_ids: list[str] = []
+    for conversation_id in candidate_ids:
+        archived_for_id = False
+        for suffix in _CONVERSATION_DB_SUFFIXES:
+            source = plan.conversations_dir / f"{conversation_id}{suffix}"
+            if not source.exists():
+                continue
+            target = plan.archive_dir / source.name
+            try:
+                source.replace(target)
+            except OSError:
+                logger.debug("Failed to archive AntiGravity CLI conversation DB: %s -> %s", source, target, exc_info=True)
+                continue
+            archived_files.append(source.name)
+            archived_for_id = True
+        if archived_for_id:
+            archived_ids.append(conversation_id)
+    if not archived_files:
+        return AntigravityConversationDbArchive()
+    try:
+        _write_archive_manifest(plan, archived_ids, archived_files)
+    except OSError:
+        logger.debug("Failed to write AntiGravity CLI conversation archive manifest: %s", plan.archive_dir, exc_info=True)
+    return AntigravityConversationDbArchive(
+        conversation_ids=len(archived_ids),
+        files=len(archived_files),
+    )
+
+
+def _antigravity_projects_dir() -> pathlib.Path:
     raw = os.environ.get(_PROJECTS_DIR_ENV, "~/.gemini/config/projects")
     return pathlib.Path(raw).expanduser()
 
 
 def _antigravity_projects_cache() -> pathlib.Path:
-    import os
-
     raw = os.environ.get(_PROJECTS_CACHE_ENV, "~/.gemini/antigravity-cli/cache/projects.json")
     return pathlib.Path(raw).expanduser()
+
+
+def _antigravity_conversations_dir() -> pathlib.Path:
+    raw = os.environ.get(_CONVERSATIONS_DIR_ENV, "~/.gemini/antigravity-cli/conversations")
+    return pathlib.Path(raw).expanduser()
+
+
+def _antigravity_conversations_archive_dir() -> pathlib.Path:
+    raw = os.environ.get(
+        _CONVERSATIONS_ARCHIVE_DIR_ENV,
+        "~/.gemini/antigravity-cli/conversations.agpair-archive",
+    )
+    return pathlib.Path(raw).expanduser()
+
+
+def _conversation_archiving_enabled() -> bool:
+    raw = os.environ.get(_CONVERSATIONS_ARCHIVE_ENABLED_ENV, "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
 
 
 def _is_relative_to(path: pathlib.Path, base: pathlib.Path) -> bool:
@@ -160,6 +276,54 @@ def _write_json_dict(path: pathlib.Path, data: dict[str, JsonValue]) -> bool:
         logger.debug("Failed to update Antigravity CLI project cache: %s", path, exc_info=True)
         return False
     return True
+
+
+def _conversation_db_basenames(conversations_dir: pathlib.Path) -> frozenset[str]:
+    if not conversations_dir.exists():
+        return frozenset()
+    return frozenset(path.name.removesuffix(".db") for path in conversations_dir.glob("*.db"))
+
+
+def _read_conversation_baseline(path: pathlib.Path) -> frozenset[str] | None:
+    data = _read_json_dict(path)
+    if data is None:
+        return None
+    raw_basenames = data.get("db_basenames")
+    if not isinstance(raw_basenames, list):
+        return None
+    basenames = [item for item in raw_basenames if isinstance(item, str) and item.strip()]
+    return frozenset(basenames)
+
+
+def _created_conversation_ids(vendor_log: pathlib.Path) -> tuple[str, ...]:
+    if not vendor_log.exists():
+        return ()
+    text = vendor_log.read_text(encoding="utf-8", errors="replace")
+    seen: set[str] = set()
+    conversation_ids: list[str] = []
+    for match in _CREATED_CONVERSATION_RE.finditer(text):
+        conversation_id = match.group("conversation_id")
+        if conversation_id in seen:
+            continue
+        seen.add(conversation_id)
+        conversation_ids.append(conversation_id)
+    return tuple(conversation_ids)
+
+
+def _write_archive_manifest(
+    plan: AntigravityConversationDbArchivePlan,
+    conversation_ids: list[str],
+    archived_files: list[str],
+) -> None:
+    manifest = {
+        "session_name": plan.session_name,
+        "conversation_ids": conversation_ids,
+        "archived_files": sorted(archived_files),
+    }
+    (plan.archive_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def _project_resource_path(raw: JsonValue) -> pathlib.Path | None:

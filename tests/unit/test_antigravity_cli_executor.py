@@ -96,6 +96,23 @@ def test_antigravity_cli_raw_log_payload_includes_vendor_log() -> None:
     }
 
 
+def test_antigravity_cli_command_records_conversation_baseline(monkeypatch, tmp_path) -> None:
+    conversations_dir = tmp_path / "conversations"
+    conversations_dir.mkdir()
+    temp_dir = tmp_path / "agpair_antigravity-cli_TASK-AGY_baseline"
+    temp_dir.mkdir()
+    (conversations_dir / "existing.db").write_text("existing", encoding="utf-8")
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_CLI_CONVERSATIONS_DIR", str(conversations_dir))
+    executor = AntigravityCLIExecutor(antigravity_bin="fake-agy")
+
+    executor._build_antigravity_cmd("Goal: inspect only", "/tmp/repo", temp_dir)
+
+    baseline = json.loads(
+        (temp_dir / "antigravity-cli-conversations-baseline.json").read_text(encoding="utf-8"),
+    )
+    assert baseline["db_basenames"] == ["existing"]
+
+
 def test_antigravity_cli_error_summary_reads_vendor_log(tmp_path) -> None:
     (tmp_path / "stdout.log").write_text("", encoding="utf-8")
     (tmp_path / "stderr.log").write_text("", encoding="utf-8")
@@ -245,6 +262,92 @@ def test_antigravity_cleanup_removes_project_config_for_isolated_worktree(
     cache_data = json.loads(cache_file.read_text(encoding="utf-8"))
     assert str(target_path) not in cache_data
     assert cache_data["/Users/example/real-project"] == "real"
+
+
+def test_antigravity_cleanup_archives_owned_conversation_db_group(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    conversations_dir = tmp_path / "conversations"
+    conversations_dir.mkdir()
+    archive_root = tmp_path / "conversation-archive"
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_PROJECTS_DIR", str(projects_dir))
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_CLI_CONVERSATIONS_DIR", str(conversations_dir))
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_CLI_CONVERSATIONS_ARCHIVE_DIR", str(archive_root))
+    target_path = (tmp_path / "repo" / ".agpair" / "worktrees" / "TASK-AGY").resolve()
+    session_dir = tmp_path / "agpair_antigravity-cli_TASK-AGY_cleanup"
+    _write_session_state(session_dir, target_path)
+    (session_dir / "antigravity-cli-conversations-baseline.json").write_text(
+        json.dumps({"db_basenames": ["preexisting"]}),
+        encoding="utf-8",
+    )
+    (session_dir / "antigravity-cli.log").write_text(
+        "I0629 server.go:789] Created conversation owned-new\n",
+        encoding="utf-8",
+    )
+    for suffix in (".db", ".db-wal", ".db-shm"):
+        (conversations_dir / f"owned-new{suffix}").write_text(f"owned {suffix}", encoding="utf-8")
+    (conversations_dir / "preexisting.db").write_text("keep", encoding="utf-8")
+    (conversations_dir / "other-new.db").write_text("keep", encoding="utf-8")
+    executor = AntigravityCLIExecutor(antigravity_bin="fake-agy")
+
+    with mock.patch("agpair.executors.local_cli._is_process_alive", return_value=False):
+        executor.cleanup(str(session_dir))
+
+    archived_db = next(archive_root.rglob("owned-new.db"))
+    archive_dir = archived_db.parent
+    assert not (conversations_dir / "owned-new.db").exists()
+    assert not (conversations_dir / "owned-new.db-wal").exists()
+    assert not (conversations_dir / "owned-new.db-shm").exists()
+    assert (archive_dir / "owned-new.db").read_text(encoding="utf-8") == "owned .db"
+    assert (archive_dir / "owned-new.db-wal").read_text(encoding="utf-8") == "owned .db-wal"
+    assert (archive_dir / "owned-new.db-shm").read_text(encoding="utf-8") == "owned .db-shm"
+    assert (conversations_dir / "preexisting.db").exists()
+    assert (conversations_dir / "other-new.db").exists()
+    manifest = json.loads((archive_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["session_name"] == session_dir.name
+    assert manifest["conversation_ids"] == ["owned-new"]
+    assert manifest["archived_files"] == [
+        "owned-new.db",
+        "owned-new.db-shm",
+        "owned-new.db-wal",
+    ]
+
+
+def test_antigravity_cleanup_ignores_failed_conversation_archive_move(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    conversations_dir = tmp_path / "conversations"
+    conversations_dir.mkdir()
+    archive_root = tmp_path / "conversation-archive"
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_CLI_CONVERSATIONS_DIR", str(conversations_dir))
+    monkeypatch.setenv("AGPAIR_ANTIGRAVITY_CLI_CONVERSATIONS_ARCHIVE_DIR", str(archive_root))
+    target_path = (tmp_path / "repo" / ".agpair" / "worktrees" / "TASK-AGY").resolve()
+    session_dir = tmp_path / "agpair_antigravity-cli_TASK-AGY_cleanup"
+    _write_session_state(session_dir, target_path)
+    (session_dir / "antigravity-cli-conversations-baseline.json").write_text(
+        json.dumps({"db_basenames": []}),
+        encoding="utf-8",
+    )
+    (session_dir / "antigravity-cli.log").write_text(
+        "I0629 server.go:789] Created conversation locked-db\n",
+        encoding="utf-8",
+    )
+    (conversations_dir / "locked-db.db").write_text("locked", encoding="utf-8")
+    executor = AntigravityCLIExecutor(antigravity_bin="fake-agy")
+
+    with (
+        mock.patch("agpair.executors.local_cli._is_process_alive", return_value=False),
+        mock.patch("pathlib.Path.replace", side_effect=OSError("locked")),
+    ):
+        executor.cleanup(str(session_dir))
+
+    assert not session_dir.exists()
+    assert (conversations_dir / "locked-db.db").exists()
+    assert not list(archive_root.rglob("manifest.json"))
 
 
 def test_antigravity_cleanup_keeps_project_config_while_process_alive(monkeypatch, tmp_path) -> None:

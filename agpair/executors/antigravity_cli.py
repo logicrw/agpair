@@ -5,7 +5,13 @@ import pathlib
 import re
 
 from agpair.executor_errors import prioritize_error_lines
-from agpair.executors.antigravity_project_state import cleanup_target_from_session, remove_antigravity_project_state
+from agpair.executors.antigravity_project_state import (
+    archive_antigravity_conversation_dbs,
+    cleanup_target_from_session,
+    prepare_antigravity_conversation_db_archive,
+    remove_antigravity_project_state,
+    write_antigravity_conversation_baseline,
+)
 from agpair.executors.local_cli import LocalCLIExecutor
 from agpair.executors.registry import executor_safety_metadata
 from agpair.models import ContinuationCapability
@@ -66,6 +72,7 @@ class AntigravityCLIExecutor(LocalCLIExecutor):
         repo_path: str,
         temp_dir: pathlib.Path,
     ) -> list[str]:
+        write_antigravity_conversation_baseline(temp_dir)
         return [
             self.bin_path,
             *_model_args(),
@@ -99,12 +106,15 @@ class AntigravityCLIExecutor(LocalCLIExecutor):
     def cleanup(self, session_id: str) -> None:
         target_path = cleanup_target_from_session(session_id)
         temp_dir = pathlib.Path(session_id) if session_id else None
+        conversation_archive_plan = prepare_antigravity_conversation_db_archive(temp_dir)
 
         super().cleanup(session_id)
 
-        if target_path is None or temp_dir is None or temp_dir.exists():
+        if temp_dir is None or temp_dir.exists():
             return
-        remove_antigravity_project_state(target_path)
+        if target_path is not None:
+            remove_antigravity_project_state(target_path)
+        archive_antigravity_conversation_dbs(conversation_archive_plan)
 
     @property
     def continuation_capability(self) -> ContinuationCapability:
